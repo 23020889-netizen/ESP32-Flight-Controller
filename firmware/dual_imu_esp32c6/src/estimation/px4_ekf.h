@@ -2,8 +2,8 @@
 #define PX4_EKF_H
 
 #include <Arduino.h>
-#include "mpu6050.h"
-#include "xsens_mti.h"
+#include "../sensors/mpu6050.h"
+#include "../sensors/xsens_mti.h"
 
 // Cấu trúc chứa dữ liệu dung hợp chuẩn EKF
 struct FusedData {
@@ -51,3 +51,4 @@ private:
 };
 
 #endif // PX4_EKF_H
+

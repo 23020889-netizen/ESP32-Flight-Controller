@@ -4,22 +4,28 @@
 #include <algorithm>
 
 /**
- * @brief Mathematical utilities for Integral Terminal Sliding Mode Control.
+ * @brief Non-singular mathematical utilities for robust Quadrotor ITSMC flight control.
  */
 class ItsmcMath {
 public:
     /**
-     * @brief Computes terminal non-linear power function: |x|^alpha * sign(x).
-     * @param value Input scalar value.
-     * @param alpha Fractional power exponent (e.g. 0.5).
-     * @return Transformed terminal scalar value.
+     * @brief Computes non-singular terminal power with linear transition near zero error.
+     * Prevents infinite derivative gain and eliminates 4Hz limit cycle oscillations.
+     * @param error Error value in radians or meters.
+     * @param linearThreshold Linear boundary threshold (default 0.035 rad ~ 2.0 deg).
+     * @return Non-singular terminal value.
      */
-    static inline float terminalPower(float value, float alpha) {
-        if (std::abs(value) < 1.0e-6f) {
+    static inline float terminalPowerNonSingular(float error, float linearThreshold = 0.035f) {
+        float absoluteError = std::abs(error);
+        if (absoluteError < 1.0e-6f) {
             return 0.0f;
         }
-        float magnitude = std::pow(std::abs(value), alpha);
-        return (value >= 0.0f) ? magnitude : -magnitude;
+        if (absoluteError < linearThreshold) {
+            float sqrtThreshold = std::sqrt(linearThreshold);
+            return error / sqrtThreshold; // Smooth linear slope
+        }
+        float magnitude = std::sqrt(absoluteError);
+        return (error >= 0.0f) ? magnitude : -magnitude;
     }
 
     /**
@@ -34,12 +40,15 @@ public:
     }
 
     /**
-     * @brief Hyperbolic tangent function for smooth boundary layer switching.
-     * @param value Input sliding surface value.
-     * @return Output smooth switching value in range (-1.0, 1.0).
+     * @brief Smooth boundary layer hyperbolic tangent switching: tanh(s / phi_b).
+     * Eliminates high-frequency mechanical chattering and actuator saturation.
+     * @param slidingSurface Sliding surface value s.
+     * @param boundaryThickness Boundary layer thickness phi_b.
+     * @return Smooth switching signal in range (-1.0, 1.0).
      */
-    static inline float smoothSign(float value) {
-        return std::tanh(value);
+    static inline float smoothSign(float slidingSurface, float boundaryThickness = 0.20f) {
+        if (boundaryThickness <= 1.0e-4f) boundaryThickness = 0.20f;
+        return std::tanh(slidingSurface / boundaryThickness);
     }
 
     /**
@@ -51,4 +60,3 @@ public:
         return std::asin(clamp(value, -0.999f, 0.999f));
     }
 };
-

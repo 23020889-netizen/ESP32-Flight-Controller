@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary / Log files
+*.log
+*.tmp
+*.mtb
+!tools/xsens_diagnostics/logfile.mtb
+exportfile.txt
+test_audio.mp3
+
+# Output data exports
+*.ply
+vio_trajectory_6dof.csv
+test_trajectory.csv
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

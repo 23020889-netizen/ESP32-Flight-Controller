@@ -14,8 +14,8 @@ struct MpuData {
     bool ready;
 };
 
-// Khởi tạo bus I2C và đánh thức cảm biến MPU-6050
-bool mpu6050_init(uint8_t sda_pin = 14, uint8_t scl_pin = 15, uint32_t freq = 100000);
+// Khởi tạo bus I2C và đánh thức cảm biến MPU-6050 (400kHz Fast Mode tối ưu thời gian thực)
+bool mpu6050_init(uint8_t sda_pin = 14, uint8_t scl_pin = 15, uint32_t freq = 400000);
 
 // Đo và tự động khử Zero-Bias tĩnh của Gyroscope
 void mpu6050_calibrate_gyro(uint16_t sample_count = 100);

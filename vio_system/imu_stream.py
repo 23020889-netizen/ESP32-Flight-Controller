@@ -1,13 +1,19 @@
 """
 VIO IMU Stream Module - ISILAB VIO / UAV Project
-Reads real-time inertial telemetry from ESP32-C6 over USB Serial (COM port).
-Parses [PX4_EKF] packets: Accel (m/s^2), Gyro (deg/s -> rad/s), Euler RPY (deg).
-Includes thread-safe buffer and automatic fallback generator.
+Supports reading real-time inertial telemetry from ESP32-C6 over:
+1. USB Serial (COM port, e.g. COM13)
+2. Wireless UDP Broadcast (WiFi 6 Telemetry, e.g. 'udp://14550' or 'udp')
+3. Synthetic / Fallback Simulation Mode (TDD & Offline testing)
+
+Parses [PX4_EKF] packets & JSON payloads:
+- Accel (m/s^2), Gyro (deg/s -> rad/s), Euler RPY (deg).
 """
 
 import sys
 import re
 import time
+import json
+import socket
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -48,6 +54,8 @@ class ImuStream:
         self.is_running = False
         self.thread: Optional[threading.Thread] = None
         self.serial_conn: Optional[serial.Serial] = None
+        self.udp_sock: Optional[socket.socket] = None
+        self.is_udp = False
         self.is_connected = False
         self.is_simulated = False
         
@@ -67,7 +75,7 @@ class ImuStream:
         if not ports:
             return None
         
-        # Lọc bỏ hoàn toàn các cổng Bluetooth ảo (luôn bị treo semaphore timeout nếu không kết nối)
+        # Lọc bỏ hoàn toàn các cổng Bluetooth ảo (luôn bị treo timeout nếu không kết nối)
         usb_ports = []
         for p in ports:
             desc = (p.description or "").lower()
@@ -87,27 +95,52 @@ class ImuStream:
         return usb_ports[0].device
 
     def start(self):
-        """Khởi động luồng đọc Serial nền."""
+        """Khởi động luồng đọc Telemetry nền (Hỗ trợ USB Serial & Wireless UDP)."""
         self.is_running = True
         
-        if not self.port:
-            self.port = self.find_available_port()
-            
-        if self.port and SERIAL_AVAILABLE:
+        # 1. Kiểm tra chế độ Wireless UDP Telemetry từ ESP32-C6
+        if self.port and any(self.port.lower().startswith(p) for p in ["udp", "wifi", "wireless"]):
+            udp_port = 14550
+            if ":" in self.port:
+                try:
+                    udp_port = int(self.port.split(":")[-1].replace("/", ""))
+                except ValueError:
+                    udp_port = 14550
             try:
-                self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=1.0)
+                self.udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self.udp_sock.bind(("", udp_port))
+                self.udp_sock.settimeout(1.0)
+                self.is_udp = True
                 self.is_connected = True
                 self.is_simulated = False
-                print(f"[IMU_STREAM] Connected successfully to hardware via {self.port} @ {self.baudrate} baud.")
+                print(f"[IMU_STREAM] Connected successfully via Wireless UDP socket @ port {udp_port}.")
             except Exception as e:
-                print(f"[IMU_STREAM] Cannot open port {self.port}: {e}")
+                print(f"[IMU_STREAM] Cannot bind UDP port {udp_port}: {e}")
                 print("[IMU_STREAM] >>> Activated IMU Simulation Mode for VIO pipeline testing.")
                 self.is_connected = False
                 self.is_simulated = True
+
+        # 2. Kiểm tra kết nối USB Serial truyền thống
         else:
-            print("[IMU_STREAM] No COM port found. Activated IMU Simulation Mode.")
-            self.is_connected = False
-            self.is_simulated = True
+            if not self.port:
+                self.port = self.find_available_port()
+                
+            if self.port and SERIAL_AVAILABLE:
+                try:
+                    self.serial_conn = serial.Serial(self.port, self.baudrate, timeout=1.0)
+                    self.is_connected = True
+                    self.is_simulated = False
+                    print(f"[IMU_STREAM] Connected successfully to hardware via {self.port} @ {self.baudrate} baud.")
+                except Exception as e:
+                    print(f"[IMU_STREAM] Cannot open port {self.port}: {e}")
+                    print("[IMU_STREAM] >>> Activated IMU Simulation Mode for VIO pipeline testing.")
+                    self.is_connected = False
+                    self.is_simulated = True
+            else:
+                print("[IMU_STREAM] No COM port found. Activated IMU Simulation Mode.")
+                self.is_connected = False
+                self.is_simulated = True
 
         self.thread = threading.Thread(target=self._worker_loop, daemon=True)
         self.thread.start()
@@ -136,10 +169,77 @@ class ImuStream:
         return None
 
     def _worker_loop(self):
-        """Vòng lặp đọc Serial hoặc sinh dữ liệu giả lập."""
+        """Vòng lặp đọc Telemetry (Wireless UDP, Serial hoặc giả lập)."""
         deg2rad = np.pi / 180.0
         
-        if self.is_connected and self.serial_conn:
+        # --- A. NHẬN TELEMETRY KHÔNG DÂY QUA UDP (WIFI 6 ESP32-C6) ---
+        if self.is_connected and self.is_udp and self.udp_sock:
+            while self.is_running:
+                try:
+                    data, _addr = self.udp_sock.recvfrom(2048)
+                    if not data:
+                        continue
+                    line = data.decode('utf-8', errors='ignore').strip()
+                    
+                    # 1. Hỗ trợ gói tin JSON
+                    if line.startswith('{'):
+                        try:
+                            obj = json.loads(line)
+                            r_deg = float(obj.get('roll', 0.0))
+                            p_deg = float(obj.get('pitch', 0.0))
+                            y_deg = float(obj.get('yaw', 0.0))
+                            ax = float(obj.get('ax', 0.0))
+                            ay = float(obj.get('ay', 0.0))
+                            az = float(obj.get('az', 9.80665))
+                            gx_deg = float(obj.get('gx', 0.0))
+                            gy_deg = float(obj.get('gy', 0.0))
+                            gz_deg = float(obj.get('gz', 0.0))
+                            
+                            acc_norm = np.linalg.norm([ax, ay, az])
+                            if 0.5 < acc_norm < 2.0:
+                                ax *= 9.80665
+                                ay *= 9.80665
+                                az *= 9.80665
+
+                            sample = ImuSample(
+                                timestamp=time.time(),
+                                accel=np.array([ax, ay, az], dtype=np.float64),
+                                gyro=np.array([gx_deg * deg2rad, gy_deg * deg2rad, gz_deg * deg2rad], dtype=np.float64),
+                                rpy_deg=np.array([r_deg, p_deg, y_deg], dtype=np.float64),
+                                tag="PX4_EKF_WIFI"
+                            )
+                            with self.lock:
+                                self.samples.append(sample)
+                        except Exception:
+                            pass
+
+                    # 2. Hỗ trợ gói tin text chuẩn [PX4_EKF]
+                    elif line.startswith('['):
+                        parsed = self._parse_line(line)
+                        if parsed:
+                            tag, r_deg, p_deg, y_deg, ax, ay, az, gx_deg, gy_deg, gz_deg = parsed
+                            acc_norm = np.linalg.norm([ax, ay, az])
+                            if 0.5 < acc_norm < 2.0:
+                                ax *= 9.80665
+                                ay *= 9.80665
+                                az *= 9.80665
+
+                            sample = ImuSample(
+                                timestamp=time.time(),
+                                accel=np.array([ax, ay, az], dtype=np.float64),
+                                gyro=np.array([gx_deg * deg2rad, gy_deg * deg2rad, gz_deg * deg2rad], dtype=np.float64),
+                                rpy_deg=np.array([r_deg, p_deg, y_deg], dtype=np.float64),
+                                tag=tag
+                            )
+                            with self.lock:
+                                self.samples.append(sample)
+                except socket.timeout:
+                    continue
+                except Exception:
+                    time.sleep(0.005)
+
+        # --- B. NHẬN TELEMETRY QUA CỔNG SERIAL USB TRUYỀN THỐNG ---
+        elif self.is_connected and self.serial_conn:
             while self.is_running:
                 try:
                     line_bytes = self.serial_conn.readline()
@@ -152,9 +252,7 @@ class ImuStream:
                     parsed = self._parse_line(line)
                     if parsed:
                         tag, r_deg, p_deg, y_deg, ax, ay, az, gx_deg, gy_deg, gz_deg = parsed
-                        # Ưu tiên lấy gói dung hợp tối ưu PX4_EKF
                         if tag == "PX4_EKF" or not self._has_recent_ekf():
-                            # Tự động chuẩn hóa đơn vị gia tốc: nếu gửi theo g (~1.0) thì nhân 9.80665 m/s^2
                             acc_norm = np.linalg.norm([ax, ay, az])
                             if 0.5 < acc_norm < 2.0:
                                 ax *= 9.80665
@@ -172,8 +270,9 @@ class ImuStream:
                                 self.samples.append(sample)
                 except Exception:
                     time.sleep(0.005)
+
+        # --- C. FALLBACK SIMULATION MODE ---
         else:
-            # Fallback Simulation: Sinh dữ liệu IMU mượt mà với gia tốc trọng trường ~9.81
             start_t = time.time()
             while self.is_running:
                 t = time.time() - start_t
@@ -185,7 +284,6 @@ class ImuStream:
                 gy = -np.sin(t * 0.6) * 3.5 * 0.6 * deg2rad
                 gz = 5.0 * deg2rad
                 
-                # Chiếu trọng lực g = 9.80665 m/s^2 theo góc R, P
                 r_rad = r_deg * deg2rad
                 p_rad = p_deg * deg2rad
                 ax = -9.80665 * np.sin(p_rad) + np.random.normal(0, 0.05)
@@ -207,7 +305,7 @@ class ImuStream:
         with self.lock:
             if not self.samples:
                 return False
-            return self.samples[-1].tag == "PX4_EKF"
+            return self.samples[-1].tag in ["PX4_EKF", "PX4_EKF_WIFI"]
 
     def get_latest(self) -> Optional[ImuSample]:
         with self.lock:
@@ -225,4 +323,9 @@ class ImuStream:
             self.thread.join(timeout=1.0)
         if self.serial_conn and self.serial_conn.is_open:
             self.serial_conn.close()
+        if self.udp_sock:
+            try:
+                self.udp_sock.close()
+            except Exception:
+                pass
         print("[IMU_STREAM] IMU stream thread stopped cleanly.")

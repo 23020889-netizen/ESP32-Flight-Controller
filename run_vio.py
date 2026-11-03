@@ -17,7 +17,7 @@ if __name__ == '__main__':
     parser.add_argument("--mode", type=str, default="auto", choices=["auto", "opencv", "xtion"],
                         help="Camera mode: 'opencv' (UVC + Real-time AI Depth), 'xtion' (OpenNI2), 'auto' (default: auto)")
     parser.add_argument("--camera", type=int, default=0, help="Camera device index (default: 0)")
-    parser.add_argument("--port", type=str, default=None, help="COM port (default: auto detect COM13)")
+    parser.add_argument("--port", type=str, default=None, help="COM port (e.g. COM13) or Wireless UDP (e.g. 'udp' / 'udp://14550')")
     parser.add_argument("--baud", type=int, default=115200, help="Baudrate (default: 115200)")
     parser.add_argument("--features", type=int, default=120, help="Feature count (default: 120)")
     parser.add_argument("--openni2-dir", type=str, default=None, help="Path to OpenNI2 Redist folder")

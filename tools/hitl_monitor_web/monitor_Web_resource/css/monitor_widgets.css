@@ -1,0 +1,88 @@
+.hz {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.zv {
+  flex: 1;
+  display: grid;
+  gap: 8px;
+}
+
+.zv div {
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.zv span {
+  font-size: 10px;
+  color: var(--mu);
+  display: block;
+}
+
+.zv b {
+  font-size: 18px;
+}
+
+.mr {
+  display: grid;
+  grid-template-columns: 44px 1fr 46px;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.mr .tr {
+  height: 9px;
+  border-radius: 9px;
+  background: rgba(127, 160, 200, 0.2);
+  overflow: hidden;
+}
+
+.mr .tr i {
+  display: block;
+  height: 100%;
+  border-radius: 9px;
+  background: var(--k);
+  box-shadow: 0 0 10px var(--k);
+}
+
+.mr b {
+  text-align: right;
+}
+
+.chw {
+  height: clamp(54px, 8vh, 84px);
+  position: relative;
+}
+
+.chw canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.lg {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--mu);
+  margin-top: 4px;
+}
+
+.lg i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--k);
+  box-shadow: 0 0 8px var(--k);
+  margin-right: 5px;
+}
+

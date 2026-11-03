@@ -14,24 +14,29 @@ VIO/
 │   └── fig_0_Image96.jpg                    # Sơ đồ kết nối phần cứng / sơ đồ khối
 │
 ├── firmware/                                # Mã nguồn nhúng cho bo mạch vi điều khiển
-│   └── dual_imu_esp32c6/                    # Firmware ESP32-C6 (Arduino / PlatformIO)
+│   └── dual_imu_esp32c6/                    # Firmware ESP32-C6 All-in-One (FC + Telemetry)
 │       ├── README.md                        # Hướng dẫn chi tiết phần cứng, kết nối 2 IMU & EKF
-│       ├── dual_imu_esp32c6.ino             # Chương trình điều khiển chính
-│       ├── esc_pwm.cpp / .h                 # Lớp điều khiển PWM 4 động cơ ESC
+│       ├── dual_imu_esp32c6.ino             # Chương trình điều khiển chính & Unified CLI
+│       ├── esc_pwm.cpp / .h                 # Lớp điều khiển PWM 4 động cơ ESC (14-bit)
 │       ├── mpu6050.cpp / .h                 # Driver đọc cảm biến MPU-6050 qua I2C
 │       ├── px4_ekf.cpp / .h                 # Bộ lọc ước lượng trạng thái quán tính PX4 EKF
-│       └── xsens_mti.cpp / .h               # Driver đọc cảm biến Xsens MTi-3 qua UART
+│       ├── xsens_mti.cpp / .h               # Driver đọc cảm biến Xsens MTi-3 qua UART
+│       └── telemetry_wifi.cpp / .h          # WiFi 6 AP + UDP Telemetry (14550) + WebSocket (Port 81)
 │
 ├── vio_system/                              # Thư viện thuật toán VIO MSCKF thời gian thực
 │   ├── __init__.py                          # Package export
 │   ├── xtion_rgbd.py                        # Driver Camera RGB-D Asus Xtion Pro (OpenNI2 / UVC)
-│   ├── imu_stream.py                        # Thu nhận dữ liệu quán tính từ ESP32 qua Serial/COM
+│   ├── imu_stream.py                        # Thu nhận dữ liệu quán tính (USB Serial & Wireless UDP)
 │   ├── feature_tracker.py                   # KLT Optical Flow + Grid Bucketing + Outlier Rejection
 │   ├── msckf.py                             # Bộ lọc sai số MSCKF, SVD Triangulation & Nullspace Projection
 │   ├── visualizer.py                        # Dashboard hiển thị song song: Camera HUD + Đám mây điểm 3D
 │   └── main_vio.py                          # Luồng điều phối chính VIO
 │
 ├── tools/                                   # Bộ công cụ chẩn đoán & Mô phỏng ngoại vi
+│   ├── hitl_monitor_web/                    # UAV HITL Testbed Monitor (Three.js 3D, PFD, Motor Actuators)
+│   │   ├── UAV HITL Testbed Monitor.html    # Trang Dashboard 3D kết nối WebSocket ws://192.168.4.1:81
+│   │   └── monitor_Web_resource/            # Tài nguyên 3D glTF, đồ thị, audio, css
+│   ├── run_monitor_web.py                   # Điểm khởi chạy nhanh máy chủ Web cục bộ cho 3D Monitor
 │   ├── web_simulator/                       # Ứng dụng Web mô phỏng 3D WebSerial
 │   │   └── imu_3d_simulator.html            # Web 3D Simulator (ESP32 + MPU6050 & Xsens)
 │   └── xsens_diagnostics/                   # Script kiểm tra tín hiệu trực tiếp từ Xsens

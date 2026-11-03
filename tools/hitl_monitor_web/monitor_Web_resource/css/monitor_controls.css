@@ -1,0 +1,96 @@
+.nav-toggles label {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--tx);
+  cursor: pointer;
+  user-select: none;
+}
+
+.nav-toggles input[type="checkbox"] {
+  accent-color: var(--c1);
+  cursor: pointer;
+}
+
+.chips {
+  display: flex;
+  gap: 7px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chip {
+  border: 1px solid var(--bd);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--mu);
+}
+
+.chip b {
+  color: var(--tx);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mu);
+  box-shadow: 0 0 8px currentColor;
+}
+
+.on .dot,
+.dot.live {
+  background: var(--c2);
+  color: var(--c2);
+}
+
+.dot.lost {
+  background: var(--c5);
+  color: var(--c5);
+}
+
+.dot.demo {
+  background: var(--c3);
+  color: var(--c3);
+}
+
+button,
+input {
+  font: inherit;
+  color: var(--tx);
+}
+
+button {
+  background: transparent;
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: 0.15s;
+}
+
+button:hover {
+  border-color: var(--c1);
+}
+
+button.act {
+  background: rgba(34, 211, 238, 0.16);
+  border-color: var(--c1);
+  color: var(--c1);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.25);
+}
+
+input[type="text"] {
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 4px 9px;
+  width: 175px;
+}
+

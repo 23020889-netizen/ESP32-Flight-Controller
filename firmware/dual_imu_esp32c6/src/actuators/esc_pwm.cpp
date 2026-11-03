@@ -291,7 +291,7 @@ void QuadEscController::update() {
             _watchdog_enabled = true;
 
             for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-                _motors[i].setTargetPulseUs(ESC_PULSE_IDLE_US); // 1050 µs (~5% ga quay không tải)
+                _motors[i].setTargetPulseUs(ESC_PULSE_MIN_US); // 1000 µs (0% ga - ĐỨNG YÊN HOÀN TOÀN KHI VỪA ARM)
             }
 
             Serial.println("\n[ESC_QUAD] ========================================================");

@@ -60,7 +60,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
                 current_xsens.roll = raw_r;
             }
 
-            current_xsens.pitch = (opt_invert_x ? -raw_p : raw_p);
+            current_xsens.pitch = (opt_invert_y ? -raw_p : raw_p);
             current_xsens.yaw   = raw_y;
             current_xsens.has_orientation = true;
             current_xsens.last_packet_ms = millis();
@@ -88,7 +88,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
                 current_xsens.roll = raw_r;
             }
 
-            current_xsens.pitch = (opt_invert_x ? -raw_p : raw_p);
+            current_xsens.pitch = (opt_invert_y ? -raw_p : raw_p);
             current_xsens.yaw   = raw_y;
             current_xsens.has_orientation = true;
             current_xsens.last_packet_ms = millis();

@@ -1,0 +1,1882 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MPU6050 & Xsens 3D Simulator - Hệ Thống Đo Lường Quán Tính 6 Trục</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js r128 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-deep: #050b18;
+            --hud-bg: rgba(9, 20, 42, 0.78);
+            --hud-border: rgba(0, 210, 255, 0.28);
+            --hud-glow: rgba(0, 229, 255, 0.16);
+            --cyan-neon: #00e5ff;
+            --blue-neon: #2563eb;
+            --xsens-orange: #ff8c00;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-deep);
+            font-family: 'Inter', sans-serif;
+            color: #e2e8f0;
+        }
+
+        .font-mono-tech {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* Glassmorphism HUD Panel matching reference photo */
+        .hud-panel {
+            background: linear-gradient(180deg, rgba(12, 26, 54, 0.84) 0%, rgba(7, 15, 34, 0.88) 100%);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(30, 144, 255, 0.35);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 18px rgba(0, 195, 255, 0.08);
+            border-radius: 12px;
+            transition: border-color 0.25s ease, box-shadow 0.25s ease;
+        }
+
+        .hud-panel:hover {
+            border-color: rgba(0, 229, 255, 0.55);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.65), 0 0 22px rgba(0, 229, 255, 0.16);
+        }
+
+        /* Sub-cards for Roll, Pitch, Yaw */
+        .angle-card {
+            background: rgba(6, 15, 32, 0.85);
+            border: 1px solid rgba(30, 64, 175, 0.45);
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Active Navigation Pill */
+        .nav-pill {
+            background: rgba(15, 32, 66, 0.75);
+            border: 1px solid rgba(56, 189, 248, 0.25);
+            color: #94a3b8;
+            transition: all 0.2s ease;
+        }
+        .nav-pill:hover {
+            color: #f8fafc;
+            border-color: rgba(56, 189, 248, 0.55);
+            background: rgba(23, 47, 94, 0.85);
+        }
+        .nav-pill.active {
+            background: linear-gradient(135deg, #0284c7 0%, #2563eb 100%);
+            border-color: #38bdf8;
+            color: #ffffff;
+            box-shadow: 0 0 14px rgba(14, 165, 233, 0.5);
+        }
+
+        .nav-pill-xsens.active {
+            background: linear-gradient(135deg, #ea580c 0%, #d97706 100%);
+            border-color: #fbbf24;
+            color: #ffffff;
+            box-shadow: 0 0 14px rgba(245, 158, 11, 0.5);
+        }
+
+        /* Custom Range Sliders */
+        input[type=range].hud-slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 5px;
+            background: rgba(15, 23, 42, 0.9);
+            border: 1px solid rgba(56, 189, 248, 0.3);
+            border-radius: 999px;
+            outline: none;
+        }
+        input[type=range].hud-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #00e5ff;
+            box-shadow: 0 0 10px #00e5ff;
+            cursor: pointer;
+            border: 2px solid #ffffff;
+        }
+
+        /* Custom Scrollbar for panels */
+        ::-webkit-scrollbar {
+            width: 5px;
+            height: 5px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(5, 11, 24, 0.6);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(37, 99, 235, 0.6);
+            border-radius: 999px;
+        }
+
+        /* Glowing indicator dot on progress track */
+        .axis-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ffffff;
+            box-shadow: 0 0 8px #ffffff, 0 0 14px currentColor;
+            position: absolute;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            transition: left 0.05s linear;
+        }
+
+        #canvas3d-container {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            background: radial-gradient(circle at 50% 45%, #0c1f44 0%, #050b18 75%);
+        }
+
+        .hud-overlay {
+            position: relative;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .hud-interactive {
+            pointer-events: auto;
+        }
+
+        @keyframes pulseGlow {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.55; transform: scale(0.92); }
+        }
+        .pulse-dot {
+            animation: pulseGlow 1.8s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="relative w-screen h-screen overflow-hidden select-none">
+
+    <!-- 3D THREE.JS VIEWPORT -->
+    <div id="canvas3d-container"></div>
+
+    <!-- MAIN HUD OVERLAY -->
+    <div class="hud-overlay w-full h-full flex flex-col justify-between p-3 gap-2">
+
+        <!-- ==================== TOP NAVIGATION BAR ==================== -->
+        <header class="hud-panel hud-interactive w-full px-3.5 py-2 flex flex-wrap items-center justify-between gap-2">
+            <!-- Left Brand & Title -->
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/30 border border-cyan-300/50">
+                    <i class="fa-solid fa-cube text-white text-lg"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-sm md:text-base font-extrabold tracking-wide text-white leading-tight">
+                            MPU6050 &amp; Xsens 3D Simulator
+                        </h1>
+                        <span class="hidden sm:inline-block text-[10px] font-mono-tech uppercase px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/30">
+                            6-DOF AHRS
+                        </span>
+                    </div>
+                    <p class="text-[10px] font-semibold tracking-widest text-cyan-300/75 uppercase">
+                        MÔ PHỎNG 3D DỮ LIỆU GIA TỐC &amp; CON QUAY THỜI GIAN THỰC
+                    </p>
+                </div>
+            </div>
+
+            <!-- Center Sensor Source & Mode Selector Tabs -->
+            <div class="flex flex-wrap items-center gap-1.5">
+                <!-- Sensor Selection Group -->
+                <div class="flex items-center bg-slate-950/80 p-1 rounded-lg border border-blue-500/30 gap-1">
+                    <button id="btn-sensor-mpu" onclick="setSensorSource('mpu6050')" class="nav-pill active px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5">
+                        <i class="fa-solid fa-microchip text-cyan-300"></i>
+                        <span>ESP32 + MPU6050</span>
+                    </button>
+                    <button id="btn-sensor-xsens" onclick="setSensorSource('xsens')" class="nav-pill nav-pill-xsens px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5">
+                        <i class="fa-solid fa-satellite-dish text-amber-300"></i>
+                        <span>Xsens MTi</span>
+                    </button>
+                    <button id="btn-sensor-dual" onclick="setSensorSource('dual')" class="nav-pill px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5">
+                        <i class="fa-solid fa-code-compare text-purple-300"></i>
+                        <span>So sánh Kép</span>
+                    </button>
+                </div>
+
+                <!-- Simulation Mode Group -->
+                <div class="flex items-center bg-slate-950/80 p-1 rounded-lg border border-blue-500/30 gap-1">
+                    <button id="btn-mode-auto" onclick="setControlMode('auto')" class="nav-pill active px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        <span>Tự động (Demo)</span>
+                    </button>
+                    <button id="btn-mode-manual" onclick="setControlMode('manual')" class="nav-pill px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5">
+                        <i class="fa-solid fa-gamepad"></i>
+                        <span>Cầm Nghiêng Ảo</span>
+                    </button>
+                    <button id="btn-mode-serial" onclick="openHardwareModal()" class="nav-pill px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5">
+                        <i class="fa-solid fa-plug-circle-bolt text-emerald-400"></i>
+                        <span>Nạp Code / Serial</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Status, Reset, Calibration & Live Telemetry Bar -->
+            <div class="flex flex-wrap items-center gap-1.5">
+                <!-- CSV Logger Toolbar -->
+                <div class="flex items-center bg-slate-950/90 p-1 rounded-lg border border-cyan-500/40 gap-1.5 shadow-sm shadow-cyan-500/10">
+                    <button id="btn-csv-toggle" onclick="toggleCsvLogging()" title="Bắt đầu / Dừng thu log dữ liệu IMU vào file CSV" class="nav-pill px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 hover:border-rose-400 active:scale-95 transition-all">
+                        <i id="csv-record-icon" class="fa-solid fa-circle text-rose-500 text-[10px]"></i>
+                        <span id="csv-record-text">Thu Log CSV</span>
+                    </button>
+                    
+                    <div id="csv-record-badge" class="hidden flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono-tech bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                        <span class="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping"></span>
+                        <span id="csv-record-count" class="font-bold">0</span> mẫu
+                        <span class="text-rose-400/70">(<span id="csv-record-time">0.0</span>s)</span>
+                    </div>
+
+                    <button id="btn-csv-export" onclick="exportCsvFile()" disabled title="Xuất dữ liệu đã thu thập ra file CSV" class="nav-pill px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1.5 opacity-40 cursor-not-allowed hover:border-emerald-400 active:scale-95 transition-all">
+                        <i class="fa-solid fa-file-arrow-down text-emerald-400"></i>
+                        <span>Xuất CSV</span>
+                    </button>
+
+                    <button id="btn-csv-clear" onclick="clearCsvLog()" title="Xóa toàn bộ log trong bộ đệm" class="nav-pill px-2 py-1 rounded-md text-xs font-semibold flex items-center gap-1 text-slate-400 hover:text-rose-300 hover:border-rose-500/40 active:scale-95 transition-all">
+                        <i class="fa-solid fa-trash-can text-[11px]"></i>
+                    </button>
+                </div>
+
+                <!-- Status Pill -->
+                <div id="status-badge" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-xs font-semibold shadow-sm shadow-emerald-500/20">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot"></span>
+                    <span id="status-text">Đang chạy giả lập</span>
+                </div>
+
+                <!-- Action Buttons matching screenshot -->
+                <button onclick="resetOrientationZero()" title="Đặt góc Roll, Pitch, Yaw hiện tại về 0°" class="nav-pill px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 hover:border-cyan-400 active:scale-95">
+                    <i class="fa-solid fa-rotate-left text-cyan-400"></i>
+                    <span>Reset Góc</span>
+                </button>
+
+                <button onclick="calibrateSensors()" id="btn-calibrate" title="Lấy mẫu cân bằng Bias Gyro & Accel" class="nav-pill px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 hover:border-amber-400 active:scale-95">
+                    <i class="fa-solid fa-crosshairs text-amber-400"></i>
+                    <span>Hiệu chuẩn</span>
+                </button>
+
+                <button onclick="resetCameraView()" title="Đặt lại góc nhìn Camera 3D" class="nav-pill px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 active:scale-95">
+                    <i class="fa-solid fa-video text-blue-300"></i>
+                    <span class="hidden xl:inline">Đặt lại Camera</span>
+                </button>
+
+                <!-- Mini Telemetry Pill -->
+                <div class="hidden 2xl:flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-950/90 border border-blue-500/30 font-mono-tech text-[11px] text-slate-300">
+                    <span>FPS: <strong id="top-fps" class="text-cyan-400">60</strong></span>
+                    <span class="text-slate-600">|</span>
+                    <span id="top-rate" class="text-emerald-400">100Hz</span>
+                    <span class="text-slate-600">|</span>
+                    <span id="top-rpy" class="text-sky-300">R:0.0° P:0.0° Y:0.0°</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- ==================== MIDDLE WORKSPACE (LEFT & RIGHT FLOATING PANELS) ==================== -->
+        <div class="flex-1 flex flex-col lg:flex-row justify-between items-stretch gap-3 overflow-hidden py-1">
+
+            <!-- LEFT COLUMN: ORIENTATION, ACCEL, GYRO & VIRTUAL HAND PAD -->
+            <div class="w-full lg:w-[330px] xl:w-[355px] flex flex-col justify-end gap-2.5 overflow-y-auto pr-0.5 hud-interactive max-h-full">
+
+                <!-- Dual Comparison Delta Banner (Only visible in Dual Mode) -->
+                <div id="dual-comparison-banner" class="hidden hud-panel p-2.5 border-amber-500/50">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <span class="text-[11px] font-bold uppercase tracking-wider text-amber-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-scale-balanced"></i> Độ Lệch MPU6050 vs Xsens
+                        </span>
+                        <span class="text-[10px] font-mono-tech px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-200">Kalman Ref</span>
+                    </div>
+                    <div class="grid grid-cols-3 gap-1.5 text-center font-mono-tech text-xs">
+                        <div class="bg-slate-950/80 p-1.5 rounded border border-slate-800">
+                            <div class="text-[9px] text-slate-400">Δ ROLL</div>
+                            <div id="delta-roll" class="text-cyan-300 font-bold">0.12°</div>
+                        </div>
+                        <div class="bg-slate-950/80 p-1.5 rounded border border-slate-800">
+                            <div class="text-[9px] text-slate-400">Δ PITCH</div>
+                            <div id="delta-pitch" class="text-emerald-300 font-bold">0.08°</div>
+                        </div>
+                        <div class="bg-slate-950/80 p-1.5 rounded border border-slate-800">
+                            <div class="text-[9px] text-slate-400">Δ YAW (Trôi)</div>
+                            <div id="delta-yaw" class="text-amber-400 font-bold">1.45°</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive Virtual Sensor Tilt Pad (Shown when Manual Mode or expandable) -->
+                <div id="manual-control-panel" class="hud-panel p-3 hidden">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-[11px] font-bold tracking-wider uppercase text-cyan-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-hand-sparkles"></i> Bàn Nghiêng Cảm Biến Ảo (6 Trục)
+                        </span>
+                        <button onclick="centerManualSliders()" class="text-[10px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30 border border-cyan-400/30">
+                            Cân bằng (0°)
+                        </button>
+                    </div>
+                    <div class="space-y-2 text-xs">
+                        <div>
+                            <div class="flex justify-between text-[11px] mb-0.5">
+                                <span class="text-slate-300">Nghiêng Trái/Phải (Roll X)</span>
+                                <span id="lbl-manual-roll" class="font-mono-tech text-cyan-400">0°</span>
+                            </div>
+                            <input id="slider-roll" type="range" min="-85" max="85" value="0" step="0.5" class="hud-slider" oninput="onManualSliderChange()">
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[11px] mb-0.5">
+                                <span class="text-slate-300">Chúc Trước/Sau (Pitch Y)</span>
+                                <span id="lbl-manual-pitch" class="font-mono-tech text-emerald-400">0°</span>
+                            </div>
+                            <input id="slider-pitch" type="range" min="-85" max="85" value="0" step="0.5" class="hud-slider" oninput="onManualSliderChange()">
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-[11px] mb-0.5">
+                                <span class="text-slate-300">Xoay Hướng (Yaw Z)</span>
+                                <span id="lbl-manual-yaw" class="font-mono-tech text-amber-400">0°</span>
+                            </div>
+                            <input id="slider-yaw" type="range" min="-180" max="180" value="0" step="0.5" class="hud-slider" oninput="onManualSliderChange()">
+                        </div>
+                        <div class="pt-1 flex items-center justify-between gap-2">
+                            <button onmousedown="triggerShakeImpulse()" class="w-full py-1.5 rounded-lg bg-gradient-to-r from-rose-600/80 to-orange-600/80 hover:from-rose-500 hover:to-orange-500 text-white font-semibold text-xs border border-rose-400/40 shadow">
+                                <i class="fa-solid fa-bolt mr-1"></i> Tạo Xung Rung / Lắc Mạnh (Test Accel &amp; Gyro)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CARD 1: GÓC ĐỊNH HƯỚNG (EULER ANGLES) - Matching Bottom-Left Top Card in Photo -->
+                <div class="hud-panel p-3">
+                    <div class="flex items-center justify-between mb-2.5">
+                        <span class="text-[11px] font-bold tracking-wider uppercase text-slate-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-compass text-cyan-400"></i> GÓC ĐỊNH HƯỚNG (EULER)
+                        </span>
+                        <div class="flex items-center gap-1">
+                            <span id="active-sensor-tag" class="text-[10px] font-mono-tech font-bold px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/30">
+                                MPU6050
+                            </span>
+                            <span class="text-[10px] font-mono-tech px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-700/40">
+                                3D
+                            </span>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-2">
+                        <!-- ROLL -->
+                        <div class="angle-card p-2 text-center">
+                            <div class="h-1 w-4/5 mx-auto rounded-full bg-cyan-400 shadow-[0_0_8px_#00e5ff] mb-1.5"></div>
+                            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-tight">ROLL (NGHIÊNG)</div>
+                            <div id="val-roll" class="font-mono-tech text-base xl:text-lg font-extrabold text-white mt-0.5">
+                                0.0°
+                            </div>
+                        </div>
+
+                        <!-- PITCH -->
+                        <div class="angle-card p-2 text-center">
+                            <div class="h-1 w-4/5 mx-auto rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399] mb-1.5"></div>
+                            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-tight">PITCH (CHÚC)</div>
+                            <div id="val-pitch" class="font-mono-tech text-base xl:text-lg font-extrabold text-white mt-0.5">
+                                0.0°
+                            </div>
+                        </div>
+
+                        <!-- YAW -->
+                        <div class="angle-card p-2 text-center">
+                            <div class="h-1 w-4/5 mx-auto rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24] mb-1.5"></div>
+                            <div class="text-[9px] font-bold text-slate-400 uppercase tracking-tight">YAW (XOAY)</div>
+                            <div id="val-yaw" class="font-mono-tech text-base xl:text-lg font-extrabold text-white mt-0.5">
+                                -102.9°
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CARD 2: GIA TỐC KẾ (ACCELEROMETER) - Matching Bottom-Left Middle Card in Photo -->
+                <div class="hud-panel p-3">
+                    <div class="flex items-center justify-between mb-2.5">
+                        <span class="text-[11px] font-bold tracking-wider uppercase text-slate-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-gauge-high text-cyan-400"></i> GIA TỐC KẾ (ACCELEROMETER)
+                        </span>
+                        <span id="val-temp" class="text-[11px] font-mono-tech font-bold px-2 py-0.5 rounded bg-orange-500/20 text-orange-300 border border-orange-400/30">
+                            36.5°C
+                        </span>
+                    </div>
+
+                    <div class="space-y-2.5">
+                        <!-- Accel X -->
+                        <div class="flex items-center gap-2.5">
+                            <span class="w-4 text-xs font-mono-tech font-bold text-rose-400">X</span>
+                            <div class="flex-1 h-2 bg-slate-950 rounded-full relative border border-slate-800 overflow-visible">
+                                <div class="absolute left-1/2 top-0 bottom-0 w-px bg-slate-600"></div>
+                                <div id="bar-ax" class="h-full bg-gradient-to-r from-cyan-500 to-blue-400 rounded-full" style="width: 50%;"></div>
+                                <div id="dot-ax" class="axis-dot text-cyan-400" style="left: 50%;"></div>
+                            </div>
+                            <span id="val-ax" class="w-14 text-right font-mono-tech text-xs font-bold text-white">0.00g</span>
+                        </div>
+
+                        <!-- Accel Y -->
+                        <div class="flex items-center gap-2.5">
+                            <span class="w-4 text-xs font-mono-tech font-bold text-emerald-400">Y</span>
+                            <div class="flex-1 h-2 bg-slate-950 rounded-full relative border border-slate-800 overflow-visible">
+                                <div class="absolute left-1/2 top-0 bottom-0 w-px bg-slate-600"></div>
+                                <div id="bar-ay" class="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full" style="width: 50%;"></div>
+                                <div id="dot-ay" class="axis-dot text-emerald-400" style="left: 50%;"></div>
+                            </div>
+                            <span id="val-ay" class="w-14 text-right font-mono-tech text-xs font-bold text-white">0.00g</span>
+                        </div>
+
+                        <!-- Accel Z -->
+                        <div class="flex items-center gap-2.5">
+                            <span class="w-4 text-xs font-mono-tech font-bold text-amber-400">Z</span>
+                            <div class="flex-1 h-2 bg-slate-950 rounded-full relative border border-slate-800 overflow-visible">
+                                <div class="absolute left-1/2 top-0 bottom-0 w-px bg-slate-600"></div>
+                                <div id="bar-az" class="h-full bg-gradient-to-r from-amber-500 to-yellow-400 rounded-full" style="width: 75%;"></div>
+                                <div id="dot-az" class="axis-dot text-amber-400" style="left: 75%;"></div>
+                            </div>
+                            <span id="val-az" class="w-14 text-right font-mono-tech text-xs font-bold text-white">1.00g</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CARD 3: CON QUAY HỒI CHUYỂN (GYROSCOPE) - Matching Bottom-Left Bottom Card in Photo -->
+                <div class="hud-panel p-3">
+                    <div class="flex items-center justify-between mb-2.5">
+                        <span class="text-[11px] font-bold tracking-wider uppercase text-slate-300 flex items-center gap-1.5">
+                            <i class="fa-solid fa-arrows-spin text-purple-400"></i> CON QUAY HỒI CHUYỂN (GYRO)
+                        </span>
+                        <span class="text-[10px] font-mono-tech font-bold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/30">
+                            ±250 °/s
+                        </span>
+                    </div>
+
+                    <div class="space-y-2.5">
+                        <!-- Gyro X -->
+                        <div class="flex items-center gap-2.5">
+                            <span class="w-4 text-xs font-mono-tech font-bold text-orange-400">X</span>
+                            <div class="flex-1 h-2 bg-slate-950 rounded-full relative border border-slate-800 overflow-visible">
+                                <div class="absolute left-1/2 top-0 bottom-0 w-px bg-slate-600"></div>
+                                <div id="bar-gx" class="h-full bg-gradient-to-r from-orange-500 to-amber-400 rounded-full" style="width: 50%;"></div>
+                                <div id="dot-gx" class="axis-dot text-orange-400" style="left: 50%;"></div>
+                            </div>
+                            <span id="val-gx" class="w-16 text-right font-mono-tech text-xs font-bold text-white">0.0°/s</span>
+                        </div>
+
+                        <!-- Gyro Y -->
+                        <div class="flex items-center gap-2.5">
+                            <span class="w-4 text-xs font-mono-tech font-bold text-fuchsia-400">Y</span>
+                            <div class="flex-1 h-2 bg-slate-950 rounded-full relative border border-slate-800 overflow-visible">
+                                <div class="absolute left-1/2 top-0 bottom-0 w-px bg-slate-600"></div>
+                                <div id="bar-gy" class="h-full bg-gradient-to-r from-fuchsia-500 to-purple-400 rounded-full" style="width: 50%;"></div>
+                                <div id="dot-gy" class="axis-dot text-fuchsia-400" style="left: 50%;"></div>
+                            </div>
+                            <span id="val-gy" class="w-16 text-right font-mono-tech text-xs font-bold text-white">0.0°/s</span>
+                        </div>
+
+                        <!-- Gyro Z -->
+                        <div class="flex items-center gap-2.5">
+                            <span class="w-4 text-xs font-mono-tech font-bold text-yellow-300">Z</span>
+                            <div class="flex-1 h-2 bg-slate-950 rounded-full relative border border-slate-800 overflow-visible">
+                                <div class="absolute left-1/2 top-0 bottom-0 w-px bg-slate-600"></div>
+                                <div id="bar-gz" class="h-full bg-gradient-to-r from-yellow-400 to-lime-300 rounded-full" style="width: 50%;"></div>
+                                <div id="dot-gz" class="axis-dot text-yellow-300" style="left: 50%;"></div>
+                            </div>
+                            <span id="val-gz" class="w-16 text-right font-mono-tech text-xs font-bold text-white">0.0°/s</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- CENTER FLOATING QUICK CONTROLS (Bottom Center of 3D Viewport) -->
+            <div class="hidden md:flex flex-col justify-end items-center pb-1 pointer-events-none">
+                <div class="hud-panel hud-interactive px-3 py-1.5 flex items-center gap-2 text-xs">
+                    <span class="text-slate-400 text-[11px] mr-1">Kịch bản chuyển động:</span>
+                    <button onclick="setMotionPreset('smooth')" id="preset-smooth" class="px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 font-medium">
+                        Lượn Sóng 3D
+                    </button>
+                    <button onclick="setMotionPreset('drone')" id="preset-drone" class="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 font-medium">
+                        Drone Nghiêng
+                    </button>
+                    <button onclick="setMotionPreset('vibration')" id="preset-vibration" class="px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 font-medium">
+                        Nhiễu Rung Động Cơ
+                    </button>
+                    <span class="text-slate-600">|</span>
+                    <label class="flex items-center gap-1.5 cursor-pointer text-[11px] text-slate-300">
+                        <input type="checkbox" id="chk-show-pcb" checked onchange="toggleInnerPCB()" class="accent-cyan-400 rounded">
+                        <span>Hiện mạch PCB bên trong</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN: 6-AXIS REAL-TIME OSCILLOSCOPE GRAPHS & SENSOR FUSION -->
+            <div class="w-full lg:w-[390px] xl:w-[430px] flex flex-col justify-end gap-2.5 overflow-y-auto pl-0.5 hud-interactive max-h-full">
+
+                <!-- GRAPH 1: ACCELEROMETER 3-AXIS REALTIME CHART -->
+                <div class="hud-panel p-3">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <div>
+                            <h3 class="text-[11px] font-bold tracking-wider uppercase text-slate-200 flex items-center gap-1.5">
+                                <i class="fa-solid fa-wave-square text-rose-400"></i> ĐỒ THỊ GIA TỐC 3 TRỤC (ACCEL X-Y-Z)
+                            </h3>
+                        </div>
+                        <div class="flex items-center gap-2 text-[10px] font-mono-tech">
+                            <span class="flex items-center gap-1 text-rose-400"><i class="fa-solid fa-circle text-[6px]"></i>Ax</span>
+                            <span class="flex items-center gap-1 text-emerald-400"><i class="fa-solid fa-circle text-[6px]"></i>Ay</span>
+                            <span class="flex items-center gap-1 text-cyan-400"><i class="fa-solid fa-circle text-[6px]"></i>Az</span>
+                            <span class="text-slate-400">[-2g..+2g]</span>
+                        </div>
+                    </div>
+                    <div class="relative w-full h-24 bg-slate-950/90 rounded-lg border border-blue-900/60 overflow-hidden">
+                        <canvas id="chart-accel" class="w-full h-full block"></canvas>
+                    </div>
+                </div>
+
+                <!-- GRAPH 2: GYROSCOPE 3-AXIS REALTIME CHART -->
+                <div class="hud-panel p-3">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <div>
+                            <h3 class="text-[11px] font-bold tracking-wider uppercase text-slate-200 flex items-center gap-1.5">
+                                <i class="fa-solid fa-chart-line text-amber-400"></i> ĐỒ THỊ CON QUAY 3 TRỤC (GYRO X-Y-Z)
+                            </h3>
+                        </div>
+                        <div class="flex items-center gap-2 text-[10px] font-mono-tech">
+                            <span class="flex items-center gap-1 text-orange-400"><i class="fa-solid fa-circle text-[6px]"></i>Gx</span>
+                            <span class="flex items-center gap-1 text-fuchsia-400"><i class="fa-solid fa-circle text-[6px]"></i>Gy</span>
+                            <span class="flex items-center gap-1 text-yellow-300"><i class="fa-solid fa-circle text-[6px]"></i>Gz</span>
+                            <span class="text-slate-400">[°/s]</span>
+                        </div>
+                    </div>
+                    <div class="relative w-full h-24 bg-slate-950/90 rounded-lg border border-blue-900/60 overflow-hidden">
+                        <canvas id="chart-gyro" class="w-full h-full block"></canvas>
+                    </div>
+                </div>
+
+                <!-- GRAPH 3: EULER ORIENTATION GRAPH (Matching Bottom-Right Panel in Reference Photo) -->
+                <div class="hud-panel p-3">
+                    <div class="flex items-center justify-between mb-1.5">
+                        <h3 class="text-[11px] font-bold tracking-wider uppercase text-slate-200 flex items-center gap-1.5">
+                            <i class="fa-solid fa-compass-drafting text-cyan-400"></i> ĐỒ THỊ GÓC THEO THỜI GIAN (ORIENTATION)
+                        </h3>
+                        <div class="flex items-center gap-1">
+                            <button onclick="togglePauseGraphs()" id="btn-pause-graph" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-cyan-300 border border-cyan-500/30">
+                                <i class="fa-solid fa-pause mr-0.5"></i> Tạm dừng
+                            </button>
+                            <button onclick="clearAllGraphs()" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] text-slate-300 border border-slate-700">
+                                Xóa
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="relative w-full h-28 bg-slate-950/90 rounded-lg border border-blue-900/60 overflow-hidden mb-2">
+                        <canvas id="chart-euler" class="w-full h-full block"></canvas>
+                    </div>
+
+                    <!-- Legend matching bottom-right card of user's photo -->
+                    <div class="flex items-center justify-around text-[11px] pt-1 border-t border-slate-800/80">
+                        <div class="flex items-center gap-1.5">
+                            <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_8px_#00e5ff]"></span>
+                            <div class="leading-tight">
+                                <div class="font-bold text-slate-200 text-[10px]">Roll</div>
+                                <div class="text-[9px] text-slate-400">(Nghiêng)</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]"></span>
+                            <div class="leading-tight">
+                                <div class="font-bold text-slate-200 text-[10px]">Pitch</div>
+                                <div class="text-[9px] text-slate-400">(Chúc)</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-1.5">
+                            <span class="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_#fbbf24]"></span>
+                            <div class="leading-tight">
+                                <div class="font-bold text-slate-200 text-[10px]">Yaw</div>
+                                <div class="text-[9px] text-slate-400">(Xoay)</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- FILTER & SENSOR FUSION TUNING BAR -->
+                <div class="hud-panel px-3 py-2 flex items-center justify-between gap-3">
+                    <div class="flex-1">
+                        <div class="flex justify-between text-[10px] mb-1">
+                            <span class="text-slate-300 font-semibold">Bộ lọc Complementary / Kalman (α):</span>
+                            <span id="lbl-filter-alpha" class="font-mono-tech text-cyan-400 font-bold">0.96</span>
+                        </div>
+                        <input id="slider-alpha" type="range" min="0.50" max="0.99" step="0.01" value="0.96" class="hud-slider" oninput="updateFilterAlpha(this.value)">
+                    </div>
+                    <button onclick="triggerShakeImpulse()" class="px-2.5 py-1.5 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/40 text-cyan-300 text-[11px] font-semibold whitespace-nowrap">
+                        <i class="fa-solid fa-wave-pulse mr-1"></i>Tạo Rung Thử
+                    </button>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== HARDWARE / WEBSERIAL / ESP32 & XSENS CODE MODAL ==================== -->
+    <div id="hardware-modal" class="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md hidden items-center justify-center p-4">
+        <div class="hud-panel w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden border-cyan-400/50">
+            <!-- Modal Header -->
+            <div class="px-5 py-3.5 border-b border-slate-800 flex items-center justify-between bg-slate-900/70">
+                <div class="flex items-center gap-2.5">
+                    <i class="fa-solid fa-microchip text-cyan-400 text-lg"></i>
+                    <div>
+                        <h2 class="text-sm font-bold text-white uppercase tracking-wider">
+                            Kết Nối Phần Cứng Thực Tế (WebSerial USB &amp; Mã Nguồn ESP32 + MPU6050 / Xsens)
+                        </h2>
+                        <p class="text-[11px] text-slate-400">
+                            Cắm trực tiếp ESP32 hoặc bộ thu Xsens qua cổng COM (Trình duyệt Chrome / Edge) hoặc sao chép mã chuẩn bên dưới
+                        </p>
+                    </div>
+                </div>
+                <button onclick="closeHardwareModal()" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-500/20 hover:text-rose-400 text-slate-300 flex items-center justify-center">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Modal Content -->
+            <div class="p-5 overflow-y-auto space-y-4 text-xs leading-relaxed">
+                <!-- Live WebSerial Connection Box -->
+                <div class="p-3.5 rounded-xl bg-slate-900/90 border border-cyan-500/30 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <div class="font-bold text-cyan-300 text-sm mb-0.5">
+                            <i class="fa-brands fa-usb mr-1.5"></i>Kết nối trực tiếp qua cổng USB Serial (Baudrate: 115200)
+                        </div>
+                        <p class="text-slate-400 text-[11px]">
+                            Định dạng chuỗi gửi từ ESP32 mỗi dòng: <code class="text-emerald-300 font-mono-tech">ax,ay,az,gx,gy,gz</code> hoặc <code class="text-amber-300 font-mono-tech">roll,pitch,yaw,ax,ay,az,gx,gy,gz</code>
+                        </p>
+                    </div>
+                    <button onclick="connectWebSerial()" id="btn-connect-serial" class="px-4 py-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold shadow-lg shadow-emerald-500/25 flex items-center gap-2">
+                        <i class="fa-solid fa-link"></i> Chọn Cổng COM (WebSerial)
+                    </button>
+                </div>
+
+                <!-- Sample Arduino / ESP32 Code -->
+                <div>
+                    <div class="flex items-center justify-between mb-1.5">
+                        <span class="font-bold text-slate-200 uppercase tracking-wider text-[11px]">
+                            <i class="fa-solid fa-code text-cyan-400 mr-1"></i> Mã giả / Firmware ESP32 đọc MPU6050 &amp; Xsens chuẩn 100Hz:
+                        </span>
+                        <button onclick="copyArduinoCode()" id="btn-copy-code" class="px-2.5 py-1 rounded bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-400/30 font-semibold text-[11px]">
+                            <i class="fa-regular fa-copy mr-1"></i> Sao chép mã ESP32
+                        </button>
+                    </div>
+                    <pre id="arduino-code-block" class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 font-mono-tech text-[11px] text-cyan-200 overflow-x-auto select-all leading-5">#include &lt;Wire.h&gt;
+#include &lt;MPU6050_tockn.h&gt;
+
+MPU6050 mpu6050(Wire);
+unsigned long timer = 0;
+
+void setup() {
+  Serial.begin(115200);
+  Wire.begin(21, 22); // SDA=21, SCL=22 trên ESP32
+  mpu6050.begin();
+  mpu6050.calcGyroOffsets(true); // Hiệu chuẩn Gyro khi khởi động
+}
+
+void loop() {
+  mpu6050.update();
+  // Gửi dữ liệu 100Hz (mỗi 10ms) lên Giao diện 3D Web
+  if (millis() - timer >= 10) {
+    timer = millis();
+    Serial.print(mpu6050.getAngleX(), 2); Serial.print(","); // Roll
+    Serial.print(mpu6050.getAngleY(), 2); Serial.print(","); // Pitch
+    Serial.print(mpu6050.getAngleZ(), 2); Serial.print(","); // Yaw
+    Serial.print(mpu6050.getAccX(), 3);   Serial.print(","); // Ax (g)
+    Serial.print(mpu6050.getAccY(), 3);   Serial.print(","); // Ay (g)
+    Serial.print(mpu6050.getAccZ(), 3);   Serial.print(","); // Az (g)
+    Serial.print(mpu6050.getGyroX(), 2);  Serial.print(","); // Gx (deg/s)
+    Serial.print(mpu6050.getGyroY(), 2);  Serial.print(","); // Gy (deg/s)
+    Serial.println(mpu6050.getGyroZ(), 2);                   // Gz (deg/s)
+  }
+}</pre>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="px-5 py-3 border-t border-slate-800 bg-slate-900/70 flex justify-end">
+                <button onclick="closeHardwareModal()" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">
+                    Đóng cửa sổ
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TOAST NOTIFICATION -->
+    <div id="toast-box" class="fixed top-16 left-1/2 -translate-x-1/2 z-50 pointer-events-none opacity-0 transition-all duration-300 transform -translate-y-2">
+        <div class="hud-panel px-4 py-2 border-cyan-400 text-xs font-semibold text-white flex items-center gap-2 shadow-xl">
+            <i id="toast-icon" class="fa-solid fa-circle-check text-cyan-400"></i>
+            <span id="toast-msg">Đã đặt lại góc 0°</span>
+        </div>
+    </div>
+
+    <!-- ==================== APPLICATION LOGIC ==================== -->
+    <script>
+        /********************************************************************
+         * 1. GLOBAL TELEMETRY & SENSOR FUSION STATE
+         ********************************************************************/
+        const state = {
+            sensorSource: 'mpu6050',  // 'mpu6050' | 'xsens' | 'dual'
+            controlMode: 'auto',      // 'auto' | 'manual' | 'serial'
+            hasEkfStream: false,      // Cờ nhận biết luồng dung hợp PX4_EKF từ ESP32
+            motionPreset: 'smooth',   // 'smooth' | 'drone' | 'vibration'
+            filterAlpha: 0.96,
+            pausedGraphs: false,
+            showInnerPCB: true,
+
+            // Time & FPS tracking
+            simTime: 0,
+            lastFrameTime: performance.now(),
+            frameCount: 0,
+            fps: 60,
+
+            // Zero offset calibration values
+            offsetRoll: 0,
+            offsetPitch: 0,
+            offsetYaw: 0,
+            gyroBias: { x: 0.35, y: -0.22, z: 0.45 }, // Simulated MPU6050 uncalibrated drift
+
+            // Shake impulse state
+            shakeIntensity: 0,
+
+            // Primary Sensor Telemetry (Displayed on cards & graphs)
+            roll: 0,
+            pitch: 0,
+            yaw: -102.9,
+            ax: 0,
+            ay: 0,
+            az: 1.0,
+            gx: 0,
+            gy: 0,
+            gz: 0,
+            temp: 36.5,
+
+            // CSV Telemetry Logger State
+            csvLogging: {
+                isRecording: false,
+                startTime: 0,
+                records: [],
+                lastSimLogTime: 0
+            },
+
+            // Secondary Sensor Telemetry (For Xsens vs MPU6050 Dual Compare)
+            xsens: {
+                roll: 0,
+                pitch: 0,
+                yaw: -102.9
+            },
+            mpu: {
+                roll: 0,
+                pitch: 0,
+                yaw: -102.9,
+                yawDriftAccum: 0
+            },
+
+            // Manual target angles
+            manual: {
+                roll: 0,
+                pitch: 0,
+                yaw: 0
+            }
+        };
+
+        // Oscilloscope Graph History Buffers (180 points each)
+        const MAX_GRAPH_POINTS = 180;
+        const graphHistory = {
+            ax: new Array(MAX_GRAPH_POINTS).fill(0),
+            ay: new Array(MAX_GRAPH_POINTS).fill(0),
+            az: new Array(MAX_GRAPH_POINTS).fill(1),
+            gx: new Array(MAX_GRAPH_POINTS).fill(0),
+            gy: new Array(MAX_GRAPH_POINTS).fill(0),
+            gz: new Array(MAX_GRAPH_POINTS).fill(0),
+            roll: new Array(MAX_GRAPH_POINTS).fill(0),
+            pitch: new Array(MAX_GRAPH_POINTS).fill(0),
+            yaw: new Array(MAX_GRAPH_POINTS).fill(-102.9)
+        };
+
+        /********************************************************************
+         * 2. THREE.JS 3D SCENE SETUP (MATCHING SCREENSHOT AESTHETIC)
+         ********************************************************************/
+        let scene, camera, renderer;
+        let mainImuGroup, xsensGhostGroup, innerPcbGroup;
+        let isDraggingCamera = false;
+        let prevMouse = { x: 0, y: 0 };
+        let cameraSpherical = { radius: 6.4, theta: Math.PI / 4, phi: Math.PI / 3.1 };
+
+        // Create crisp 3D Sprite Label for 'X', 'Y', 'Z'
+        function createAxisTextSprite(text, colorHex) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 128;
+            canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+
+            ctx.font = '900 76px "Inter", sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // Outer Neon Glow
+            ctx.shadowColor = colorHex;
+            ctx.shadowBlur = 18;
+            ctx.fillStyle = colorHex;
+            ctx.fillText(text, 64, 64);
+
+            // Inner Crisp Stroke
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#ffffff';
+            ctx.strokeText(text, 64, 64);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.SpriteMaterial({
+                map: texture,
+                transparent: true,
+                depthTest: false
+            });
+            const sprite = new THREE.Sprite(material);
+            sprite.scale.set(0.65, 0.65, 0.65);
+            return sprite;
+        }
+
+        // Build the signature glowing wireframe cube + internal 3D XYZ arrows from the photo
+        function createImuCubeAssembly(edgeColorHex, faceColorHex, isSecondary = false) {
+            const group = new THREE.Group();
+            const cubeSize = 2.35;
+
+            // 1. Translucent Glowing Box Faces
+            const boxGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+            const faceMat = new THREE.MeshPhongMaterial({
+                color: faceColorHex,
+                transparent: true,
+                opacity: isSecondary ? 0.06 : 0.11,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+            const boxMesh = new THREE.Mesh(boxGeo, faceMat);
+            group.add(boxMesh);
+
+            // 2. Bold Glowing Cyan Wireframe Edges (Multi-layer for neon bloom look)
+            const edgesGeo = new THREE.EdgesGeometry(boxGeo);
+            const edgesMat = new THREE.LineBasicMaterial({
+                color: edgeColorHex,
+                linewidth: 2,
+                transparent: true,
+                opacity: isSecondary ? 0.65 : 1.0
+            });
+            const wireframe = new THREE.LineSegments(edgesGeo, edgesMat);
+            group.add(wireframe);
+
+            // Slightly slightly larger outer glow wireframe
+            const outerBoxGeo = new THREE.BoxGeometry(cubeSize * 1.008, cubeSize * 1.008, cubeSize * 1.008);
+            const outerEdgesMat = new THREE.LineBasicMaterial({
+                color: edgeColorHex,
+                transparent: true,
+                opacity: isSecondary ? 0.2 : 0.45
+            });
+            group.add(new THREE.LineSegments(new THREE.EdgesGeometry(outerBoxGeo), outerEdgesMat));
+
+            if (!isSecondary) {
+                // 3. White Center Origin Sphere (Just like in the reference image)
+                const originGeo = new THREE.SphereGeometry(0.11, 24, 24);
+                const originMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                const originSphere = new THREE.Mesh(originGeo, originMat);
+                group.add(originSphere);
+
+                // 4. Internal 3D Coordinate Axes Arrows matching screenshot:
+                //    - X Axis (Red/Coral pointing right-front)
+                //    - Y Axis (Mint/Green pointing left-front)
+                //    - Z Axis (White/Cyan pointing straight UP)
+                const arrowLen = 1.45;
+                const headLen = 0.34;
+                const headWidth = 0.19;
+
+                // X Axis Arrow (Red-Orange)
+                const dirX = new THREE.Vector3(1, 0, 0);
+                const arrowX = new THREE.ArrowHelper(dirX, new THREE.Vector3(0, 0, 0), arrowLen, 0xff4d29, headLen, headWidth);
+                group.add(arrowX);
+                const labelX = createAxisTextSprite('X', '#ff4d29');
+                labelX.position.set(arrowLen + 0.28, 0, 0);
+                group.add(labelX);
+
+                // Y Axis Arrow (Mint/Cyan-Green)
+                const dirY = new THREE.Vector3(0, 0, 1);
+                const arrowY = new THREE.ArrowHelper(dirY, new THREE.Vector3(0, 0, 0), arrowLen, 0x5eead4, headLen, headWidth);
+                group.add(arrowY);
+                const labelY = createAxisTextSprite('Y', '#5eead4');
+                labelY.position.set(0, 0, arrowLen + 0.28);
+                group.add(labelY);
+
+                // Z Axis Arrow (Crisp White/Sky pointing UP along Three.js Y)
+                const dirZ = new THREE.Vector3(0, 1, 0);
+                const arrowZ = new THREE.ArrowHelper(dirZ, new THREE.Vector3(0, 0, 0), arrowLen, 0xf8fafc, headLen, headWidth);
+                group.add(arrowZ);
+                const labelZ = createAxisTextSprite('Z', '#38bdf8');
+                labelZ.position.set(0, arrowLen + 0.32, 0);
+                group.add(labelZ);
+
+                // 5. Realistic Inner GY-521 MPU6050 / Xsens Sensor PCB Model (Toggleable)
+                innerPcbGroup = new THREE.Group();
+                const pcbGeo = new THREE.BoxGeometry(1.35, 0.08, 0.95);
+                const pcbMat = new THREE.MeshPhongMaterial({
+                    color: 0x0284c7,
+                    shininess: 80,
+                    transparent: true,
+                    opacity: 0.75
+                });
+                const pcbBoard = new THREE.Mesh(pcbGeo, pcbMat);
+                pcbBoard.position.y = -0.25;
+                innerPcbGroup.add(pcbBoard);
+
+                // Black MEMS QFN Chip in center of PCB
+                const chipGeo = new THREE.BoxGeometry(0.36, 0.06, 0.36);
+                const chipMat = new THREE.MeshPhongMaterial({ color: 0x111827 });
+                const chipMesh = new THREE.Mesh(chipGeo, chipMat);
+                chipMesh.position.set(0, -0.19, 0);
+                innerPcbGroup.add(chipMesh);
+
+                // Gold Header Pins along edge
+                for (let i = -3; i <= 4; i++) {
+                    const pinGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.28, 8);
+                    const pinMat = new THREE.MeshPhongMaterial({ color: 0xfacc15 });
+                    const pin = new THREE.Mesh(pinGeo, pinMat);
+                    pin.position.set(-0.58, -0.32, i * 0.1);
+                    innerPcbGroup.add(pin);
+                }
+
+                group.add(innerPcbGroup);
+            }
+
+            return group;
+        }
+
+        function initThreeScene() {
+            const container = document.getElementById('canvas3d-container');
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x050b18, 0.042);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            updateCameraPosition();
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            container.appendChild(renderer.domElement);
+
+            // Ambient & Directional Lights
+            const ambientLight = new THREE.AmbientLight(0xbae6fd, 0.85);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0x38bdf8, 0.9);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            // Deep Blue Glowing Perspective Grid Floor (Matching Screenshot)
+            const gridHelper = new THREE.GridHelper(36, 36, 0x1d4ed8, 0x0f295c);
+            gridHelper.position.y = -2.15;
+            scene.add(gridHelper);
+
+            // Subtle Sub-Grid for finer perspective lines
+            const subGrid = new THREE.GridHelper(36, 108, 0x0a1938, 0x071229);
+            subGrid.position.y = -2.16;
+            scene.add(subGrid);
+
+            // Primary IMU 3D Wireframe Cube (Cyan #00e5ff)
+            mainImuGroup = createImuCubeAssembly(0x00e5ff, 0x00b4d8, false);
+            scene.add(mainImuGroup);
+
+            // Secondary Ghost Cube for Dual Compare Mode (Xsens Orange #ff9f1c)
+            xsensGhostGroup = createImuCubeAssembly(0xff9f1c, 0xf59e0b, true);
+            xsensGhostGroup.visible = false;
+            scene.add(xsensGhostGroup);
+
+            // Mouse & Touch Camera Orbit Interaction
+            const domElem = renderer.domElement;
+            domElem.addEventListener('mousedown', (e) => {
+                isDraggingCamera = true;
+                prevMouse = { x: e.clientX, y: e.clientY };
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isDraggingCamera) return;
+                const dx = e.clientX - prevMouse.x;
+                const dy = e.clientY - prevMouse.y;
+                prevMouse = { x: e.clientX, y: e.clientY };
+
+                cameraSpherical.theta -= dx * 0.007;
+                cameraSpherical.phi = Math.max(0.25, Math.min(Math.PI / 2.05, cameraSpherical.phi - dy * 0.007));
+                updateCameraPosition();
+            });
+
+            window.addEventListener('mouseup', () => {
+                isDraggingCamera = false;
+            });
+
+            domElem.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                cameraSpherical.radius = Math.max(3.5, Math.min(12, cameraSpherical.radius + e.deltaY * 0.004));
+                updateCameraPosition();
+            }, { passive: false });
+
+            // Touch Support
+            domElem.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    isDraggingCamera = true;
+                    prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                }
+            });
+            window.addEventListener('touchmove', (e) => {
+                if (!isDraggingCamera || e.touches.length !== 1) return;
+                const dx = e.touches[0].clientX - prevMouse.x;
+                const dy = e.touches[0].clientY - prevMouse.y;
+                prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+                cameraSpherical.theta -= dx * 0.007;
+                cameraSpherical.phi = Math.max(0.25, Math.min(Math.PI / 2.05, cameraSpherical.phi - dy * 0.007));
+                updateCameraPosition();
+            });
+            window.addEventListener('touchend', () => { isDraggingCamera = false; });
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function updateCameraPosition() {
+            if (!camera) return;
+            const r = cameraSpherical.radius;
+            const theta = cameraSpherical.theta;
+            const phi = cameraSpherical.phi;
+
+            camera.position.x = r * Math.sin(phi) * Math.cos(theta);
+            camera.position.y = r * Math.cos(phi);
+            camera.position.z = r * Math.sin(phi) * Math.sin(theta);
+            camera.lookAt(0, -0.15, 0);
+        }
+
+        function onWindowResize() {
+            if (!camera || !renderer) return;
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            resizeAllCharts();
+        }
+
+        /********************************************************************
+         * 3. REALISTIC 6-AXIS IMU PHYSICS & SENSOR FUSION ENGINE
+         ********************************************************************/
+        function stepImuSimulation(dt) {
+            if (state.controlMode === 'serial') return; // Driven by live WebSerial data
+
+            state.simTime += dt;
+            const t = state.simTime;
+
+            let targetRoll = 0;
+            let targetPitch = 0;
+            let targetYaw = -102.9;
+
+            if (state.controlMode === 'auto') {
+                if (state.motionPreset === 'smooth') {
+                    // Smooth 3D demonstration wave
+                    targetRoll = Math.sin(t * 1.35) * 28 + Math.cos(t * 0.55) * 8;
+                    targetPitch = Math.cos(t * 1.05) * 22 + Math.sin(t * 0.45) * 6;
+                    targetYaw = -102.9 + Math.sin(t * 0.5) * 42;
+                } else if (state.motionPreset === 'drone') {
+                    // Sharp banking drone maneuvers
+                    targetRoll = Math.sin(t * 2.4) * 45 * Math.pow(Math.sin(t * 0.8), 2);
+                    targetPitch = Math.cos(t * 2.0) * 35;
+                    targetYaw = -102.9 + (t * 22) % 360;
+                    if (targetYaw > 180) targetYaw -= 360;
+                } else if (state.motionPreset === 'vibration') {
+                    // High frequency motor vibration test (shows Kalman vs Raw difference)
+                    targetRoll = Math.sin(t * 1.2) * 15;
+                    targetPitch = Math.cos(t * 0.9) * 12;
+                    targetYaw = -102.9 + Math.sin(t * 0.4) * 18;
+                    state.shakeIntensity = Math.max(state.shakeIntensity, 0.35);
+                }
+            } else if (state.controlMode === 'manual') {
+                targetRoll = state.manual.roll;
+                targetPitch = state.manual.pitch;
+                targetYaw = state.manual.yaw;
+            }
+
+            // Decay any user-triggered shake impulse
+            if (state.shakeIntensity > 0.001) {
+                state.shakeIntensity *= Math.pow(0.08, dt);
+            } else {
+                state.shakeIntensity = 0;
+            }
+
+            // True Reference Attitude (Xsens Industrial Grade Kalman AHRS)
+            const prevRoll = state.xsens.roll;
+            const prevPitch = state.xsens.pitch;
+            const prevYaw = state.xsens.yaw;
+
+            const smoothFactor = Math.min(1, dt * 10);
+            state.xsens.roll += (targetRoll - state.xsens.roll) * smoothFactor;
+            state.xsens.pitch += (targetPitch - state.xsens.pitch) * smoothFactor;
+            state.xsens.yaw += (targetYaw - state.xsens.yaw) * smoothFactor;
+
+            // MPU6050 Attitude (Includes high-frequency vibration sensitivity & slight Yaw drift)
+            const vibNoise = (Math.random() - 0.5) * 2.0 * (state.shakeIntensity * 12 + (1 - state.filterAlpha) * 18);
+            state.mpu.yawDriftAccum += state.gyroBias.z * dt * 0.4;
+
+            state.mpu.roll = state.xsens.roll + vibNoise + (Math.random() - 0.5) * 0.45;
+            state.mpu.pitch = state.xsens.pitch + vibNoise * 0.85 + (Math.random() - 0.5) * 0.45;
+            state.mpu.yaw = state.xsens.yaw + state.mpu.yawDriftAccum + (Math.random() - 0.5) * 0.3;
+
+            // Select active sensor for primary display
+            const isXsensActive = (state.sensorSource === 'xsens');
+            const rawRoll = isXsensActive ? state.xsens.roll : state.mpu.roll;
+            const rawPitch = isXsensActive ? state.xsens.pitch : state.mpu.pitch;
+            const rawYaw = isXsensActive ? state.xsens.yaw : state.mpu.yaw;
+
+            // Apply User Zero Offsets
+            state.roll = rawRoll - state.offsetRoll;
+            state.pitch = rawPitch - state.offsetPitch;
+            state.yaw = rawYaw - state.offsetYaw;
+
+            // Compute physically accurate 3-Axis Gyroscope (°/s) from angular rates + sensor noise
+            const gyroNoiseScale = isXsensActive ? 0.15 : 1.6;
+            const shakeGyro = (Math.random() - 0.5) * state.shakeIntensity * 190;
+            state.gx = ((state.xsens.roll - prevRoll) / Math.max(dt, 0.001)) + (Math.random() - 0.5) * gyroNoiseScale + shakeGyro;
+            state.gy = ((state.xsens.pitch - prevPitch) / Math.max(dt, 0.001)) + (Math.random() - 0.5) * gyroNoiseScale - shakeGyro * 0.7;
+            state.gz = ((state.xsens.yaw - prevYaw) / Math.max(dt, 0.001)) + (Math.random() - 0.5) * gyroNoiseScale + (isXsensActive ? 0 : state.gyroBias.z);
+
+            // Compute physically accurate 3-Axis Accelerometer (g) from Gravity Projection + Linear Shake
+            const rRad = THREE.MathUtils.degToRad(state.roll);
+            const pRad = THREE.MathUtils.degToRad(state.pitch);
+
+            const accNoiseScale = isXsensActive ? 0.004 : (0.025 + (1 - state.filterAlpha) * 0.15);
+            const shakeAcc = (Math.random() - 0.5) * state.shakeIntensity * 2.4;
+
+            state.ax = -Math.sin(pRad) + (Math.random() - 0.5) * accNoiseScale + shakeAcc;
+            state.ay = Math.sin(rRad) * Math.cos(pRad) + (Math.random() - 0.5) * accNoiseScale - shakeAcc * 0.8;
+            state.az = Math.cos(rRad) * Math.cos(pRad) + (Math.random() - 0.5) * accNoiseScale + shakeAcc * 0.5;
+
+            // Simulated Die Temperature
+            state.temp = (isXsensActive ? 31.2 : 36.5) + Math.sin(t * 0.2) * 0.15;
+        }
+
+        /********************************************************************
+         * 4. HIGH-FPS CANVAS OSCILLOSCOPE CHARTS (ACCEL, GYRO, EULER)
+         ********************************************************************/
+        const charts = {};
+
+        function initOscilloscopeCharts() {
+            charts.accel = document.getElementById('chart-accel').getContext('2d');
+            charts.gyro = document.getElementById('chart-gyro').getContext('2d');
+            charts.euler = document.getElementById('chart-euler').getContext('2d');
+            resizeAllCharts();
+        }
+
+        function resizeAllCharts() {
+            ['chart-accel', 'chart-gyro', 'chart-euler'].forEach(id => {
+                const canvas = document.getElementById(id);
+                if (!canvas) return;
+                const rect = canvas.parentElement.getBoundingClientRect();
+                canvas.width = rect.width * window.devicePixelRatio;
+                canvas.height = rect.height * window.devicePixelRatio;
+            });
+        }
+
+        function pushGraphSample() {
+            if (state.pausedGraphs) return;
+
+            const pushShift = (arr, val) => {
+                arr.push(val);
+                if (arr.length > MAX_GRAPH_POINTS) arr.shift();
+            };
+
+            pushShift(graphHistory.ax, state.ax);
+            pushShift(graphHistory.ay, state.ay);
+            pushShift(graphHistory.az, state.az);
+
+            pushShift(graphHistory.gx, state.gx);
+            pushShift(graphHistory.gy, state.gy);
+            pushShift(graphHistory.gz, state.gz);
+
+            pushShift(graphHistory.roll, state.roll);
+            pushShift(graphHistory.pitch, state.pitch);
+            pushShift(graphHistory.yaw, state.yaw);
+
+            // Ghi log trong chế độ giả lập (chu kỳ 50ms = 20Hz)
+            if (state.csvLogging && state.csvLogging.isRecording) {
+                const nowMs = performance.now();
+                if (!state.csvLogging.lastSimLogTime || (nowMs - state.csvLogging.lastSimLogTime >= 50)) {
+                    state.csvLogging.lastSimLogTime = nowMs;
+                    const src = state.hasEkfStream ? 'PX4_EKF' : (state.sensorSource === 'xsens' ? 'Xsens' : 'MPU6050');
+                    recordCsvSample(src, state.roll, state.pitch, state.yaw,
+                                    state.ax * 9.80665, state.ay * 9.80665, state.az * 9.80665,
+                                    state.gx, state.gy, state.gz);
+                }
+            }
+        }
+
+        function drawMultiLineChart(ctx, datasets, minVal, maxVal) {
+            if (!ctx) return;
+            const w = ctx.canvas.width;
+            const h = ctx.canvas.height;
+            const dpr = window.devicePixelRatio || 1;
+
+            ctx.clearRect(0, 0, w, h);
+
+            // Subtle Grid Lines
+            ctx.strokeStyle = 'rgba(30, 64, 175, 0.28)';
+            ctx.lineWidth = 1 * dpr;
+            ctx.beginPath();
+            // Horizontal center zero line & quarters
+            [0.25, 0.5, 0.75].forEach(ratio => {
+                const y = h * ratio;
+                ctx.moveTo(0, y);
+                ctx.lineTo(w, y);
+            });
+            // Vertical time divisions
+            for (let x = w; x > 0; x -= 45 * dpr) {
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, h);
+            }
+            ctx.stroke();
+
+            // Draw each signal curve with glowing stroke
+            const range = maxVal - minVal;
+            datasets.forEach(ds => {
+                const data = ds.data;
+                ctx.save();
+                ctx.beginPath();
+                ctx.strokeStyle = ds.color;
+                ctx.lineWidth = 2.0 * dpr;
+                ctx.shadowColor = ds.color;
+                ctx.shadowBlur = 8 * dpr;
+
+                for (let i = 0; i < data.length; i++) {
+                    const x = (i / (MAX_GRAPH_POINTS - 1)) * w;
+                    const clamped = Math.max(minVal, Math.min(maxVal, data[i]));
+                    const norm = (clamped - minVal) / range;
+                    const y = h - norm * (h - 10 * dpr) - 5 * dpr;
+
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+                ctx.restore();
+            });
+        }
+
+        function renderAllGraphs() {
+            // 1. Accel 3-Axis Graph (-2g to +2g)
+            drawMultiLineChart(charts.accel, [
+                { data: graphHistory.ax, color: '#fb7185' }, // Rose X
+                { data: graphHistory.ay, color: '#34d399' }, // Emerald Y
+                { data: graphHistory.az, color: '#22d3ee' }  // Cyan Z
+            ], -2.0, 2.0);
+
+            // 2. Gyro 3-Axis Graph (-180°/s to +180°/s)
+            drawMultiLineChart(charts.gyro, [
+                { data: graphHistory.gx, color: '#fb923c' }, // Orange X
+                { data: graphHistory.gy, color: '#e879f9' }, // Fuchsia Y
+                { data: graphHistory.gz, color: '#fde047' }  // Yellow Z
+            ], -180, 180);
+
+            // 3. Euler Orientation Graph (-180° to +180°)
+            drawMultiLineChart(charts.euler, [
+                { data: graphHistory.roll, color: '#00e5ff' },  // Cyan Roll
+                { data: graphHistory.pitch, color: '#34d399' }, // Emerald Pitch
+                { data: graphHistory.yaw, color: '#fbbf24' }    // Amber Yaw
+            ], -180, 180);
+        }
+
+        /********************************************************************
+         * 5. DOM HUD UPDATES & PROGRESS BARS
+         ********************************************************************/
+        function updateBidirectionalBar(barId, dotId, value, maxAbs) {
+            const pct = Math.max(4, Math.min(96, 50 + (value / maxAbs) * 46));
+            const barEl = document.getElementById(barId);
+            const dotEl = document.getElementById(dotId);
+            if (barEl) barEl.style.width = `${pct}%`;
+            if (dotEl) dotEl.style.left = `${pct}%`;
+        }
+
+        function updateHudReadouts() {
+            // Euler Angles
+            document.getElementById('val-roll').textContent = `${state.roll.toFixed(1)}°`;
+            document.getElementById('val-pitch').textContent = `${state.pitch.toFixed(1)}°`;
+            document.getElementById('val-yaw').textContent = `${state.yaw.toFixed(1)}°`;
+
+            // Top bar mini summary
+            document.getElementById('top-rpy').textContent =
+                `R:${state.roll.toFixed(1)}° P:${state.pitch.toFixed(1)}° Y:${state.yaw.toFixed(1)}°`;
+
+            // Temperature
+            document.getElementById('val-temp').textContent = `${state.temp.toFixed(1)}°C`;
+
+            // Accelerometer Readouts & Bars (-2g to +2g)
+            document.getElementById('val-ax').textContent = `${state.ax >= 0 ? '' : ''}${state.ax.toFixed(2)}g`;
+            document.getElementById('val-ay').textContent = `${state.ay.toFixed(2)}g`;
+            document.getElementById('val-az').textContent = `${state.az.toFixed(2)}g`;
+            updateBidirectionalBar('bar-ax', 'dot-ax', state.ax, 2.0);
+            updateBidirectionalBar('bar-ay', 'dot-ay', state.ay, 2.0);
+            updateBidirectionalBar('bar-az', 'dot-az', state.az, 2.0);
+
+            // Gyroscope Readouts & Bars (-200°/s to +200°/s)
+            document.getElementById('val-gx').textContent = `${state.gx.toFixed(1)}°/s`;
+            document.getElementById('val-gy').textContent = `${state.gy.toFixed(1)}°/s`;
+            document.getElementById('val-gz').textContent = `${state.gz.toFixed(1)}°/s`;
+            updateBidirectionalBar('bar-gx', 'dot-gx', state.gx, 200.0);
+            updateBidirectionalBar('bar-gy', 'dot-gy', state.gy, 200.0);
+            updateBidirectionalBar('bar-gz', 'dot-gz', state.gz, 200.0);
+
+            // Dual Sensor Comparison Deltas
+            if (state.sensorSource === 'dual') {
+                const dRoll = Math.abs(state.mpu.roll - state.xsens.roll);
+                const dPitch = Math.abs(state.mpu.pitch - state.xsens.pitch);
+                const dYaw = Math.abs(state.mpu.yaw - state.xsens.yaw);
+                document.getElementById('delta-roll').textContent = `${dRoll.toFixed(2)}°`;
+                document.getElementById('delta-pitch').textContent = `${dPitch.toFixed(2)}°`;
+                document.getElementById('delta-yaw').textContent = `${dYaw.toFixed(2)}°`;
+            }
+        }
+
+        /********************************************************************
+         * 6. USER INTERACTIVE CONTROLS (RESET, CALIBRATE, MODES)
+         ********************************************************************/
+        function showToast(message, iconClass = 'fa-solid fa-circle-check text-cyan-400') {
+            const box = document.getElementById('toast-box');
+            document.getElementById('toast-msg').textContent = message;
+            document.getElementById('toast-icon').className = iconClass;
+            box.classList.remove('opacity-0', '-translate-y-2');
+            box.classList.add('opacity-100', 'translate-y-0');
+
+            clearTimeout(window._toastTimer);
+            window._toastTimer = setTimeout(() => {
+                box.classList.add('opacity-0', '-translate-y-2');
+                box.classList.remove('opacity-100', 'translate-y-0');
+            }, 2400);
+        }
+
+        function setSensorSource(source) {
+            state.sensorSource = source;
+            document.getElementById('btn-sensor-mpu').classList.toggle('active', source === 'mpu6050');
+            document.getElementById('btn-sensor-xsens').classList.toggle('active', source === 'xsens');
+            document.getElementById('btn-sensor-dual').classList.toggle('active', source === 'dual');
+
+            const tag = document.getElementById('active-sensor-tag');
+            const dualBanner = document.getElementById('dual-comparison-banner');
+
+            if (source === 'mpu6050') {
+                tag.textContent = state.hasEkfStream ? 'ESP32 (PX4 EKF)' : 'MPU6050';
+                tag.className = 'text-[10px] font-mono-tech font-bold px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/30';
+                xsensGhostGroup.visible = false;
+                dualBanner.classList.add('hidden');
+                showToast(state.hasEkfStream ? 'Đã chuyển sang ESP32 (Dung hợp PX4 EKF)' : 'Đã chuyển sang cảm biến ESP32 + MPU6050 (MEMS 6 trục)');
+            } else if (source === 'xsens') {
+                tag.textContent = 'XSENS MTi';
+                tag.className = 'text-[10px] font-mono-tech font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-400/30';
+                xsensGhostGroup.visible = false;
+                dualBanner.classList.add('hidden');
+                showToast('Đã chuyển sang cảm biến công nghiệp Xsens MTi (Kalman AHRS)', 'fa-solid fa-satellite-dish text-amber-400');
+            } else if (source === 'dual') {
+                tag.textContent = 'DUAL SYNC';
+                tag.className = 'text-[10px] font-mono-tech font-bold px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-400/30';
+                xsensGhostGroup.visible = true;
+                dualBanner.classList.remove('hidden');
+                showToast('Chế độ So sánh Kép: Khối Cyan (MPU6050) & Khối Cam (Xsens)', 'fa-solid fa-code-compare text-purple-400');
+            }
+        }
+
+        function setControlMode(mode) {
+            state.controlMode = mode;
+            document.getElementById('btn-mode-auto').classList.toggle('active', mode === 'auto');
+            document.getElementById('btn-mode-manual').classList.toggle('active', mode === 'manual');
+
+            const manualPanel = document.getElementById('manual-control-panel');
+            if (mode === 'manual') {
+                manualPanel.classList.remove('hidden');
+                document.getElementById('status-text').textContent = 'Điều khiển Thủ công';
+                showToast('Bật bàn nghiêng cảm biến ảo: Kéo thanh trượt để nghiêng 3D');
+            } else {
+                manualPanel.classList.add('hidden');
+                document.getElementById('status-text').textContent = 'Đang chạy giả lập';
+                showToast('Chế độ Giả lập Sinh động Tự động');
+            }
+        }
+
+        function setMotionPreset(preset) {
+            state.motionPreset = preset;
+            if (state.controlMode !== 'auto') setControlMode('auto');
+
+            ['smooth', 'drone', 'vibration'].forEach(p => {
+                const btn = document.getElementById(`preset-${p}`);
+                if (p === preset) {
+                    btn.className = 'px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 font-medium';
+                } else {
+                    btn.className = 'px-2 py-0.5 rounded hover:bg-slate-800 text-slate-300 font-medium';
+                }
+            });
+        }
+
+        function onManualSliderChange() {
+            state.manual.roll = parseFloat(document.getElementById('slider-roll').value);
+            state.manual.pitch = parseFloat(document.getElementById('slider-pitch').value);
+            state.manual.yaw = parseFloat(document.getElementById('slider-yaw').value);
+
+            document.getElementById('lbl-manual-roll').textContent = `${state.manual.roll}°`;
+            document.getElementById('lbl-manual-pitch').textContent = `${state.manual.pitch}°`;
+            document.getElementById('lbl-manual-yaw').textContent = `${state.manual.yaw}°`;
+        }
+
+        function centerManualSliders() {
+            document.getElementById('slider-roll').value = 0;
+            document.getElementById('slider-pitch').value = 0;
+            document.getElementById('slider-yaw').value = 0;
+            onManualSliderChange();
+            showToast('Đã đưa cảm biến ảo về vị trí cân bằng ngang (0°)');
+        }
+
+        function resetOrientationZero() {
+            if (state.controlMode === 'serial') {
+                state.offsetRoll += state.roll;
+                state.offsetPitch += state.pitch;
+                state.offsetYaw += state.yaw;
+            } else {
+                const isXsensActive = (state.sensorSource === 'xsens');
+                state.offsetRoll = isXsensActive ? state.xsens.roll : state.mpu.roll;
+                state.offsetPitch = isXsensActive ? state.xsens.pitch : state.mpu.pitch;
+                state.offsetYaw = isXsensActive ? state.xsens.yaw : state.mpu.yaw;
+                state.mpu.yawDriftAccum = 0;
+            }
+
+            if (state.controlMode === 'manual') {
+                centerManualSliders();
+                state.offsetRoll = 0;
+                state.offsetPitch = 0;
+                state.offsetYaw = 0;
+            }
+            showToast('Đã Reset Góc (Zero Offset): Roll = 0°, Pitch = 0°, Yaw = 0°');
+        }
+
+        function calibrateSensors() {
+            const btn = document.getElementById('btn-calibrate');
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-amber-400"></i><span>Đang lấy mẫu...</span>';
+
+            setTimeout(() => {
+                state.gyroBias = { x: 0, y: 0, z: 0 };
+                state.mpu.yawDriftAccum = 0;
+                resetOrientationZero();
+                btn.innerHTML = '<i class="fa-solid fa-crosshairs text-amber-400"></i><span>Hiệu chuẩn</span>';
+                showToast('Hiệu chuẩn hoàn tất! Đã khử nhiễu trôi Gyro Bias 6 trục', 'fa-solid fa-check-double text-emerald-400');
+            }, 650);
+        }
+
+        /********************************************************************
+         * CSV TELEMETRY LOGGER & EXPORTER (EKF & DUAL IMU)
+         ********************************************************************/
+        function recordCsvSample(source, roll, pitch, yaw, ax_ms2, ay_ms2, az_ms2, gx_dps, gy_dps, gz_dps) {
+            if (!state.csvLogging || !state.csvLogging.isRecording) return;
+            const now = performance.now();
+            const timeSec = ((now - state.csvLogging.startTime) / 1000).toFixed(3);
+            const isoTime = new Date().toISOString();
+
+            state.csvLogging.records.push({
+                iso: isoTime,
+                time_s: timeSec,
+                source: source,
+                roll: Number(roll).toFixed(2),
+                pitch: Number(pitch).toFixed(2),
+                yaw: Number(yaw).toFixed(2),
+                ax: Number(ax_ms2).toFixed(3),
+                ay: Number(ay_ms2).toFixed(3),
+                az: Number(az_ms2).toFixed(3),
+                gx: Number(gx_dps).toFixed(2),
+                gy: Number(gy_dps).toFixed(2),
+                gz: Number(gz_dps).toFixed(2)
+            });
+
+            const countEl = document.getElementById('csv-record-count');
+            const timeEl = document.getElementById('csv-record-time');
+            if (countEl) countEl.textContent = state.csvLogging.records.length;
+            if (timeEl) timeEl.textContent = timeSec;
+
+            const exportBtn = document.getElementById('btn-csv-export');
+            if (exportBtn && exportBtn.disabled) {
+                exportBtn.disabled = false;
+                exportBtn.classList.remove('opacity-40', 'cursor-not-allowed');
+                exportBtn.classList.add('border-emerald-400', 'text-emerald-300', 'shadow-sm', 'shadow-emerald-500/20');
+            }
+        }
+
+        function toggleCsvLogging() {
+            state.csvLogging.isRecording = !state.csvLogging.isRecording;
+            const btn = document.getElementById('btn-csv-toggle');
+            const icon = document.getElementById('csv-record-icon');
+            const text = document.getElementById('csv-record-text');
+            const badge = document.getElementById('csv-record-badge');
+            const exportBtn = document.getElementById('btn-csv-export');
+
+            if (state.csvLogging.isRecording) {
+                state.csvLogging.startTime = performance.now();
+                btn.classList.add('bg-rose-600/40', 'border-rose-500', 'text-rose-100', 'shadow-lg', 'shadow-rose-500/20');
+                icon.className = 'fa-solid fa-stop text-white text-[10px]';
+                text.textContent = 'Dừng Thu Log';
+                badge.classList.remove('hidden');
+                showToast('Bắt đầu thu thập Log IMU vào bộ đệm CSV!', 'fa-solid fa-circle-dot text-rose-400 animate-pulse');
+            } else {
+                btn.classList.remove('bg-rose-600/40', 'border-rose-500', 'text-rose-100', 'shadow-lg', 'shadow-rose-500/20');
+                icon.className = 'fa-solid fa-circle text-rose-500 text-[10px]';
+                text.textContent = 'Thu Log CSV';
+                const total = state.csvLogging.records.length;
+                if (total > 0 && exportBtn) {
+                    exportBtn.disabled = false;
+                    exportBtn.classList.remove('opacity-40', 'cursor-not-allowed');
+                    exportBtn.classList.add('border-emerald-400', 'text-emerald-300', 'shadow-sm', 'shadow-emerald-500/20');
+                }
+                showToast(`Đã dừng ghi log! Thu được ${total} mẫu. Bấm 'Xuất CSV' để tải về.`);
+            }
+        }
+
+        function exportCsvFile() {
+            if (!state.csvLogging || state.csvLogging.records.length === 0) {
+                showToast('Chưa có dữ liệu log nào được ghi lại!', 'fa-solid fa-triangle-exclamation text-amber-400');
+                return;
+            }
+
+            const headers = [
+                'Timestamp_ISO',
+                'Time_Elapsed_s',
+                'Sensor_Source',
+                'Roll_deg',
+                'Pitch_deg',
+                'Yaw_deg',
+                'Acc_X_ms2',
+                'Acc_Y_ms2',
+                'Acc_Z_ms2',
+                'Gyr_X_dps',
+                'Gyr_Y_dps',
+                'Gyr_Z_dps'
+            ];
+
+            let csvContent = '\uFEFF' + headers.join(',') + '\n';
+            for (const r of state.csvLogging.records) {
+                const row = [
+                    r.iso,
+                    r.time_s,
+                    r.source,
+                    r.roll,
+                    r.pitch,
+                    r.yaw,
+                    r.ax,
+                    r.ay,
+                    r.az,
+                    r.gx,
+                    r.gy,
+                    r.gz
+                ];
+                csvContent += row.join(',') + '\n';
+            }
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const now = new Date();
+            const pad = (n) => String(n).padStart(2, '0');
+            const filename = `IMU_Telemetry_Log_${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.csv`;
+
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            showToast(`Đã xuất file ${filename} (${state.csvLogging.records.length} mẫu)!`, 'fa-solid fa-file-csv text-emerald-400');
+        }
+
+        function clearCsvLog() {
+            if (!state.csvLogging) return;
+            const prevCount = state.csvLogging.records.length;
+            state.csvLogging.records = [];
+            const countEl = document.getElementById('csv-record-count');
+            const timeEl = document.getElementById('csv-record-time');
+            if (countEl) countEl.textContent = '0';
+            if (timeEl) timeEl.textContent = '0.0';
+            const exportBtn = document.getElementById('btn-csv-export');
+            if (exportBtn) {
+                exportBtn.disabled = true;
+                exportBtn.classList.add('opacity-40', 'cursor-not-allowed');
+                exportBtn.classList.remove('border-emerald-400', 'text-emerald-300', 'shadow-sm', 'shadow-emerald-500/20');
+            }
+            showToast(`Đã xóa sạch ${prevCount} mẫu log trong bộ đệm.`, 'fa-solid fa-trash-can text-slate-300');
+        }
+
+        function resetCameraView() {
+            cameraSpherical = { radius: 6.4, theta: Math.PI / 4, phi: Math.PI / 3.1 };
+            updateCameraPosition();
+            showToast('Đã đặt lại góc nhìn Camera 3D mặc định');
+        }
+
+        function triggerShakeImpulse() {
+            state.shakeIntensity = 1.0;
+            showToast('Đã tạo xung rung động cơ! Quan sát phản hồi trên Đồ thị 6 Trục', 'fa-solid fa-bolt text-amber-400');
+        }
+
+        function toggleInnerPCB() {
+            state.showInnerPCB = document.getElementById('chk-show-pcb').checked;
+            if (innerPcbGroup) innerPcbGroup.visible = state.showInnerPCB;
+        }
+
+        function updateFilterAlpha(val) {
+            state.filterAlpha = parseFloat(val);
+            document.getElementById('lbl-filter-alpha').textContent = state.filterAlpha.toFixed(2);
+        }
+
+        function togglePauseGraphs() {
+            state.pausedGraphs = !state.pausedGraphs;
+            const btn = document.getElementById('btn-pause-graph');
+            if (state.pausedGraphs) {
+                btn.innerHTML = '<i class="fa-solid fa-play mr-0.5"></i> Tiếp tục';
+                btn.classList.add('bg-amber-500/20', 'text-amber-300');
+            } else {
+                btn.innerHTML = '<i class="fa-solid fa-pause mr-0.5"></i> Tạm dừng';
+                btn.classList.remove('bg-amber-500/20', 'text-amber-300');
+            }
+        }
+
+        function clearAllGraphs() {
+            Object.keys(graphHistory).forEach(k => {
+                graphHistory[k].fill(k === 'az' ? 1 : 0);
+            });
+            showToast('Đã làm sạch bộ đệm đồ thị 6 trục');
+        }
+
+        /********************************************************************
+         * 7. HARDWARE MODAL & WEBSERIAL API INTEGRATION
+         ********************************************************************/
+        function openHardwareModal() {
+            const modal = document.getElementById('hardware-modal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeHardwareModal() {
+            const modal = document.getElementById('hardware-modal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        function copyArduinoCode() {
+            const codeText = document.getElementById('arduino-code-block').innerText;
+            const tempArea = document.createElement('textarea');
+            tempArea.value = codeText;
+            document.body.appendChild(tempArea);
+            tempArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempArea);
+
+            showToast('Đã sao chép mã nguồn ESP32 + MPU6050 vào Clipboard!');
+        }
+
+        async function connectWebSerial() {
+            if (!('serial' in navigator)) {
+                showToast('Trình duyệt hiện tại chưa bật WebSerial. Hãy mở trên Chrome/Edge Desktop!', 'fa-solid fa-triangle-exclamation text-amber-400');
+                return;
+            }
+            try {
+                const port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 });
+
+                state.controlMode = 'serial';
+                document.getElementById('status-text').textContent = 'Đã kết nối USB Serial';
+                const autoBtn = document.getElementById('btn-mode-auto');
+                if (autoBtn) autoBtn.classList.remove('active');
+                const manualPanel = document.getElementById('manual-control-panel');
+                if (manualPanel) manualPanel.classList.add('hidden');
+                closeHardwareModal();
+                showToast('Đã kết nối phần cứng ESP32/Xsens qua cổng Serial!', 'fa-solid fa-plug-circle-check text-emerald-400');
+
+                const decoder = new TextDecoderStream();
+                port.readable.pipeTo(decoder.writable);
+                const reader = decoder.readable.getReader();
+                let buffer = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += value;
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const rawLine of lines) {
+                        const line = rawLine.trim();
+                        if (!line) continue;
+
+                        // Case A: Ho tro doc dong Text Monitor dang [PX4_EKF], [MPU6050], [Xsens  ]
+                        const matchTag = line.match(/^\[(.*?)\]\s*R:\s*([-\d.]+)°?\s+P:\s*([-\d.]+)°?\s+Y:\s*([-\d.]+)°?\s*\|\s*Acc:\[\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\]\s*\|\s*Gyr:\[\s*([-\d.]+),\s*([-\d.]+),\s*([-\d.]+)\]/);
+                        if (matchTag) {
+                            const tag = matchTag[1].trim();
+                            const r  = parseFloat(matchTag[2]);
+                            const p  = parseFloat(matchTag[3]);
+                            const y  = parseFloat(matchTag[4]);
+                            const ax_raw = parseFloat(matchTag[5]);
+                            const ay_raw = parseFloat(matchTag[6]);
+                            const az_raw = parseFloat(matchTag[7]);
+                            const ax = ax_raw / 9.80665;
+                            const ay = ay_raw / 9.80665;
+                            const az = az_raw / 9.80665;
+                            const gx = parseFloat(matchTag[8]);
+                            const gy = parseFloat(matchTag[9]);
+                            const gz = parseFloat(matchTag[10]);
+
+                            // Thu thập mẫu Serial trực tiếp vào bộ đệm CSV
+                            if (state.csvLogging && state.csvLogging.isRecording) {
+                                recordCsvSample(tag, r, p, y, ax_raw, ay_raw, az_raw, gx, gy, gz);
+                            }
+
+                            if (tag.includes('Xsens')) {
+                                state.xsens.roll = r; state.xsens.pitch = p; state.xsens.yaw = y;
+                                state.xsens.ax = ax; state.xsens.ay = ay; state.xsens.az = az;
+                                state.xsens.gx = gx; state.xsens.gy = gy; state.xsens.gz = gz;
+                                if (state.sensorSource === 'xsens') {
+                                    state.roll  = r - state.offsetRoll;
+                                    state.pitch = p - state.offsetPitch;
+                                    state.yaw   = y - state.offsetYaw;
+                                    state.ax = ax; state.ay = ay; state.az = az;
+                                    state.gx = gx; state.gy = gy; state.gz = gz;
+                                }
+                            } else if (tag.includes('MPU6050')) {
+                                state.mpu.roll = r; state.mpu.pitch = p; state.mpu.yaw = y;
+                                state.mpu.ax = ax; state.mpu.ay = ay; state.mpu.az = az;
+                                state.mpu.gx = gx; state.mpu.gy = gy; state.mpu.gz = gz;
+                                // Tránh gai nhọn (spike): Không để MPU6050 ghi đè state.yaw khi đang có luồng PX4_EKF
+                                if (!state.hasEkfStream && state.sensorSource === 'mpu6050') {
+                                    state.roll  = r - state.offsetRoll;
+                                    state.pitch = p - state.offsetPitch;
+                                    state.yaw   = y - state.offsetYaw;
+                                    state.ax = ax; state.ay = ay; state.az = az;
+                                    state.gx = gx; state.gy = gy; state.gz = gz;
+                                }
+                            } else if (tag.includes('PX4_EKF')) {
+                                if (!state.hasEkfStream) {
+                                    state.hasEkfStream = true;
+                                    if (state.sensorSource === 'mpu6050') {
+                                        const tagEl = document.getElementById('active-sensor-tag');
+                                        if (tagEl) tagEl.textContent = 'ESP32 (PX4 EKF)';
+                                    }
+                                }
+                                if (state.sensorSource !== 'xsens') {
+                                    state.roll  = r - state.offsetRoll;
+                                    state.pitch = p - state.offsetPitch;
+                                    state.yaw   = y - state.offsetYaw;
+                                    state.ax = ax; state.ay = ay; state.az = az;
+                                    state.gx = gx; state.gy = gy; state.gz = gz;
+                                }
+                            }
+                            continue;
+                        }
+
+                        // Case B: Dinh dang CSV 9 gia tri chuan (roll,pitch,yaw,ax,ay,az,gx,gy,gz)
+                        const parts = line.split(',').map(Number);
+                        if (parts.length >= 9 && !parts.some(isNaN)) {
+                            if (state.csvLogging && state.csvLogging.isRecording) {
+                                recordCsvSample('SERIAL_RAW', parts[0], parts[1], parts[2], parts[3]*9.80665, parts[4]*9.80665, parts[5]*9.80665, parts[6], parts[7], parts[8]);
+                            }
+                            state.roll  = parts[0] - state.offsetRoll;
+                            state.pitch = parts[1] - state.offsetPitch;
+                            state.yaw   = parts[2] - state.offsetYaw;
+                            state.ax = parts[3]; state.ay = parts[4]; state.az = parts[5];
+                            state.gx = parts[6]; state.gy = parts[7]; state.gz = parts[8];
+                        } else if (parts.length === 6 && !parts.some(isNaN)) {
+                            state.ax = parts[0]; state.ay = parts[1]; state.az = parts[2];
+                            state.gx = parts[3]; state.gy = parts[4]; state.gz = parts[5];
+                            const accRoll = Math.atan2(state.ay, state.az) * (180 / Math.PI);
+                            const accPitch = Math.atan2(-state.ax, Math.sqrt(state.ay * state.ay + state.az * state.az)) * (180 / Math.PI);
+                            const dt = 0.01;
+                            state.roll = state.filterAlpha * (state.roll + state.gx * dt) + (1 - state.filterAlpha) * accRoll;
+                            state.pitch = state.filterAlpha * (state.pitch + state.gy * dt) + (1 - state.filterAlpha) * accPitch;
+                            state.yaw += state.gz * dt;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error('WebSerial Error:', err);
+                if (err.name === 'NotFoundError') {
+                    showToast('Chưa chọn cổng COM (hoặc đã bấm Cancel).', 'fa-solid fa-circle-info text-amber-400');
+                } else if (err.message && (err.message.includes('Failed to open') || err.message.toLowerCase().includes('denied') || err.message.toLowerCase().includes('busy'))) {
+                    showToast('Cổng COM đang bị Arduino IDE chiếm giữ! Hãy đóng Serial Monitor rồi kết nối lại.', 'fa-solid fa-triangle-exclamation text-rose-400');
+                } else {
+                    showToast('Lỗi Serial: ' + (err.message || 'Không mở được cổng'), 'fa-solid fa-circle-info text-rose-400');
+                }
+            }
+        }
+
+        /********************************************************************
+         * 8. MAIN ANIMATION LOOP
+         ********************************************************************/
+        function animate(now) {
+            requestAnimationFrame(animate);
+
+            const dt = Math.min(0.1, (now - state.lastFrameTime) / 1000);
+            state.lastFrameTime = now;
+
+            // FPS Counter
+            state.frameCount++;
+            if (state.frameCount % 20 === 0) {
+                state.fps = Math.min(60, Math.round(1 / Math.max(dt, 0.001)));
+                document.getElementById('top-fps').textContent = state.fps;
+            }
+
+            // 1. Step Physics & Sensor Fusion
+            stepImuSimulation(dt);
+
+            // 2. Apply Orientation to 3D IMU Cube(s)
+            if (mainImuGroup) {
+                const euler = new THREE.Euler(
+                    THREE.MathUtils.degToRad(state.roll),
+                    THREE.MathUtils.degToRad(-state.yaw - 102.9),
+                    THREE.MathUtils.degToRad(-state.pitch),
+                    'YXZ'
+                );
+                mainImuGroup.setRotationFromEuler(euler);
+            }
+
+            // Secondary Ghost Cube in Dual Mode
+            if (xsensGhostGroup && xsensGhostGroup.visible) {
+                const xEuler = new THREE.Euler(
+                    THREE.MathUtils.degToRad(state.xsens.roll - state.offsetRoll),
+                    THREE.MathUtils.degToRad(-(state.xsens.yaw - state.offsetYaw) - 102.9),
+                    THREE.MathUtils.degToRad(-(state.xsens.pitch - state.offsetPitch)),
+                    'YXZ'
+                );
+                xsensGhostGroup.setRotationFromEuler(xEuler);
+            }
+
+            // 3. Push & Render 6-Axis + Euler Oscilloscope Charts
+            pushGraphSample();
+            renderAllGraphs();
+
+            // 4. Update DOM Telemetry Cards
+            updateHudReadouts();
+
+            // 5. Render 3D Viewport
+            renderer.render(scene, camera);
+        }
+
+        window.onload = function () {
+            initThreeScene();
+            initOscilloscopeCharts();
+            requestAnimationFrame(animate);
+        };
+    </script>
+</body>
+</html>

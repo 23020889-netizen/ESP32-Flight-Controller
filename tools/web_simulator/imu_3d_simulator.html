@@ -2095,7 +2095,10 @@
                 if (g && g.connected) { gp = g; break; }
             }
 
-            if (!gp) return;
+            if (!gp) {
+                state.gamepadConnected = false;
+                return;
+            }
             state.gamepadConnected = true;
             state.gamepadMapping = gp.mapping || 'unknown';
             state.gamepadAxes = Array.from(gp.axes || []);
@@ -2163,11 +2166,10 @@
                 rKnob.style.transform = `translate(${(state.stickRight.x * maxRadius).toFixed(1)}px, ${(-state.stickRight.y * maxRadius).toFixed(1)}px)`;
             }
 
-            // Cập nhật text hiển thị thông số ga & hướng
+            // Cập nhật text hiển thị thông số ga & hướng thực tế của cần gạt
             const lReadout = document.getElementById('stickLeftReadout');
             const rReadout = document.getElementById('stickRightReadout');
-            const effThrDisplay = state.armed ? thrPct : 0.0;
-            if (lReadout) lReadout.textContent = `T: ${effThrDisplay.toFixed(0)}% | Y: ${yawPct.toFixed(0)}%`;
+            if (lReadout) lReadout.textContent = `T: ${thrPct.toFixed(0)}% | Y: ${yawPct.toFixed(0)}%`;
             if (rReadout) rReadout.textContent = `P: ${pitchPct.toFixed(0)}% | R: ${rollPct.toFixed(0)}%`;
 
             // Buttons: RB (5) = Toggle ARM/DISARM, LB (4) = EMERGENCY STOP
@@ -2187,12 +2189,11 @@
             }
             state.prevLbPressed = lbPressed;
 
-            // (Phím A & B dự phòng đã được gỡ bỏ để tránh tự động kích hoạt Arm/Disarm ngoài ý muốn)
+            // Luôn truyền giá trị cần analog thực tế xuống ESP32 (Bộ điều khiển ESC trên ESP32
+            // đã khóa cứng PWM ở 900us khi DISARMED và chỉ xuất xung 1050..2000us khi ARMED)
+            const effectiveThr = thrPct;
 
-            // Khi DISARMED: Cắt ga 0.0% an toàn tuyệt đối
-            const effectiveThr = state.armed ? thrPct : 0.0;
-
-            // Transmit Adaptive 40 Hz RC Packet to ESP32: "RC,<thr>,<roll>,<pitch>,<yaw>\n"
+            // Transmit Adaptive 40 Hz RC Packet to ESP32: "RC,2,<sessionId>,<seq>,<thr>,<roll>,<pitch>,<yaw>\n"
             const nowTime = performance.now();
             const dtRc = nowTime - (state.lastRcSendTime || 0);
             const thrChanged = Math.abs(effectiveThr - (state.lastSentThr || 0)) > 0.4;
@@ -2230,7 +2231,7 @@
             // Neu khong co tay cam vat ly -> Truyen lien tuc vi tri can ao (chuot / phim) xuong ESP32
             if (!state.gamepadConnected) {
                 const rawThr = Math.max(0, Math.min(100, (state.stickLeft.y + 1) * 50));
-                const effectiveThr = state.armed ? rawThr : 0.0;
+                const effectiveThr = rawThr;
                 const yawPct = state.stickLeft.x * 100;
                 const pitchPct = state.stickRight.y * 100;
                 const rollPct = state.stickRight.x * 100;
@@ -2631,29 +2632,19 @@
             const sentVia = [];
             const isRc = pkt.startsWith('RC,');
 
-            // Single Active Transport Arbitration (Đơn đường truyền tích cực):
-            // Đối với gói RC, ưu tiên tuyệt đối MQTT không dây. Chỉ fallback sang WebSocket nếu MQTT ngắt.
-            // Điều này triệt tiêu hoàn toàn race condition, out-of-order execution và duplicate packet.
-            if (isRc) {
-                if (state.mqttClient && state.mqttConnected) {
-                    state.mqttClient.publish(state.mqttTopicRc, pkt.trim(), { qos: 0, retain: false });
-                    sentVia.push('mqtt');
-                } else if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-                    if (!(state.ws.bufferedAmount > 4096)) {
-                        state.ws.send(pkt);
-                        sentVia.push('websocket');
-                    }
-                }
-            } else {
-                // Đối với lệnh cấu hình/chuyển chế độ (ARM, DISARM, MODE): phát song song để đảm bảo tới đích ngay
-                if (state.mqttClient && state.mqttConnected) {
-                    state.mqttClient.publish(state.mqttTopicCmd, pkt.trim(), { qos: 0, retain: false });
-                    sentVia.push('mqtt');
-                }
-                if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+            // Phát song song qua cả WebSocket trực tiếp (PC -> ESP32:81) VÀ MQTT (PC -> Broker -> ESP32).
+            // Trên ESP32 có bộ lọc trùng lặp theo (SessionID, Sequence) chuẩn RFC 1982 nên gói đến trước
+            // sẽ được thực thi tức thì (~1ms), bản sao đến sau tự động bị bỏ qua mà không gây nghẽn!
+            if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+                if (!isRc || state.ws.bufferedAmount <= 4096) {
                     state.ws.send(pkt);
                     sentVia.push('websocket');
                 }
+            }
+            if (state.mqttClient && state.mqttConnected) {
+                const topic = isRc ? state.mqttTopicRc : state.mqttTopicCmd;
+                state.mqttClient.publish(topic, pkt.trim(), { qos: 0, retain: false });
+                sentVia.push('mqtt');
             }
             if (pkt.startsWith('RC,') && sentVia.length) {
                 const now = performance.now();
@@ -2722,10 +2713,14 @@
             state.armed = true; // Kích hoạt ARMED tức thì trên Web để cho phép truyền cần ga tay cầm ngay
             state.armRequestPending = false;
             state.armRequestAt = Date.now();
+            state.armLockoutUntil = Date.now() + 1000; // Chống gói telemetry cũ (arm:0) ghi đè ngay khi vừa bấm ARM
             const selectedMode = document.getElementById('flightModeSelect')?.value || 'direct';
             const espMode = (selectedMode === 'direct') ? 'DIRECT_MANUAL' :
                             (selectedMode === 'poshold') ? 'POSHOLD' : 'ALTITUDE';
             sendHardwarePacket(`MODE,${espMode}\n`);
+            state.rcSeq = (state.rcSeq || 0) + 1;
+            const rcInit = `RC,2,${state.sessionId},${state.rcSeq},${(state.rcInput?.throttle || 0).toFixed(1)},${(state.rcInput?.roll || 0).toFixed(1)},${(state.rcInput?.pitch || 0).toFixed(1)},${(state.rcInput?.yaw || 0).toFixed(1)}\n`;
+            sendHardwarePacket(rcInit);
             sendHardwarePacket('ARM\n');
             updateArmButtonUI();
             showToast(`🟢 ĐÃ MỞ KHÓA ĐỘNG CƠ (ARMED) - Chế độ: ${selectedMode.toUpperCase()}!`);
@@ -3047,8 +3042,10 @@ Nhập URL MQTT WebSocket Broker:`, current);
                     state.hardwareLive = true;
 
                     if (data.arm !== undefined) {
-                        // Chỉ cập nhật trạng thái nếu ngoài thời gian khóa Disarm Lockout
-                        if (!state.disarmLockoutUntil || Date.now() > state.disarmLockoutUntil) {
+                        // Chỉ cập nhật trạng thái nếu ngoài thời gian khóa Arm/Disarm Lockout
+                        const inDisarmLockout = state.disarmLockoutUntil && Date.now() < state.disarmLockoutUntil;
+                        const inArmLockout = state.armLockoutUntil && Date.now() < state.armLockoutUntil && data.arm === 0;
+                        if (!inDisarmLockout && !inArmLockout) {
                             const wasArmed = state.armed;
                             const wasPending = state.armRequestPending;
                             state.armed = (data.arm === 1);

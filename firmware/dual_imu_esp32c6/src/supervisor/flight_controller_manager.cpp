@@ -105,6 +105,11 @@ void FlightControllerManager::updateRcSnapshot(const RcSnapshot& snapshot) {
     portENTER_CRITICAL(&rcMux_);
     rcSnapshot_ = snapshot;
     portEXIT_CRITICAL(&rcMux_);
+    rcThrottle_ = snapshot.throttle;
+    rcRoll_     = snapshot.roll;
+    rcPitch_    = snapshot.pitch;
+    rcYaw_      = snapshot.yaw;
+    lastRcPacketMs_ = snapshot.receivedAtMs;
 }
 
 bool FlightControllerManager::getRcSnapshotAtomic(RcSnapshot& out) const {
@@ -340,27 +345,34 @@ void FlightControllerManager::update(const FusedData& state, float deltaTimeSec)
 
     // RC TIMEOUT FAILSAFE STATE MACHINE (TIERED FAILSAFE CHO DÒNG LỆNH 50 HZ)
     if (quadMotors.isArmed()) {
-        if (!hasRc || ageMs > 1500) {
-            // Level 3: Mất tín hiệu RC quá 1500ms (~75 chu kỳ gói) -> Ngắt động cơ khẩn cấp
+        if (!hasRc) {
+            // Chưa có gói RC đầu tiên: giữ mức Idle an toàn (1050us) chờ gói RC tới
+            currentFailsafe_ = FailsafeLevel::NONE;
+            rcThrottle_ = 0.0f;
+            rcRoll_     = 0.0f;
+            rcPitch_    = 0.0f;
+            rcYaw_      = 0.0f;
+        } else if (ageMs > 3000) {
+            // Level 3: Mất tín hiệu RC quá 3000ms -> Ngắt động cơ khẩn cấp
             currentFailsafe_ = FailsafeLevel::LEVEL3_MOTOR_CUT;
             setFlightMode(FlightControlMode::EMERGENCY_DISARM);
             quadMotors.disarm();
             Serial.printf("[FAILSAFE] >>> LEVEL 3 TRIGGERED: Mat tin hieu RC (age=%u ms)! Disarm khan cap.\n", ageMs);
             return;
-        } else if (ageMs > 600) {
-            // Level 2: Mất tín hiệu quá 600ms (~30 chu kỳ gói) -> Tự động giảm độ cao hạ cánh
+        } else if (ageMs > 1200) {
+            // Level 2: Mất tín hiệu quá 1200ms -> Tự động giảm độ cao hạ cánh
             currentFailsafe_ = FailsafeLevel::LEVEL2_AUTO_DESCENT;
             rcRoll_  = 0.0f;
             rcPitch_ = 0.0f;
             rcYaw_   = 0.0f;
-        } else if (ageMs > 200) {
-            // Level 1: Mất tín hiệu quá 200ms (~10 chu kỳ gói) -> Thăng bằng góc, giữ nguyên độ cao
+        } else if (ageMs > 500) {
+            // Level 1: Mất tín hiệu quá 500ms -> Thăng bằng góc, giữ nguyên độ cao
             currentFailsafe_ = FailsafeLevel::LEVEL1_ATTITUDE_LEVEL;
             rcRoll_  = 0.0f;
             rcPitch_ = 0.0f;
             rcYaw_   = 0.0f;
         } else {
-            // Tín hiệu RC Fresh và Hợp lệ (< 200ms)
+            // Tín hiệu RC Fresh và Hợp lệ (< 500ms)
             currentFailsafe_ = FailsafeLevel::NONE;
             rcThrottle_ = snap.throttle;
             rcRoll_     = snap.roll;

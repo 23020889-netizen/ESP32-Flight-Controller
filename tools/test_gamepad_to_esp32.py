@@ -191,7 +191,7 @@ def main():
             seq = (seq + 1) & 0xFFFF
 
             # Dong goi Protocol V2: RC,2,<session_id>,<seq>,<throttle>,<roll>,<pitch>,<yaw>\n
-            packet = f"RC,2,{session_id:08X},{seq},{thr:.1f},{roll:.1f},{pitch:.1f},{yaw:.1f}\n"
+            packet = f"RC,2,{session_id},{seq},{thr:.1f},{roll:.1f},{pitch:.1f},{yaw:.1f}\n"
 
             # Publish khong retain, QoS 0 (Realt-time Low Latency)
             client.publish(TOPIC_RC, packet, qos=0, retain=False)
@@ -225,3 +225,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

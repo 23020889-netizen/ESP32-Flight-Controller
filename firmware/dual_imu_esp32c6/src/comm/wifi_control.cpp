@@ -138,7 +138,9 @@ void WifiControlManager::begin(const char* staSsid, const char* staPass,
         Serial.println("[WIFI] >>> Khoi tao mDNS thanh cong: ws://drone.local:81/ws");
     }
 
-    // 4. Cau hinh MQTT Client
+    // 4. Cau hinh MQTT Client (non-blocking timeout de khong bao gio treo WebSocket/RC)
+    mqttNetClient_.setTimeout(100);
+    mqttClient_.setSocketTimeout(1);
     mqttClient_.setServer(mqttBrokerHost_, mqttBrokerPort_);
     mqttClient_.setBufferSize(1024);
     mqttClient_.setCallback(mqttCallback);
@@ -150,12 +152,26 @@ void WifiControlManager::begin(const char* staSsid, const char* staPass,
 }
 
 void WifiControlManager::setMqttBroker(const char* host, uint16_t port) {
+    char newHost[64] = {0};
     if (host && strlen(host) > 0) {
-        strncpy(mqttBrokerHost_, host, sizeof(mqttBrokerHost_) - 1);
-        mqttBrokerHost_[sizeof(mqttBrokerHost_) - 1] = '\0';
+        strncpy(newHost, host, sizeof(newHost) - 1);
+        newHost[sizeof(newHost) - 1] = '\0';
+    } else {
+        strncpy(newHost, mqttBrokerHost_, sizeof(newHost) - 1);
     }
-    if (port > 0) mqttBrokerPort_ = port;
-    mqttClient_.disconnect();
+    uint16_t newPort = (port > 0) ? port : mqttBrokerPort_;
+
+    if (strcmp(mqttBrokerHost_, newHost) == 0 && mqttBrokerPort_ == newPort && mqttClient_.connected()) {
+        return;
+    }
+
+    strncpy(mqttBrokerHost_, newHost, sizeof(mqttBrokerHost_) - 1);
+    mqttBrokerHost_[sizeof(mqttBrokerHost_) - 1] = '\0';
+    mqttBrokerPort_ = newPort;
+
+    if (mqttClient_.connected()) {
+        mqttClient_.disconnect();
+    }
     mqttClient_.setServer(mqttBrokerHost_, mqttBrokerPort_);
     Serial.printf("[MQTT] Cap nhat dia chi Broker moi: %s:%d\n", mqttBrokerHost_, mqttBrokerPort_);
 }
@@ -163,7 +179,7 @@ void WifiControlManager::setMqttBroker(const char* host, uint16_t port) {
 void WifiControlManager::reconnectMqtt() {
     if (WiFi.status() != WL_CONNECTED && !WiFi.softAPgetStationNum()) return;
 
-    Serial.printf("[MQTT] Dang ket noi toi Broker: %s:%d...\n", mqttBrokerHost_, mqttBrokerPort_);
+    mqttNetClient_.setTimeout(100);
     String clientId = "ESP32C6_Drone_" + String((uint32_t)ESP.getEfuseMac(), HEX);
 
     if (mqttClient_.connect(clientId.c_str(), "isilab/drone/status", 1, true, "offline")) {
@@ -172,15 +188,18 @@ void WifiControlManager::reconnectMqtt() {
         mqttClient_.subscribe("isilab/drone/rc", 0);
         mqttClient_.subscribe("isilab/drone/cmd", 0);
         Serial.println("[MQTT] >>> Da dang ky topic: 'isilab/drone/rc' va 'isilab/drone/cmd'");
-    } else {
-        Serial.printf("[MQTT] Ket noi that bai, rc=%d (thu lai sau 3s)\n", mqttClient_.state());
     }
 }
 
 void WifiControlManager::handleMqtt(FlightControllerManager& manager, QuadEscController& esc) {
     uint32_t now = millis();
     if (!mqttClient_.connected()) {
-        if (now - lastMqttReconnectMs_ >= 3000) {
+        // Neu drone dang ARMED hoac WebSocket dang ket noi truc tiep, KHONG goi connect()
+        // de tranh TCP SYN bi Windows Firewall chan gay nghen luong dieu khien WebSocket!
+        if (esc.isArmed() || (clientConnected_ && wsHandshakeDone_)) {
+            return;
+        }
+        if (now - lastMqttReconnectMs_ >= 5000) {
             lastMqttReconnectMs_ = now;
             reconnectMqtt();
         }
@@ -477,17 +496,17 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
     char* p = buf;
 
     // =========================================================================
-    // 1. GIAO THUC DIEU KHIEN RC V2: "RC,2,<sessionId>,<seq>,<throttle>,<roll>,<pitch>,<yaw>"
+    // 1. GIAO THUC DIEU KHIEN RC V2 & V1:
+    //    V2: "RC,2,<sessionId>,<seq>,<throttle>,<roll>,<pitch>,<yaw>"
+    //    V1: "RC,<throttle>,<roll>,<pitch>,<yaw>"
     // =========================================================================
     if (strncmp(p, "RC,", 3) == 0 || strncmp(p, "rc,", 3) == 0) {
         p += 3;
-        uint32_t protoVer = 0;
-        if (!parseUInt32Field(p, protoVer, ',')) {
-            rcRejectFormatCount_++;
-            return;
-        }
+        skipSpaces(p);
 
-        if (protoVer == 2) {
+        // Kiem tra neu bat dau bang "2," -> Protocol V2
+        if (strncmp(p, "2,", 2) == 0) {
+            p += 2;
             uint32_t sessId = 0, seq = 0;
             float thr = 0.0f, roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
             if (!parseUInt32Field(p, sessId, ','))  { rcRejectFormatCount_++; return; }
@@ -508,48 +527,38 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
             }
 
             uint32_t now = millis();
-
-            // SINGLE ACTIVE TRANSPORT LEASE:
-            // Ưu tiên tuyệt đối kênh MQTT không dây. WebSocket chỉ đóng vai trò fallback khi MQTT mất kết nối.
-            if (source == RC_SOURCE_WEBSOCKET) {
-                if (activeTransport_ == RC_SOURCE_MQTT && (now - lastMqttRcMs_ < 600)) {
-                    // MQTT vẫn đang gửi RC đều đặn (< 600ms) -> Bỏ qua gói WebSocket để tránh race condition
-                    return;
-                }
-                activeTransport_ = RC_SOURCE_WEBSOCKET;
-            } else if (source == RC_SOURCE_MQTT) {
-                activeTransport_ = RC_SOURCE_MQTT;
+            activeTransport_ = source;
+            if (source == RC_SOURCE_MQTT) {
                 lastMqttRcMs_ = now;
             }
 
-            // SESSION MANAGEMENT:
-            // Nếu SessionID thay đổi (ví dụ người dùng Reload trang Web GCS hoặc đổi thiết bị),
-            // ESP32 reset sequence baseline an toàn về phiên mới mà không bị lock out!
+            // SESSION & SEQUENCE DEDUPLICATION (RFC 1982):
+            // Ca WebSocket va MQTT cung gui (sessionId, seq). Goi nao den truoc se duoc xu ly ngay lap tuc (0ms delay),
+            // goi trung lap den sau tren kenh kia se tu dong bi deduplicate boi isSeqNewer!
             if (sessId != activeSessionId_) {
                 activeSessionId_ = sessId;
                 lastValidRcSeq_ = seq;
                 Serial.printf("[RC_SESSION] >>> BAT DAU PHIEN MOI SessionID=0x%08X (Seq baseline: %u, Src: %s)\n",
                               sessId, seq, (source == RC_SOURCE_MQTT) ? "MQTT" : "WS");
             } else {
-                // Kiểm tra tính tăng đơn điệu của sequence theo RFC 1982
                 if (!isSeqNewer(seq, lastValidRcSeq_)) {
                     rcDropStaleCount_++;
-                    return; // Gói tin cũ đến muộn do trễ mạng hoặc gói tin lặp -> Bỏ qua
+                    return; // Goi tin trung lap giua WS/MQTT hoac goi cu den muon -> Bo qua an toan
                 }
                 lastValidRcSeq_ = seq;
             }
 
-            // Ghi gói tin hợp lệ vào Atomic Snapshot bảo vệ bằng FreeRTOS Critical Section
+            // Ghi goi tin hop le vao Atomic Snapshot bao ve bang FreeRTOS Critical Section
             RcSnapshot snap{};
-            snap.sessionId   = sessId;
-            snap.seq         = seq;
+            snap.sessionId    = sessId;
+            snap.seq          = seq;
             snap.receivedAtMs = now;
-            snap.throttle    = thr;
-            snap.roll        = roll;
-            snap.pitch       = pitch;
-            snap.yaw         = yaw;
-            snap.source      = source;
-            snap.valid       = true;
+            snap.throttle     = thr;
+            snap.roll         = roll;
+            snap.pitch        = pitch;
+            snap.yaw          = yaw;
+            snap.source       = source;
+            snap.valid        = true;
 
             manager.updateRcSnapshot(snap);
             lastRcPacketMs_ = now;
@@ -562,13 +571,12 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
                                fabsf(pitch - lastPPitch) >= 0.5f ||
                                fabsf(yaw - lastPYaw) >= 0.5f);
 
-            // In tức thì khi cần gạt di chuyển (tối đa 20 dòng/giây để không nghẽn UART),
-            // hoặc định kỳ mỗi 1000ms nếu giữ nguyên (Heartbeat)
+            // In tuc thi khi can gat di chuyen (toi da 20 dong/giay de khong nghen UART),
+            // hoac dinh ky moi 1000ms neu giu nguyen (Heartbeat)
             if ((stickMoved && (now - lastRcPrint >= 50)) || (now - lastRcPrint >= 1000)) {
                 lastRcPrint = now;
                 lastPThr = thr; lastPRoll = roll; lastPPitch = pitch; lastPYaw = yaw;
 
-                // Tính nhanh xung PWM tương ứng theo Quad-X Mixer
                 float basePulse = 1050.0f + (thr * 9.50f);
                 float dRoll  = roll * 1.8f;
                 float dPitch = pitch * 1.8f;
@@ -586,14 +594,14 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
             }
             return;
         } else {
-            // Kiểm tra fallback cho Protocol V1: RC,<thr>,<roll>,<pitch>,<yaw>
-            char* v1Ptr = buf + 3;
+            // Fallback cho Protocol V1: RC,<thr>,<roll>,<pitch>,<yaw>
+            char* v1Ptr = p;
             float v1Thr = 0.0f, v1Roll = 0.0f, v1Pitch = 0.0f, v1Yaw = 0.0f;
             if (parseFloatField(v1Ptr, v1Thr, ',') &&
                 parseFloatField(v1Ptr, v1Roll, ',') &&
                 parseFloatField(v1Ptr, v1Pitch, ',') &&
                 parseFloatField(v1Ptr, v1Yaw, '\0')) {
-                
+
                 v1Thr   = constrain(v1Thr, 0.0f, 100.0f);
                 v1Roll  = constrain(v1Roll, -100.0f, 100.0f);
                 v1Pitch = constrain(v1Pitch, -100.0f, 100.0f);
@@ -624,7 +632,6 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
                 return;
             }
 
-            // Version giao thức không tương thích
             rcRejectFormatCount_++;
             return;
         }
@@ -638,7 +645,24 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
             manager.getFlightMode() == FlightControlMode::MANUAL_CLI) {
             manager.setFlightMode(savedFlightMode_);
         }
+        // Lam moi RC snapshot timestamp ngay khi ARM de tranh Failsafe Level 3 ngat som
+        RcSnapshot snap{};
+        if (!manager.getRcSnapshotAtomic(snap)) {
+            snap.sessionId = activeSessionId_;
+            snap.seq = lastValidRcSeq_;
+            snap.throttle = 0.0f;
+            snap.roll = 0.0f;
+            snap.pitch = 0.0f;
+            snap.yaw = 0.0f;
+            snap.source = source;
+        }
+        snap.receivedAtMs = millis();
+        snap.valid = true;
+        manager.updateRcSnapshot(snap);
+        lastRcPacketMs_ = snap.receivedAtMs;
+
         esc.arm();
+        esc.feedWatchdog();
         Serial.println("[WIRELESS_CMD] >>> DA NHAN LENH ARM TUC THI! Mo khoa 4 dong co.");
         return;
     }

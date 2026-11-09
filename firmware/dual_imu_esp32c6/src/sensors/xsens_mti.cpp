@@ -125,6 +125,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
 }
 
 bool xsens_mti_init(uint8_t rx_pin, uint8_t tx_pin, uint32_t baudrate) {
+    XsensUart.setRxBufferSize(1024); // Tang bo dem UART tranh tran byte khi chuyen FreeRTOS task
     XsensUart.begin(baudrate, SERIAL_8N1, rx_pin, tx_pin);
     delay(100);
 

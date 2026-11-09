@@ -58,10 +58,10 @@ bool mpu6050_init(uint8_t sda_pin, uint8_t scl_pin, uint32_t freq) {
     writeReg(0x1C, 0x00);
     // Gyro +/- 250 deg/s
     writeReg(0x1B, 0x00);
-    // DLPF 188Hz Bandwidth (Giam do tre filter xuong chi con 1.9ms)
-    writeReg(0x1A, 0x01);
-    // Sample Rate Divider: 1000Hz / (1 + 1) = 500Hz lay mau IMU cuc nhanh
-    writeReg(0x19, 0x01);
+    // DLPF 260Hz Bandwidth (Do tre filter cuc nho: chi 0.98ms giup dap ung tuc thi)
+    writeReg(0x1A, 0x00);
+    // Sample Rate Divider: 1000Hz / (1 + 0) = 1000Hz lay mau IMU toi da
+    writeReg(0x19, 0x00);
 
     delay(20);
     is_ready = true;
@@ -117,9 +117,7 @@ bool mpu6050_read(MpuData &data) {
     if (Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)14) != 14) return false;
 
     uint8_t buf[14];
-    for (int i = 0; i < 14; i++) {
-        buf[i] = Wire.read();
-    }
+    Wire.readBytes(buf, 14);
 
     int16_t raw_ax = (int16_t)((buf[0]  << 8) | buf[1]);
     int16_t raw_ay = (int16_t)((buf[2]  << 8) | buf[3]);

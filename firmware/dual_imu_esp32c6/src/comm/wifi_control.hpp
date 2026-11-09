@@ -51,6 +51,7 @@ private:
     IPAddress  ipAddress_;
     uint32_t   lastTelemetryMs_;
     uint32_t   lastRcPacketMs_;
+    uint32_t   lastValidRcSeq_;
     uint32_t   lastWifiCheckMs_;
     uint32_t   lastMqttReconnectMs_;
     FlightControlMode savedFlightMode_;

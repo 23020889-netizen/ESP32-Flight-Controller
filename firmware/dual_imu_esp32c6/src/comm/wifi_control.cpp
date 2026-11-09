@@ -40,6 +40,7 @@ WifiControlManager::WifiControlManager()
       staConnected_(false),
       lastTelemetryMs_(0),
       lastRcPacketMs_(0),
+      lastValidRcSeq_(0),
       lastWifiCheckMs_(0),
       lastMqttReconnectMs_(0),
       savedFlightMode_(FlightControlMode::DIRECT_MANUAL),
@@ -221,8 +222,8 @@ void WifiControlManager::update(const FusedData& fusedData, FlightControllerMana
         }
     }
 
-    // Phat telemetry dinh ky 40Hz (25ms) qua MQTT & WebSocket
-    if (now - lastTelemetryMs_ >= 25) {
+    // Phat telemetry dinh ky 50Hz (20ms) qua MQTT & WebSocket giup Web 3D khong do tre
+    if (now - lastTelemetryMs_ >= 20) {
         lastTelemetryMs_ = now;
         broadcastTelemetry(fusedData, manager, esc);
     }
@@ -405,46 +406,89 @@ void WifiControlManager::handleUdpData(FlightControllerManager& manager, QuadEsc
     }
 }
 
+static bool parseStrictFloatToken(const char*& ptr, const char* end, float& outVal) {
+    while (ptr < end && (*ptr == ' ' || *ptr == '\t')) ptr++;
+    if (ptr >= end) return false;
+    char* endptr = nullptr;
+    errno = 0;
+    float v = strtof(ptr, &endptr);
+    if (endptr == ptr || endptr > end || errno == ERANGE || !isfinite(v)) {
+        return false;
+    }
+    ptr = endptr;
+    while (ptr < end && (*ptr == ' ' || *ptr == '\t')) ptr++;
+    outVal = v;
+    return true;
+}
+
 void WifiControlManager::processCommandString(const String& rawCmd, FlightControllerManager& manager, QuadEscController& esc) {
     String cmd = rawCmd;
     cmd.trim();
     if (cmd.length() == 0) return;
 
-    // 1. Lenh RC tu Tay Cam: "RC,<throttle>,<roll>,<pitch>,<yaw>" hoac "<throttle>,<roll>,<pitch>,<yaw>"
+    // 1. Lệnh RC: Hỗ trợ "RC,<seq>,<t>,<r>,<p>,<y>" hoặc "RC,<t>,<r>,<p>,<y>" (Zero-Allocation Strict Parser)
     bool isRc = cmd.startsWith("RC,") || cmd.startsWith("rc,");
-    int startIdx = isRc ? 3 : 0;
-    int c1 = cmd.indexOf(',', startIdx);
-    int c2 = (c1 != -1) ? cmd.indexOf(',', c1 + 1) : -1;
-    int c3 = (c2 != -1) ? cmd.indexOf(',', c2 + 1) : -1;
+    if (isRc) {
+        const char* str = cmd.c_str() + 3;
+        const char* end = str + strlen(str);
+        float tokens[5] = {0.0f};
+        int tokenCount = 0;
+        const char* cur = str;
 
-    if (isRc || (c1 != -1 && c2 != -1 && c3 != -1 && isdigit(cmd[0]))) {
-        if (c1 != -1 && c2 != -1 && c3 != -1) {
-            float t = cmd.substring(startIdx, c1).toFloat();
-            float r = cmd.substring(c1 + 1, c2).toFloat();
-            float p = cmd.substring(c2 + 1, c3).toFloat();
-            float y = cmd.substring(c3 + 1).toFloat();
-
-            lastRcPacketMs_ = millis();
-            esc.feedWatchdog();
-            manager.setRcChannels(t, r, p, y);
-
-            static uint32_t lastRcPrint = 0;
-            if (millis() - lastRcPrint > 1000) {
-                lastRcPrint = millis();
-                float rcT = 0.0f, rcR = 0.0f, rcP = 0.0f, rcY = 0.0f;
-                manager.getRcChannels(rcT, rcR, rcP, rcY);
-                const char* modeName = "MANUAL_CLI";
-                switch (manager.getFlightMode()) {
-                    case FlightControlMode::DIRECT_MANUAL: modeName = "DIRECT_MANUAL"; break;
-                    case FlightControlMode::ALTITUDE_HOLD: modeName = "ALT_HOLD_PID"; break;
-                    case FlightControlMode::ITSMC_POSITION_HOLD: modeName = "ITSMC_POSITION"; break;
-                    case FlightControlMode::EMERGENCY_DISARM: modeName = "EMERGENCY_DISARM"; break;
-                    case FlightControlMode::MANUAL_CLI: break;
-                }
-                Serial.printf("[RC_WIRELESS] T:%.1f R:%.1f P:%.1f Y:%.1f | ESC:%s MODE:%s\n",
-                              rcT, rcR, rcP, rcY, esc.isArmed() ? "ARMED" : "DISARMED", modeName);
+        while (cur < end && tokenCount < 5) {
+            float val = 0.0f;
+            if (!parseStrictFloatToken(cur, end, val)) break;
+            tokens[tokenCount++] = val;
+            if (cur < end && *cur == ',') {
+                cur++;
+            } else if (cur != end) {
+                tokenCount = -1; // Ký tự lạ ngoài dấu phẩy
+                break;
             }
-            return;
+        }
+
+        if (cur == end && (tokenCount == 4 || tokenCount == 5)) {
+            uint32_t seq = 0;
+            float t = 0.0f, r = 0.0f, p = 0.0f, y = 0.0f;
+            if (tokenCount == 5) {
+                seq = (uint32_t)tokens[0];
+                t = tokens[1]; r = tokens[2]; p = tokens[3]; y = tokens[4];
+            } else {
+                t = tokens[0]; r = tokens[1]; p = tokens[2]; y = tokens[3];
+            }
+
+            // Kiểm tra miền giá trị chặt chẽ (Range & Sanity Validation)
+            if (t >= 0.0f && t <= 100.0f &&
+                fabsf(r) <= 100.0f && fabsf(p) <= 100.0f && fabsf(y) <= 100.0f) {
+                
+                // Deduplication / Sequence Check: Nếu có seq, loại bỏ gói tin cũ/trùng
+                if (seq > 0 && seq <= lastValidRcSeq_) {
+                    return; // Gói tin cũ đến muộn do trễ mạng -> Bỏ qua
+                }
+                if (seq > 0) lastValidRcSeq_ = seq;
+
+                lastRcPacketMs_ = millis();
+                // Phân định tầng: Chỉ cập nhật kênh RC cho Flight Manager. Watchdog được feed bởi FlightTask.
+                manager.setRcChannels(t, r, p, y);
+
+                static uint32_t lastRcPrint = 0;
+                if (millis() - lastRcPrint > 1000) {
+                    lastRcPrint = millis();
+                    float rcT = 0.0f, rcR = 0.0f, rcP = 0.0f, rcY = 0.0f;
+                    manager.getRcChannels(rcT, rcR, rcP, rcY);
+                    const char* modeName = "MANUAL_CLI";
+                    switch (manager.getFlightMode()) {
+                        case FlightControlMode::DIRECT_MANUAL: modeName = "DIRECT_MANUAL"; break;
+                        case FlightControlMode::ALTITUDE_HOLD: modeName = "ALT_HOLD_PID"; break;
+                        case FlightControlMode::ITSMC_POSITION_HOLD: modeName = "ITSMC_POSITION"; break;
+                        case FlightControlMode::EMERGENCY_DISARM: modeName = "EMERGENCY_DISARM"; break;
+                        case FlightControlMode::MANUAL_CLI: break;
+                    }
+                    Serial.printf("[RC_WIRELESS] Seq:%u T:%.1f R:%.1f P:%.1f Y:%.1f | ESC:%s MODE:%s\n",
+                                  seq, rcT, rcR, rcP, rcY, esc.isArmed() ? "ARMED" : "DISARMED", modeName);
+                }
+                return;
+            }
         }
     }
 

@@ -841,6 +841,7 @@
             gamepadMapping: '',
             gamepadAxes: [],
             rcInput: { throttle: 0, roll: 0, pitch: 0, yaw: 0 },
+            rcSeq: 0,
             lastRcTxLogMs: 0,
 
             // Current Drone Attitude (degrees) & Angular Rates (deg/s)
@@ -2205,7 +2206,8 @@
                 state.lastSentPitch = pitchPct;
                 state.lastSentYaw = yawPct;
 
-                const rcPacket = `RC,${effectiveThr.toFixed(1)},${rollPct.toFixed(1)},${pitchPct.toFixed(1)},${yawPct.toFixed(1)}\n`;
+                state.rcSeq = (state.rcSeq || 0) + 1;
+                const rcPacket = `RC,${state.rcSeq},${effectiveThr.toFixed(1)},${rollPct.toFixed(1)},${pitchPct.toFixed(1)},${yawPct.toFixed(1)}\n`;
                 sendHardwarePacket(rcPacket);
             }
 
@@ -2247,7 +2249,8 @@
                     state.lastSentPitch = pitchPct;
                     state.lastSentYaw = yawPct;
 
-                    const rcPacket = `RC,${effectiveThr.toFixed(1)},${rollPct.toFixed(1)},${pitchPct.toFixed(1)},${yawPct.toFixed(1)}\n`;
+                    state.rcSeq = (state.rcSeq || 0) + 1;
+                    const rcPacket = `RC,${state.rcSeq},${effectiveThr.toFixed(1)},${rollPct.toFixed(1)},${pitchPct.toFixed(1)},${yawPct.toFixed(1)}\n`;
                     sendHardwarePacket(rcPacket);
                 }
 
@@ -2625,15 +2628,28 @@
         // ==================== LOWER-LAYER ESP32 HARDWARE & NETWORK ENGINE ====================
         function sendHardwarePacket(pkt) {
             const sentVia = [];
-            // 1. Giao thức MQTT không dây (Chuẩn giao thức chính)
-            if (state.mqttClient && state.mqttConnected) {
-                const topic = pkt.startsWith('RC,') ? state.mqttTopicRc : state.mqttTopicCmd;
-                state.mqttClient.publish(topic, pkt.trim(), { qos: 0 });
-                sentVia.push('mqtt');
-            }
-            // 2. Giao thức WebSocket không dây (Dự phòng P2P)
-            if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-                if (!(state.ws.bufferedAmount > 4096 && pkt.startsWith('RC,'))) {
+            const isRc = pkt.startsWith('RC,');
+
+            // Single Active Transport Arbitration (Đơn đường truyền tích cực):
+            // Đối với gói RC, ưu tiên tuyệt đối MQTT không dây. Chỉ fallback sang WebSocket nếu MQTT ngắt.
+            // Điều này triệt tiêu hoàn toàn race condition, out-of-order execution và duplicate packet.
+            if (isRc) {
+                if (state.mqttClient && state.mqttConnected) {
+                    state.mqttClient.publish(state.mqttTopicRc, pkt.trim(), { qos: 0 });
+                    sentVia.push('mqtt');
+                } else if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+                    if (!(state.ws.bufferedAmount > 4096)) {
+                        state.ws.send(pkt);
+                        sentVia.push('websocket');
+                    }
+                }
+            } else {
+                // Đối với lệnh cấu hình/chuyển chế độ (ARM, DISARM, MODE): phát song song để đảm bảo tới đích ngay
+                if (state.mqttClient && state.mqttConnected) {
+                    state.mqttClient.publish(state.mqttTopicCmd, pkt.trim(), { qos: 0 });
+                    sentVia.push('mqtt');
+                }
+                if (state.ws && state.ws.readyState === WebSocket.OPEN) {
                     state.ws.send(pkt);
                     sentVia.push('websocket');
                 }

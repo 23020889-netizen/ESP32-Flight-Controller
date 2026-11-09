@@ -57,12 +57,12 @@ void flightControlTask(void *pvParameters) {
 }
 
 // ============================================================================
-// TASK 2: NETWORK & TELEMETRY COMMUNICATION (Low Priority, 40 Hz - 25ms Period)
+// TASK 2: NETWORK & TELEMETRY COMMUNICATION (Low Priority, 50 Hz - 20ms Period)
 // Chạy ở mức ưu tiên thấp (Priority 1): Không bao giờ làm trễ vòng lặp bay
 // ============================================================================
 void commTelemetryTask(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(25); // 40 Hz
+    const TickType_t xFrequency = pdMS_TO_TICKS(20); // 50 Hz mượt mà, phản hồi góc tức thời
 
     for (;;) {
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
@@ -82,7 +82,7 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
     Serial.println("\n[SYSTEM] ESP32-C6 MULTI-TASK REAL-TIME FLIGHT CONTROLLER");
-    Serial.printf("[BUILD] V2.5-ANALOG-MQTT-DELIMITER (Compiled: %s %s)\n", __DATE__, __TIME__);
+    Serial.printf("[BUILD] V2.6-FAST-IMU-EKF-STRICT-RC (Compiled: %s %s)\n", __DATE__, __TIME__);
 
     // 1. Initialize MPU-6050 via Fast I2C (400 kHz) and calibrate Zero-Bias
     if (mpu6050_init(MPU_SDA_PIN, MPU_SCL_PIN, 400000)) {

@@ -213,33 +213,22 @@ void PX4_EKF::update(const MpuData &mpu, const XsensData &xsens, FusedData &fuse
     normalizeQuaternion();
 
     // ========================================================================
-    // BƯỚC 3: BỘ LỌC LÀM MỊN ĐẦU RA (SMOOTHING FILTER) - TRIỆT TIÊU NHIỄU RUNG ĐỘNG CƠ
+    // BƯỚC 3: TRÍCH XUẤT GÓC EULER TỪ TRẠNG THÁI QUATERNION EKF (ZERO-LAG ESTIMATOR)
     // ========================================================================
-    // Luon luon lay Euler tu quaternion state_q (duoc tich phan lien tuc 200Hz boi Gyroscope sieu nhay)
-    float target_r, target_p, target_y;
-    quaternionToEuler(target_r, target_p, target_y);
+    // Lấy góc trực tiếp từ Quaternion state_q được EKF cập nhật liên tục ở 200Hz
+    float ekf_r, ekf_p, ekf_y;
+    quaternionToEuler(ekf_r, ekf_p, ekf_y);
 
-    // Dung hop goc Euler tu ca 2 cam bien: Xsens 85% (tin cay cao) + MPU 15% (du phong)
-    if (xsens_alive && xsens.has_orientation && mpu.ready) {
-        target_r = 0.85f * xsens.roll  + 0.15f * mpu.roll;
-        target_p = 0.85f * xsens.pitch + 0.15f * mpu.pitch;
-        target_y = 0.85f * xsens.yaw   + 0.15f * mpu.yaw;
-    } else if (xsens_alive && xsens.has_orientation) {
-        target_r = xsens.roll;
-        target_p = xsens.pitch;
-        target_y = xsens.yaw;
-    } else if (mpu.ready) {
-        target_r = mpu.roll;
-        target_p = mpu.pitch;
-        target_y = mpu.yaw;
-    }
+    // Bộ lọc thích nghi siêu nhạy (Adaptive Fast Tracking):
+    // Khi có chuyển động quay (Gyro > 12 deg/s): alpha = 0.0 (đáp ứng 0ms tức thời, không trễ pha)
+    // Khi tĩnh trên bàn test: alpha = 0.08 (khử rung vi cơ học mà không gây trễ)
+    float gyroMag = sqrtf(gx_fused * gx_fused + gy_fused * gy_fused + gz_fused * gz_fused);
+    const float lpf_alpha = (gyroMag > 12.0f) ? 0.0f : 0.08f;
 
-    // He so lam min alpha = 0.35 giup dap ung goc cuc nhay o 200Hz, khong do tre
-    const float lpf_alpha = 0.35f;
-    smooth_roll  = lpf_alpha * smooth_roll  + (1.0f - lpf_alpha) * target_r;
-    smooth_pitch = lpf_alpha * smooth_pitch + (1.0f - lpf_alpha) * target_p;
+    smooth_roll  = lpf_alpha * smooth_roll  + (1.0f - lpf_alpha) * ekf_r;
+    smooth_pitch = lpf_alpha * smooth_pitch + (1.0f - lpf_alpha) * ekf_p;
 
-    float dy = target_y - smooth_yaw;
+    float dy = ekf_y - smooth_yaw;
     while (dy > 180.0f)  dy -= 360.0f;
     while (dy < -180.0f) dy += 360.0f;
     smooth_yaw += (1.0f - lpf_alpha) * dy;

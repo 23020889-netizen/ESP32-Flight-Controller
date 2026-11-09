@@ -84,7 +84,7 @@ def normalize_thumb(val, deadzone=4500):
 
 
 # =============================================================================
-# 2. TỰ ĐỘNG DÒ CỔNG COM CỦA ESP32
+# 2. TỰ ĐỘNG DÒ CỔNG COM CỦA ESP32 (LOẠI BỎ COM BLUETOOTH ẢO)
 # =============================================================================
 def find_esp32_serial_port():
     ports = list(serial.tools.list_ports.comports())
@@ -101,11 +101,9 @@ def find_esp32_serial_port():
         hwid_lower = p.hwid.lower()
         desc_lower = p.description.lower()
 
-        # Bo qua cac cong Bluetooth ao cua Windows (BTHENUM / Bluetooth link)
         if "bthenum" in hwid_lower or "bluetooth" in desc_lower:
             continue
 
-        # Uu tien so 1: Chip Espressif ESP32 (VID 303A) hoac CP210x / CH340
         if "303a" in hwid_lower or "cp210" in desc_lower or "ch340" in desc_lower or "esp32" in desc_lower:
             espressif_port = p.device
         elif "usb" in hwid_lower or "usb" in desc_lower:
@@ -138,10 +136,9 @@ def main():
         ser = serial.Serial(port_name, 115200, timeout=0.05)
     except Exception as e:
         print(f"\n[LOI MO CONG {port_name}]: {e}")
-        print("-> Hay dong Serial Monitor trong Arduino IDE hoac truyen ten cong: python tools/xbox_control.py COMx")
+        print("-> Hay dong Serial Monitor trong Arduino IDE hoac truyen ten cong: python tools/xbox_control.py COM32")
         sys.exit(1)
 
-    # Luồng đọc phản hồi từ ESP32 in ra màn hình
     stop_thread = False
 
     def serial_reader():
@@ -179,7 +176,7 @@ def main():
     is_armed = False
     safety_60_pct = True
     mixer_mode = False
-    selected_target = "all"  # "m1", "m2", "m3", "m4", "all"
+    selected_target = "all"
     base_throttle = 0.0
     prev_buttons = 0
     was_connected = False
@@ -189,7 +186,6 @@ def main():
     try:
         while True:
             state = XINPUT_STATE()
-            # Tìm tay cầm ở slot 0..3
             connected_slot = -1
             for slot in range(4):
                 if xinput.XInputGetState(slot, ctypes.byref(state)) == 0:
@@ -212,7 +208,7 @@ def main():
 
             gp = state.Gamepad
             btns = gp.wButtons
-            pressed = btns & (~prev_buttons)  # Phát hiện sườn lên khi vừa bấm nút
+            pressed = btns & (~prev_buttons)
 
             # 1. Nút [B] hoặc [Back]: DỪNG KHẨN CẤP (DISARM)
             if pressed & (XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_BACK):
@@ -240,7 +236,7 @@ def main():
                 send_cmd("limit")
                 print(f"\n[XBOX] [NUT X] >>> Tran ga toi da: {'60% (An toan)' if safety_60_pct else '100% (Toan dai)'}")
 
-            # 4. Nút [Start]: Bật/Tắt chế độ Quad-X Mixer (Nghiêng Roll/Pitch/Yaw bằng cần phải)
+            # 4. Nút [Start]: Bật/Tắt chế độ Quad-X Mixer
             if pressed & XINPUT_GAMEPAD_START:
                 mixer_mode = not mixer_mode
                 print(f"\n[XBOX] [START] >>> Che do dieu khien: {'QUAD-X MIXER (Throttle + Roll/Pitch/Yaw)' if mixer_mode else 'TEST MOTOR CONG DONG LOAT / DON LE'}")
@@ -275,7 +271,6 @@ def main():
             if is_armed:
                 max_cap = 60.0 if safety_60_pct else 100.0
 
-                # Nút RB / LB: Tăng giảm ga giữ nền (+5% / -5%)
                 if pressed & XINPUT_GAMEPAD_RIGHT_SHOULDER:
                     base_throttle = min(max_cap, base_throttle + 5.0)
                     print(f"\n[XBOX] [RB] Ga giu nen: {base_throttle:.1f}%")
@@ -283,7 +278,6 @@ def main():
                     base_throttle = max(0.0, base_throttle - 5.0)
                     print(f"\n[XBOX] [LB] Ga giu nen: {base_throttle:.1f}%")
 
-                # Đọc cò phải RT (0.0 -> 1.0) và cần trái đẩy lên LY (0.0 -> 1.0)
                 rt_norm = gp.bRightTrigger / 255.0 if gp.bRightTrigger > 5 else 0.0
                 ly_norm = max(0.0, normalize_thumb(gp.sThumbLY))
                 stick_thr = max(rt_norm, ly_norm)
@@ -292,15 +286,13 @@ def main():
 
                 now = time.time()
                 if mixer_mode:
-                    # Trộn Quad-X: Cần phải (RX=Roll, RY=Pitch), Cần trái ngang (LX=Yaw)
-                    roll  = normalize_thumb(gp.sThumbRX) * 15.0   # +-15%
-                    pitch = normalize_thumb(gp.sThumbRY) * 15.0   # +-15%
-                    yaw   = normalize_thumb(gp.sThumbLX) * 10.0   # +-10%
+                    roll  = normalize_thumb(gp.sThumbRX) * 15.0
+                    pitch = normalize_thumb(gp.sThumbRY) * 15.0
+                    yaw   = normalize_thumb(gp.sThumbLX) * 10.0
 
                     if total_thr < 2.0:
                         m1 = m2 = m3 = m4 = 0.0
                     else:
-                        # Quad-X chuẩn PX4: M1(FR-CCW), M2(RL-CCW), M3(FL-CW), M4(RR-CW)
                         m1 = max(0.0, min(max_cap, total_thr - roll + pitch - yaw))
                         m2 = max(0.0, min(max_cap, total_thr + roll - pitch - yaw))
                         m3 = max(0.0, min(max_cap, total_thr + roll + pitch + yaw))
@@ -329,4 +321,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

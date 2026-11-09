@@ -22,15 +22,19 @@
 #define ESC_PX4_FREQ_HZ          400      // 400 Hz: Chuẩn PX4 Multirotor (Chu kỳ 2500 µs)
 #define ESC_RESOLUTION_BITS      14       // Độ phân giải phần cứng 14-bit (16384 nấc, bước nhảy siêu mịn 0.15 µs)
 
-// CHUẨN PX4: PWM_DISARMED = 900 µs (Chống triệt để lỗi kêu bíp bíp liên tục khi cắm nguồn)
-#define ESC_PULSE_DISARM_US      900      // Xung an toàn tuyệt đối khi Disarm (900 µs chuẩn PX4)
-#define ESC_PULSE_MIN_US         1000     // Xung ga tối thiểu (1000 µs = 0.0% Throttle)
-#define ESC_PULSE_MAX_US         2000     // Xung ga tối đa (2000 µs = 100.0% Throttle)
-#define ESC_PULSE_IDLE_US        1050     // Xung ga quay chậm không tải sau khi Arm (Idle Spin 1050 µs ~ 5%)
+// CẤU HÌNH DẢI XUNG ESC THEO PHẦN CỨNG THỰC TẾ CỦA NGƯỜI DÙNG:
+// - Motor 1, 2, 4 (ESC Vàng 30A): Min/Disarm = 1000 µs, Max = 2000 µs
+// - Motor 3 (GPIO 5 - ESC Đen 40A): Min/Disarm = 850 µs, Max = 1850 µs (Bù lệch -150 µs để không kêu bíp và đồng tốc)
+#define ESC_PULSE_DISARM_US      1000     // Xung khóa an toàn mặc định cho ESC Vàng (1000 µs)
+#define ESC_PULSE_MIN_US         1000     // Xung ga tối thiểu chuẩn (1000 µs = 0.0% Throttle)
+#define ESC_PULSE_MAX_US         2000     // Xung ga tối đa chuẩn (2000 µs = 100.0% Throttle)
+#define ESC_M3_PULSE_MIN_US      850      // Xung ga tối thiểu riêng cho Motor 3 - ESC Đen 40A (850 µs = 0.0% Throttle)
+#define ESC_M3_PULSE_MAX_US      1850     // Xung ga tối đa riêng cho Motor 3 - ESC Đen 40A (1850 µs = 100.0% Throttle)
+#define ESC_PULSE_IDLE_US        1050     // Xung ga quay chậm không tải (Idle Spin ~ 5%)
 
-#define ESC_ARMING_TIME_MS       2000     // Thời gian giữ 1000µs để ESC bíp nhận lệnh mở khóa (2s)
-#define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: Tự động ngắt ga về 900µs nếu mất lệnh điều khiển quá 3s
-#define ESC_SLEW_RATE_US_PER_SEC 1500     // Tốc độ tăng giảm ga an toàn (Soft Ramp): 1500 µs/s
+#define ESC_ARMING_TIME_MS       500      // Thời gian đồng bộ mở khóa ESC (0.5s)
+#define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: Tự động ngắt ga về 0% nếu mất lệnh điều khiển quá 3s
+#define ESC_SLEW_RATE_US_PER_SEC 2500     // Tốc độ tăng giảm ga an toàn (Soft Ramp): 2500 µs/s
 
 // ============================================================================
 // 2. ENUMS
@@ -60,6 +64,11 @@ public:
     bool init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz,
               uint16_t min_us = ESC_PULSE_MIN_US, uint16_t max_us = ESC_PULSE_MAX_US);
 
+    // Cấu hình lại dải xung Min/Max riêng cho ESC
+    void setPulseRange(uint16_t min_us, uint16_t max_us);
+    uint16_t getMinPulseUs() const { return _min_us; }
+    uint16_t getMaxPulseUs() const { return _max_us; }
+
     // Cập nhật lại tần số xung PWM phần cứng
     bool setFrequency(uint32_t freq_hz);
 
@@ -75,7 +84,7 @@ public:
     // Cập nhật tốc độ tăng ga từ từ (Soft Ramp Limiter)
     void updateRamp(float dt);
 
-    // Dừng khẩn cấp động cơ (xuất mốc Min riêng của ESC đó ngay lập tức)
+    // Dừng khẩn cấp động cơ (xuất 900 µs ngay lập tức)
     void stop();
 
     // Getters
@@ -85,8 +94,6 @@ public:
     const char*    getDirectionStr() const   { return (_direction == MOTOR_DIR_CCW) ? "CCW" : "CW"; }
     uint16_t       getCurrentPulseUs() const { return _current_us; }
     uint16_t       getTargetPulseUs() const  { return _target_us; }
-    uint16_t       getMinPulseUs() const     { return _min_us; }
-    uint16_t       getMaxPulseUs() const     { return _max_us; }
     float          getThrottlePct() const    { return _throttle_pct; }
     bool           isAttached() const        { return _attached; }
 

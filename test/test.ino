@@ -61,6 +61,7 @@ static SelectionMode activeTarget = SELECT_ALL;
 static bool isCalibrating    = false;
 static bool isArmed          = false;
 static bool safetyLimit60Pct = true;
+static uint32_t lastTelemetryMs = 0;
 
 // ============================================================================
 // 3. TẦNG ĐIỀU KHIỂN XUNG PWM (TƯƠNG THÍCH ESP32 CORE 2.x & 3.x)
@@ -274,7 +275,31 @@ void processCommand(String cmd) {
         return;
     }
 
-    // 2. Lệnh gói nhanh 4 kênh từ script Xbox trên PC: "x <m1%> <m2%> <m3%> <m4%>"
+    // 2. Lệnh gói tay cầm dạng <Throttle,Roll,Pitch,Yaw,Arm> (1000..2000us)
+    if (cmd.startsWith("<") && cmd.endsWith(">")) {
+        String inner = cmd.substring(1, cmd.length() - 1);
+        int t = 1000, r = 0, p = 0, y = 0, arm = 0;
+        if (sscanf(inner.c_str(), "%d,%d,%d,%d,%d", &t, &r, &p, &y, &arm) == 5) {
+            if (!isCalibrating) {
+                isArmed = (arm == 1);
+                if (!isArmed || t <= 1040) {
+                    stopAllMotorsToMin();
+                } else {
+                    float m1Pct = (float)(constrain(t - p - r - y, 1000, 2000) - 1000) * 0.1f;
+                    float m2Pct = (float)(constrain(t + p + r - y, 1000, 2000) - 1000) * 0.1f;
+                    float m3Pct = (float)(constrain(t + p - r + y, 1000, 2000) - 1000) * 0.1f;
+                    float m4Pct = (float)(constrain(t - p + r + y, 1000, 2000) - 1000) * 0.1f;
+                    writeMotorPct(0, m1Pct);
+                    writeMotorPct(1, m2Pct);
+                    writeMotorPct(2, m3Pct);
+                    writeMotorPct(3, m4Pct);
+                }
+            }
+            return;
+        }
+    }
+
+    // 3. Lệnh gói nhanh 4 kênh từ script Xbox trên PC: "x <m1%> <m2%> <m3%> <m4%>"
     if (cmd.startsWith("x ") || cmd.startsWith("X ")) {
         float p1 = 0, p2 = 0, p3 = 0, p4 = 0;
         if (sscanf(cmd.c_str() + 2, "%f %f %f %f", &p1, &p2, &p3, &p4) == 4) {

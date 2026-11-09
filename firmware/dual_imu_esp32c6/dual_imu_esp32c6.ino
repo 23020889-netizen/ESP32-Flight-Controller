@@ -1,13 +1,4 @@
 #include <Arduino.h>
-<<<<<<< HEAD
-#include "src/sensors/mpu6050.h"
-#include "src/sensors/xsens_mti.h"
-#include "src/estimation/px4_ekf.h"
-#include "src/actuators/esc_pwm.h"
-#include "src/supervisor/flight_controller_manager.hpp"
-#include "src/supervisor/serial_telemetry_reporter.hpp"
-#include "src/supervisor/serial_command_interpreter.hpp"
-=======
 #include "mpu6050.h"
 #include "xsens_mti.h"
 #include "px4_ekf.h"
@@ -15,17 +6,18 @@
 #include "px4_pid.h"
 #include "esc_pwm.h"
 #include "telemetry_wifi.h"
->>>>>>> ae916b5 ( update base)
 
-// Hardware Pin Configuration (ESP32-C6)
+// ============================================================================
+// 1. HARDWARE PIN CONFIGURATION (ESP32-C6)
+// ============================================================================
+// Cảm biến IMU
 #define MPU_SDA_PIN     14
 #define MPU_SCL_PIN     15
+
 #define XSENS_RX_PIN    2
 #define XSENS_TX_PIN    3
 #define XSENS_BAUDRATE  115200
 
-<<<<<<< HEAD
-=======
 // Động cơ Quadcopter chuẩn PX4 (Đã định nghĩa trong esc_pwm.h):
 // Motor 1: GPIO 7 (Front-Right, CCW)
 // Motor 2: GPIO 6 (Rear-Left,   CCW)
@@ -35,16 +27,12 @@
 // ============================================================================
 // 2. GLOBAL MODULE OBJECTS & DATA HOLDERS
 // ============================================================================
->>>>>>> ae916b5 ( update base)
 MpuData   mpuData   = {0};
 XsensData xsensData = {0};
 FusedData fusedData = {0};
-PX4_EKF   ekf;
 
-static uint32_t previousLoopMicros = 0;
+PX4_EKF ekf;
 
-<<<<<<< HEAD
-=======
 // Chu kỳ vòng lặp PID và Serial Telemetry
 uint32_t lastPidUs = 0;
 const uint32_t PID_INTERVAL_US = 5000; // 200 Hz (5ms) chu kỳ chuẩn PX4
@@ -102,33 +90,115 @@ void printTelemetry() {
 }
 
 // ============================================================================
-// 4. UNIFIED COMMAND ENGINE (HỖ TRỢ SERIAL CLI + WIFI UDP + WEBSOCKET 3D MONITOR)
+// 4. UNIFIED COMMAND ENGINE (HỖ TRỢ SERIAL CLI + XBOX PC + WIFI UDP + WEBSOCKET 3D)
 // ============================================================================
+static int activeTestMotor = 0; // 0 = ALL 4 MOTORS, 1..4 = Motor riêng lẻ
+static bool safetyLimit60Pct = false;
+
 void executeCommand(String cmd, const char* sourceTag) {
     cmd.trim();
     if (cmd.length() == 0) return;
 
     char logBuf[128];
 
-    if (cmd.equalsIgnoreCase("arm")) {
-        quadMotors.arm();
+    // Hỗ trợ gói tin tay cầm dạng <Throttle,Roll,Pitch,Yaw,Arm> (1000..2000us)
+    if (cmd.startsWith("<") && cmd.endsWith(">")) {
+        String inner = cmd.substring(1, cmd.length() - 1);
+        int t = 1000, r = 0, p = 0, y = 0, arm = 0;
+        if (sscanf(inner.c_str(), "%d,%d,%d,%d,%d", &t, &r, &p, &y, &arm) == 5) {
+            if (arm == 0 || t <= 1040) {
+                quadMotors.disarm();
+                px4Controller.setTargetThrottle(0.0f);
+            } else {
+                if (quadMotors.getState() != ESC_STATE_ARMED) {
+                    quadMotors.arm();
+                }
+                px4Controller.setTargetThrottle(0.0f); // Bypass PID khi chạy trực tiếp Quad-X Mixer từ tay cầm
+                int m1 = constrain(t - p - r - y, 1000, 2000);
+                int m2 = constrain(t + p + r - y, 1000, 2000);
+                int m3 = constrain(t + p - r + y, 1000, 2000);
+                int m4 = constrain(t - p + r + y, 1000, 2000);
+                quadMotors.setMotorThrottleUs(1, (uint16_t)m1);
+                quadMotors.setMotorThrottleUs(2, (uint16_t)m2);
+                quadMotors.setMotorThrottleUs(3, (uint16_t)m3);
+                quadMotors.setMotorThrottleUs(4, (uint16_t)m4);
+            }
+            return;
+        }
+    }
+
+    // Hỗ trợ gói tin nhanh 4 kênh từ script Xbox trên PC & Web 3D: "x <m1%> <m2%> <m3%> <m4%>"
+    if (cmd.startsWith("x ") || cmd.startsWith("X ")) {
+        float p1 = 0, p2 = 0, p3 = 0, p4 = 0;
+        if (sscanf(cmd.c_str() + 2, "%f %f %f %f", &p1, &p2, &p3, &p4) == 4) {
+            if (quadMotors.getState() != ESC_STATE_ARMED) {
+                quadMotors.arm();
+            }
+            px4Controller.setTargetThrottle(0.0f);
+            float maxCap = safetyLimit60Pct ? 60.0f : 100.0f;
+            if (p1 > maxCap) p1 = maxCap;
+            if (p2 > maxCap) p2 = maxCap;
+            if (p3 > maxCap) p3 = maxCap;
+            if (p4 > maxCap) p4 = maxCap;
+            quadMotors.setMotorThrottlePct(1, p1);
+            quadMotors.setMotorThrottlePct(2, p2);
+            quadMotors.setMotorThrottlePct(3, p3);
+            quadMotors.setMotorThrottlePct(4, p4);
+            return;
+        }
+    }
+
+    if (cmd.equalsIgnoreCase("arm") || cmd.equalsIgnoreCase("l") || cmd.equalsIgnoreCase("cal_min") || cmd.equalsIgnoreCase("calib_finish") || cmd.equalsIgnoreCase("calib_done")) {
+        if (quadMotors.getState() == ESC_STATE_CALIBRATION) {
+            quadMotors.finishCalibration();
+        } else {
+            quadMotors.arm();
+        }
         px4Controller.reset();
         // KHÓA HƯỚNG YAW HIỆN TẠI (Chống lệch góc trên bàn thử nghiệm làm tắt động cơ M0/M1)
         px4Controller.lockCurrentHeading(fusedData.yaw);
         snprintf(logBuf, sizeof(logBuf), "[%s] Quad Armed | Heading Locked: %.1f deg", sourceTag, fusedData.yaw);
         telemetry_wifi_broadcast_msg(logBuf);
-        Serial.printf("[%s] >>> DA ARM HOAN TAT! Khoa huong Yaw hien tai: %.1f° lam moc Setpoint.\n", sourceTag, fusedData.yaw);
-    } else if (cmd.equalsIgnoreCase("disarm") || cmd.equalsIgnoreCase("stop") || cmd.equalsIgnoreCase("kill")) {
+        Serial.printf("[%s] >>> DA ARM HOAN TAT! (M1,2,4=1000us | M3=850us) | Khoa Yaw=%.1f°\n", sourceTag, fusedData.yaw);
+    } else if (cmd.equalsIgnoreCase("disarm") || cmd.equalsIgnoreCase("stop") || cmd.equalsIgnoreCase("kill") || cmd.equalsIgnoreCase("s")) {
         quadMotors.disarm();
         px4Controller.reset();
         px4Controller.setTargetThrottle(0.0f);
         snprintf(logBuf, sizeof(logBuf), "[%s] Quad Disarmed & Motors Safe", sourceTag);
         telemetry_wifi_broadcast_msg(logBuf);
+    } else if (cmd.equalsIgnoreCase("h") || cmd.equalsIgnoreCase("cal_max") || cmd.equalsIgnoreCase("calib_start") || cmd.equalsIgnoreCase("calib")) {
+        quadMotors.startCalibration();
+    } else if (cmd.equalsIgnoreCase("limit")) {
+        safetyLimit60Pct = !safetyLimit60Pct;
+        Serial.printf("[%s] [LIMIT] Gioi han ga toi da: %s\n", sourceTag, safetyLimit60Pct ? "60% (An toan)" : "100% (Toan dai)");
+    } else if (cmd.equalsIgnoreCase("all")) {
+        activeTestMotor = 0;
+        Serial.printf("[%s] [SELECT] Da chon CA 4 DONG CO (ALL).\n", sourceTag);
+    } else if (cmd.equalsIgnoreCase("m1") || cmd.equalsIgnoreCase("m2") || cmd.equalsIgnoreCase("m3") || cmd.equalsIgnoreCase("m4")) {
+        activeTestMotor = cmd.substring(1).toInt();
+        px4Controller.setTargetThrottle(0.0f);
+        for (int i = 1; i <= ESC_NUM_MOTORS; i++) {
+            quadMotors.setMotorThrottlePct(i, 0.0f);
+        }
+        Serial.printf("[%s] [SELECT] Da chon MOTOR %d.\n", sourceTag, activeTestMotor);
     } else if (cmd.startsWith("throttle ") || cmd.startsWith("THROTTLE ") || cmd.startsWith("set ") || cmd.startsWith("SET ")) {
         int idx = cmd.indexOf(' ');
         float pct = cmd.substring(idx + 1).toFloat();
-        px4Controller.setTargetThrottle(pct);
-        Serial.printf("[%s] Dat muc ga tong the PX4: %.1f%%\n", sourceTag, pct);
+        if (safetyLimit60Pct && pct > 60.0f) pct = 60.0f;
+        if (activeTestMotor >= 1 && activeTestMotor <= 4) {
+            if (quadMotors.getState() != ESC_STATE_ARMED) quadMotors.arm();
+            px4Controller.setTargetThrottle(0.0f);
+            for (int i = 1; i <= ESC_NUM_MOTORS; i++) {
+                quadMotors.setMotorThrottlePct(i, (i == activeTestMotor) ? pct : 0.0f);
+            }
+            Serial.printf("[%s] Dat ga Motor %d: %.1f%%\n", sourceTag, activeTestMotor, pct);
+        } else {
+            px4Controller.setTargetThrottle(pct);
+            if (pct < 5.0f && quadMotors.getState() == ESC_STATE_ARMED) {
+                quadMotors.setAllThrottlePct(pct);
+            }
+            Serial.printf("[%s] Dat muc ga tong the PX4: %.1f%%\n", sourceTag, pct);
+        }
     } else if (cmd.equalsIgnoreCase("invert pitch") || cmd.equalsIgnoreCase("inv pitch")) {
         px4Controller.togglePitchInversion();
         Serial.printf("[%s] DAO CHIEU TRUC PITCH: Invert = %s\n", sourceTag, px4Controller.isPitchInverted() ? "TRUE (NGUOC)" : "FALSE (THUAN)");
@@ -188,9 +258,17 @@ void executeCommand(String cmd, const char* sourceTag) {
     } else if (cmd.equalsIgnoreCase("m stop") || cmd.equalsIgnoreCase("stop all") || cmd.equalsIgnoreCase("test stop") || cmd.equalsIgnoreCase("stop motors")) {
         px4Controller.setTargetThrottle(0.0f);
         for (int i = 1; i <= ESC_NUM_MOTORS; i++) {
-            quadMotors.setMotorThrottleUs(i, ESC_PULSE_MIN_US);
+            quadMotors.setMotorThrottlePct(i, 0.0f);
         }
-        Serial.printf("[%s] [MANUAL] Da dung tat ca 4 dong co ve 0%% (1000 us).\n", sourceTag);
+        Serial.printf("[%s] [MANUAL] Da dung tat ca 4 dong co ve 0%% (M1,2,4=1000us | M3=850us).\n", sourceTag);
+    } else if (cmd.startsWith("min") || cmd.startsWith("MIN")) {
+        int mId = cmd.substring(3, 4).toInt();
+        int newMin = cmd.substring(5).toInt();
+        if (mId >= 1 && mId <= 4 && newMin >= 750 && newMin <= 1200) {
+            quadMotors.getMotor(mId - 1).setPulseRange((uint16_t)newMin, (uint16_t)(newMin + 1000));
+            quadMotors.getMotor(mId - 1).writePulseUs((uint16_t)newMin);
+            Serial.printf("[%s] [CONFIG] Motor %d: Min = %d us, Max = %d us\n", sourceTag, mId, newMin, newMin + 1000);
+        }
     } else if (cmd.equalsIgnoreCase("manual off") || cmd.equalsIgnoreCase("pid mode") || cmd.equalsIgnoreCase("auto")) {
         px4Controller.setTargetThrottle(0.0f);
         Serial.printf("[%s] [MANUAL] Da tat che do Manual -> San sang che do PID.\n", sourceTag);
@@ -212,9 +290,10 @@ void executeCommand(String cmd, const char* sourceTag) {
         if (targetMotor == 0) targetMotor = 1; // Map m0 sang m1
         float pct = cmd.substring(spaceIdx + 1).toFloat();
         if (pct < 0.0f) pct = 0.0f;
-        if (pct > 50.0f) pct = 50.0f;
+        if (pct > 60.0f && safetyLimit60Pct) pct = 60.0f;
+        if (pct > 100.0f) pct = 100.0f;
 
-        // KHI TEST 1 ĐỘNG CƠ: ĐỘNG CƠ ĐƯỢC CHỌN QUAY, 3 ĐỘNG CƠ CÒN LẠI ÉP VỀ 0% (1000us - ĐỨNG YÊN)
+        // KHI TEST 1 ĐỘNG CƠ: ĐỘNG CƠ ĐƯỢC CHỌN QUAY, 3 ĐỘNG CƠ CÒN LẠI ÉP VỀ 0% (ĐỨNG YÊN)
         for (int i = 1; i <= ESC_NUM_MOTORS; i++) {
             if (i == targetMotor) {
                 quadMotors.setMotorThrottlePct(i, pct);
@@ -226,10 +305,6 @@ void executeCommand(String cmd, const char* sourceTag) {
     } else if (cmd.startsWith("freq ") || cmd.startsWith("FREQ ")) {
         uint32_t f = (uint32_t)cmd.substring(5).toInt();
         quadMotors.setFrequency(f);
-    } else if (cmd.equalsIgnoreCase("calib_start") || cmd.equalsIgnoreCase("calib")) {
-        quadMotors.startCalibration();
-    } else if (cmd.equalsIgnoreCase("calib_finish") || cmd.equalsIgnoreCase("calib_done")) {
-        quadMotors.finishCalibration();
     } else if (cmd.equalsIgnoreCase("status")) {
         Serial.println("\n============== BANG TRANG THAI CHI TIET 4 DONG CO ==============");
         Serial.printf("Trang thai he thong: %s | Tan so PWM: %u Hz\n", quadMotors.getStateStr(), quadMotors.getFrequency());
@@ -277,43 +352,33 @@ void handleWirelessCommands() {
 // ============================================================================
 // 5. MAIN SETUP
 // ============================================================================
->>>>>>> ae916b5 ( update base)
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\n[SYSTEM] ESP32-C6 DUAL-IMU FUSION & ITSMC FLIGHT CONTROLLER");
 
-<<<<<<< HEAD
-    // 1. Initialize MPU-6050 via I2C (GPIO 14, 15) and calibrate Zero-Bias
-=======
     Serial.println("\n==================================================================");
     Serial.println("  ESP32-C6 ALL-IN-ONE FLIGHT CONTROLLER & WIRELESS TELEMETRY");
     Serial.println("  INTEGRATED: DUAL-IMU + PX4 EKF + BUTTERWORTH FILTER + PX4 PID");
     Serial.println("==================================================================");
 
     // 1. Khởi tạo MPU-6050 qua I2C (GPIO 14, GPIO 15) và đo Zero-Bias
->>>>>>> ae916b5 ( update base)
     if (mpu6050_init(MPU_SDA_PIN, MPU_SCL_PIN)) {
         mpu6050_calibrate_gyro(100);
     }
 
-    // 2. Initialize Xsens MTi-3 via UART1 (RX=GPIO 2, TX=GPIO 3)
+    // 2. Khởi tạo Xsens MTi-3 qua UART1 (RX=GPIO 2, TX=GPIO 3)
     xsens_mti_init(XSENS_RX_PIN, XSENS_TX_PIN, XSENS_BAUDRATE);
+    
+    // Căn chỉnh trục Xsens khớp tuyệt đối với MPU-6050 (Invert X=true, Invert Z=true)
     xsens_mti_set_axis_inversion(true, false, true);
 
-    // 3. Configure PX4-EKF weights (Xsens 85%, MPU-6050 15%)
+    // 3. Cấu hình trọng số tin cậy EKF chuẩn PX4: Xsens chiếm 85%, MPU6050 chiếm 15%
     ekf.setSensorWeights(0.85f, 0.15f);
 
-    // 4. Initialize ESC PWM drivers for 4 Quad-X motors
+    // 4. Khởi tạo hệ thống OOP điều khiển 4 động cơ Quadcopter:
+    //    M1: GPIO 7 (CCW) | M2: GPIO 6 (CCW) | M3: GPIO 5 (CW) | M4: GPIO 4 (CW)
     quadMotors.init(ESC_DEFAULT_FREQ_HZ);
 
-<<<<<<< HEAD
-    // 5. Initialize ITSMC Flight Controller Supervisor
-    flightManager.initialize();
-
-    previousLoopMicros = micros();
-    Serial.println("[SYSTEM] Initialization complete. Type 'help' for CLI commands.\n");
-=======
     // 5. Khởi tạo Bộ điều khiển bay PX4 Multicopter (200Hz Loop)
     px4Controller.init(200.0f);
 
@@ -326,44 +391,23 @@ void setup() {
     Serial.println("[SETUP] He thong All-in-One FC & Telemetry da san sang hoat dong!");
     Serial.println("[SETUP] Ket noi WiFi 'ESP32-UAV-FC' de truy cap Web 3D Monitor hoac VIO.\n");
     Serial.println("==================================================================\n");
->>>>>>> ae916b5 ( update base)
 }
 
+// ============================================================================
+// 6. MAIN LOOP
+// ============================================================================
 void loop() {
-<<<<<<< HEAD
-    uint32_t currentMicros = micros();
-    float deltaTimeSec = (currentMicros - previousLoopMicros) * 1.0e-6f;
-    if (deltaTimeSec <= 0.0001f || deltaTimeSec > 0.05f) {
-        deltaTimeSec = 0.005f; // Safe fallback (200 Hz)
-    }
-    previousLoopMicros = currentMicros;
-=======
     uint32_t nowUs = micros();
 
     // 1. Đọc cảm biến MPU-6050 qua I2C
     mpu6050_read(mpuData);
->>>>>>> ae916b5 ( update base)
 
-    // 1. Acquire sensor readings
-    mpu6050_read(mpuData);
+    // 2. Đọc cảm biến Xsens MTi-3 qua UART1 (Non-blocking FSM)
     xsens_mti_update(xsensData);
 
-    // 2. Execute sensor fusion (PX4 EKF)
+    // 3. Dung hợp dữ liệu đa cảm biến bằng bộ lọc EKF chuẩn PX4 (Yaw 100% Xsens MTi-3)
     ekf.update(mpuData, xsensData, fusedData);
 
-<<<<<<< HEAD
-    // 3. Execute ITSMC Flight Control (Attitude & Position loops)
-    flightManager.update(fusedData, deltaTimeSec);
-
-    // 4. Update ESC motor PWM state machine & slew limiter
-    quadMotors.update();
-
-    // 5. Parse serial CLI user commands
-    commandInterpreter.processIncomingCommands(flightManager);
-
-    // 6. Report status and telemetry periodically (20 Hz)
-    telemetryReporter.update(millis(), mpuData, xsensData, fusedData, flightManager);
-=======
     // 4. CHU TRÌNH ĐIỀU KHIỂN BAY THỜI GIAN THỰC PX4 PID LOOP (200 Hz / 5ms)
     if (nowUs - lastPidUs >= PID_INTERVAL_US) {
         float dt = (float)(nowUs - lastPidUs) * 1e-6f;
@@ -420,5 +464,4 @@ void loop() {
         lastPrintMs = nowMs;
         printTelemetry();
     }
->>>>>>> ae916b5 ( update base)
 }

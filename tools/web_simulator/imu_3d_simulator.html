@@ -249,15 +249,6 @@
                     <span id="dataSourceBadge" class="px-2 py-0.5 rounded-full bg-blue-950 text-blue-400 border border-blue-500/30 text-[10px] font-bold">■ SIM DEMO</span>
                 </div>
 
-                <!-- MQTT Wireless Link (Clickable Button / Config) -->
-                <button id="mqttLinkBtn" onclick="toggleOrConfigMqtt()" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-space-950/90 border border-slate-800 hover:border-emerald-500/50 transition cursor-pointer" title="Nhấn để cấu hình hoặc kết nối lại MQTT Broker">
-                    <svg id="mqttIcon" class="w-3.5 h-3.5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-                    </svg>
-                    <span id="mqttBrokerText" class="text-emerald-300 font-bold">MQTT: Local</span>
-                    <span id="mqttBadge" class="px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 border border-rose-500/30 text-[10px] font-semibold">Offline</span>
-                </button>
-
                 <!-- Battery Voltage -->
                 <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/50 border border-emerald-500/30 text-emerald-300">
                     <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2215,7 +2206,7 @@
 
             // Luon luon cap nhat state.throttle de HUD Card the hien dung vi tri can ga
             state.throttle = thrPct / 100.0;
-            if (!state.wsConnected && !state.mqttConnected) {
+            if (!state.wsConnected) {
                 state.targetRoll = rollPct * 0.28;
                 state.targetPitch = pitchPct * 0.28;
                 state.targetYawRate = yawPct * 0.65;
@@ -2257,7 +2248,7 @@
                 }
 
                 state.throttle = rawThr / 100.0;
-                if (!state.wsConnected && !state.mqttConnected) {
+                if (!state.wsConnected) {
                     state.targetRoll = rollPct * 0.28;
                     state.targetPitch = pitchPct * 0.28;
                     state.targetYawRate = yawPct * 0.65;
@@ -2282,7 +2273,7 @@
             const prevPitch = state.pitch;
             const prevYaw = state.yaw;
 
-            const hardwareLive = state.wsConnected || state.mqttConnected || (Date.now() - (state.lastHardwarePacketMs || 0) < 1500);
+            const hardwareLive = state.wsConnected || (Date.now() - (state.lastHardwarePacketMs || 0) < 1500);
 
             if (!hardwareLive) {
                 // CHỈ CHẠY MÔ PHỎNG GIẢ LẬP KHI KHÔNG CÓ PHẦN CỨNG THẬT ĐANG TRUYỀN DỮ LIỆU
@@ -2376,8 +2367,8 @@
             state.velocityVz = (state.throttle - 0.50) * 1.5;
             state.altitudeZ = Math.max(0.0, Math.min(15.0, state.altitudeZ + state.velocityVz * dt));
 
-            // X-Quadcopter Mixer: Chỉ chạy mô phỏng khi KHÔNG có kết nối phần cứng thật (WebSocket/MQTT)!
-            if (!state.hardwareLive && !state.wsConnected && !state.mqttConnected) {
+            // X-Quadcopter Mixer: Chỉ chạy mô phỏng khi KHÔNG có kết nối phần cứng thật (WebSocket)!
+            if (!state.hardwareLive && !state.wsConnected) {
                 if (state.armed) {
                     if (state.mode !== 'csv') {
                         const basePulse = 1050 + state.throttle * 850;
@@ -2629,38 +2620,26 @@
 
         // ==================== LOWER-LAYER ESP32 HARDWARE & NETWORK ENGINE ====================
         function sendHardwarePacket(pkt) {
-            const sentVia = [];
             const isRc = pkt.startsWith('RC,');
 
-            // Phát song song qua cả WebSocket trực tiếp (PC -> ESP32:81) VÀ MQTT (PC -> Broker -> ESP32).
-            // Trên ESP32 có bộ lọc trùng lặp theo (SessionID, Sequence) chuẩn RFC 1982 nên gói đến trước
-            // sẽ được thực thi tức thì (~1ms), bản sao đến sau tự động bị bỏ qua mà không gây nghẽn!
+            // Truyền trực tiếp qua WebSocket (PC -> ESP32:81, 0ms latency, không phụ thuộc Broker)
             if (state.ws && state.ws.readyState === WebSocket.OPEN) {
                 if (!isRc || state.ws.bufferedAmount <= 4096) {
                     state.ws.send(pkt);
-                    sentVia.push('websocket');
                 }
             }
-            if (state.mqttClient && state.mqttConnected) {
-                const topic = isRc ? state.mqttTopicRc : state.mqttTopicCmd;
-                state.mqttClient.publish(topic, pkt.trim(), { qos: 0, retain: false });
-                sentVia.push('mqtt');
-            }
-            if (pkt.startsWith('RC,') && sentVia.length) {
+            if (pkt.startsWith('RC,')) {
                 const now = performance.now();
                 if (now - state.lastRcTxLogMs >= 1000) {
                     state.lastRcTxLogMs = now;
-                    console.info('[RC_TX_WIRELESS]', {
+                    console.info('[RC_TX_WS]', {
                         throttle: state.rcInput.throttle,
                         roll: state.rcInput.roll,
                         pitch: state.rcInput.pitch,
                         yaw: state.rcInput.yaw,
                         packet: pkt.trim(),
                         gamepadConnected: state.gamepadConnected,
-                        mapping: state.gamepadMapping,
-                        axes: state.gamepadAxes,
                         armedConfirmed: state.armed,
-                        transports: sentVia,
                         bufferedAmount: state.ws?.bufferedAmount ?? 0
                     });
                 }
@@ -2705,8 +2684,8 @@
         }
 
         function armMotors() {
-            if (!state.wsConnected && !state.mqttConnected) {
-                showToast('⚠️ CHƯA KẾT NỐI KHÔNG DÂY! Hãy kiểm tra Wi-Fi hoặc kết nối MQTT Broker!', 4500);
+            if (!state.wsConnected) {
+                showToast(`⚠️ CHƯA KẾT NỐI KHÔNG DÂY! Đang kết nối tới ${state.wsUrl}...`, 4500);
                 return;
             }
             if (state.armed) return;
@@ -2824,8 +2803,6 @@
                     const espMode = (selectedMode === 'direct') ? 'DIRECT_MANUAL' :
                                     (selectedMode === 'poshold') ? 'POSHOLD' : 'ALTITUDE';
                     sendHardwarePacket(`MODE,${espMode}\n`);
-                    // Tự động đồng bộ IP Broker MQTT hiện tại của PC (10.11.162.171:1883) xuống ESP32
-                    sendHardwarePacket(`MQTT,10.11.162.171,1883\n`);
 
                     const badge = document.getElementById('wifiBadge');
                     const icon = document.getElementById('wifiIcon');
@@ -3253,10 +3230,8 @@ Nhập URL MQTT WebSocket Broker:`, current);
         window.onload = function () {
             handleResize();
             setInterval(stepTelemetrySimulation, 20); // 50 Hz Telemetry Loop
-            // Auto connect to ESP32-C6 SoftAP WebSocket on load
+            // Auto connect to ESP32-C6 SoftAP/Station WebSocket on load
             setTimeout(() => connectWebSocket('ws://10.11.162.210:81/ws'), 600);
-            // Auto connect to MQTT Wireless Broker on load
-            setTimeout(() => connectMqtt(), 800);
             animate(); // Start 3D & Oscilloscope Render Loop
         };
     </script>

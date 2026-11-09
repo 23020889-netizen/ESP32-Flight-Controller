@@ -30,7 +30,7 @@
 
 #define ESC_ARMING_TIME_MS       0        // Mở khóa ARM tức thì (0ms) - Phản ứng ngay lập tức khi bấm nút ARM
 #define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: Tự động ngắt ga nếu mất lệnh điều khiển quá 3s
-#define ESC_SLEW_RATE_US_PER_SEC 1500     // Tốc độ tăng giảm ga an toàn (Soft Ramp): 1500 µs/s
+#define ESC_SLEW_RATE_US_PER_SEC 4000     // Tốc độ đáp ứng ga mượt mà: 4000 µs/s (đáp ứng 0..100% ga trong 0.23 giây)
 
 // ============================================================================
 // 2. ENUMS

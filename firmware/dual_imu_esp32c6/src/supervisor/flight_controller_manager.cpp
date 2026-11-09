@@ -121,14 +121,14 @@ bool FlightControllerManager::getRcSnapshotAtomic(RcSnapshot& out) const {
 
 void FlightControllerManager::setRcChannels(float throttlePct, float rollPct, float pitchPct, float yawPct) {
     RcSnapshot snap{};
-    snap.sessionId = 0;
-    snap.seq = 0;
+    snap.sessionId = 1;
+    snap.seq = 1;
     snap.receivedAtMs = millis();
     snap.throttle = (throttlePct < 0.0f) ? 0.0f : ((throttlePct > 100.0f) ? 100.0f : throttlePct);
-    snap.roll     = (rollPct < -35.0f) ? -35.0f : ((rollPct > 35.0f) ? 35.0f : rollPct);
-    snap.pitch    = (pitchPct < -35.0f) ? -35.0f : ((pitchPct > 35.0f) ? 35.0f : pitchPct);
-    snap.yaw      = (yawPct < -35.0f) ? -35.0f : ((yawPct > 35.0f) ? 35.0f : yawPct);
-    snap.source   = RC_SOURCE_SERIAL;
+    snap.roll     = (rollPct < -100.0f) ? -100.0f : ((rollPct > 100.0f) ? 100.0f : rollPct);
+    snap.pitch    = (pitchPct < -100.0f) ? -100.0f : ((pitchPct > 100.0f) ? 100.0f : pitchPct);
+    snap.yaw      = (yawPct < -100.0f) ? -100.0f : ((yawPct > 100.0f) ? 100.0f : yawPct);
+    snap.source   = RC_SOURCE_WEBSOCKET;
     snap.valid    = true;
     updateRcSnapshot(snap);
 }
@@ -359,20 +359,8 @@ void FlightControllerManager::update(const FusedData& state, float deltaTimeSec)
             quadMotors.disarm();
             Serial.printf("[FAILSAFE] >>> LEVEL 3 TRIGGERED: Mat tin hieu RC (age=%u ms)! Disarm khan cap.\n", ageMs);
             return;
-        } else if (ageMs > 1200) {
-            // Level 2: Mất tín hiệu quá 1200ms -> Tự động giảm độ cao hạ cánh
-            currentFailsafe_ = FailsafeLevel::LEVEL2_AUTO_DESCENT;
-            rcRoll_  = 0.0f;
-            rcPitch_ = 0.0f;
-            rcYaw_   = 0.0f;
-        } else if (ageMs > 500) {
-            // Level 1: Mất tín hiệu quá 500ms -> Thăng bằng góc, giữ nguyên độ cao
-            currentFailsafe_ = FailsafeLevel::LEVEL1_ATTITUDE_LEVEL;
-            rcRoll_  = 0.0f;
-            rcPitch_ = 0.0f;
-            rcYaw_   = 0.0f;
         } else {
-            // Tín hiệu RC Fresh và Hợp lệ (< 500ms)
+            // Tín hiệu RC trong ngưỡng an toàn (< 3000ms): Luôn cập nhật trực tiếp cần gạt
             currentFailsafe_ = FailsafeLevel::NONE;
             rcThrottle_ = snap.throttle;
             rcRoll_     = snap.roll;

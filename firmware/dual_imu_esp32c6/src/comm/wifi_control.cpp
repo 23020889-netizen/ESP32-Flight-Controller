@@ -3,13 +3,9 @@
 #include <mbedtls/sha1.h>
 #include <mbedtls/base64.h>
 #include <cstring>
+#include <cmath>
 
 WifiControlManager wifiControl;
-
-static void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    if (length == 0 || length >= 256) return;
-    wifiControl.processCommandPayload(reinterpret_cast<const uint8_t*>(payload), length, RC_SOURCE_MQTT, flightManager, quadMotors);
-}
 
 static String computeWsAcceptKey(const String& key) {
     String input = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -30,38 +26,21 @@ static String computeWsAcceptKey(const String& key) {
 
 WifiControlManager::WifiControlManager()
     : server_(81),
-      mqttClient_(mqttNetClient_),
       clientConnected_(false),
       wsHandshakeDone_(false),
       staConnected_(false),
       lastTelemetryMs_(0),
       lastRcPacketMs_(0),
-      activeSessionId_(0),
-      lastValidRcSeq_(0),
-      activeTransport_(RC_SOURCE_NONE),
-      lastMqttRcMs_(0),
-      rcAcceptCount_(0),
-      rcDropStaleCount_(0),
-      rcRejectFormatCount_(0),
       lastWifiCheckMs_(0),
-      lastMqttReconnectMs_(0),
       savedFlightMode_(FlightControlMode::DIRECT_MANUAL),
-      mqttBrokerPort_(1883),
       wsRxSize_(0) {
-    strncpy(mqttBrokerHost_, "10.11.162.171", sizeof(mqttBrokerHost_));
 }
 
 void WifiControlManager::begin(const char* staSsid, const char* staPass,
                                const char* apSsid, const char* apPass,
-                               const char* mqttBroker, uint16_t mqttPort) {
-    if (mqttBroker && strlen(mqttBroker) > 0) {
-        strncpy(mqttBrokerHost_, mqttBroker, sizeof(mqttBrokerHost_) - 1);
-        mqttBrokerHost_[sizeof(mqttBrokerHost_) - 1] = '\0';
-    }
-    if (mqttPort > 0) mqttBrokerPort_ = mqttPort;
-
+                               const char* legacyBroker, uint16_t legacyPort) {
     Serial.println("\n[WIFI] ========================================================");
-    Serial.println("[WIFI] KHOI TAO DUAL WI-FI & GIAO THUC KHONG DAY MQTT:");
+    Serial.println("[WIFI] KHOI TAO DIRECT WEBSOCKET FLIGHT CONTROLLER (PORT 81):");
 
     WiFi.mode(WIFI_AP_STA);
 
@@ -93,7 +72,6 @@ void WifiControlManager::begin(const char* staSsid, const char* staPass,
         int rssi = WiFi.RSSI(i);
         Serial.printf("       [%02d] SSID: '%s' (%d dBm)\n", i + 1, s.c_str(), rssi);
 
-        // Uu tien bat mang co chu TTDBCLKT (vi du: VNU-IS TTDBCLKT hoac TTDBCLKT9)
         if (!foundTarget) {
             String sUpper = s;
             sUpper.toUpperCase();
@@ -138,74 +116,8 @@ void WifiControlManager::begin(const char* staSsid, const char* staPass,
         Serial.println("[WIFI] >>> Khoi tao mDNS thanh cong: ws://drone.local:81/ws");
     }
 
-    // 4. Cau hinh MQTT Client (non-blocking timeout de khong bao gio treo WebSocket/RC)
-    mqttNetClient_.setTimeout(100);
-    mqttClient_.setSocketTimeout(1);
-    mqttClient_.setServer(mqttBrokerHost_, mqttBrokerPort_);
-    mqttClient_.setBufferSize(1024);
-    mqttClient_.setCallback(mqttCallback);
-
-    Serial.printf("[MQTT] Broker Target: %s:%d\n", mqttBrokerHost_, mqttBrokerPort_);
-    Serial.println("[MQTT] Subscribe Topics: 'isilab/drone/rc', 'isilab/drone/cmd'");
-    Serial.println("[MQTT] Publish Topic   : 'isilab/drone/telemetry'");
+    Serial.printf("[WIFI] >>> WebSocket Server SAN SANG tai: ws://%s:81/ws (Direct 0ms Latency)\n", ipAddress_.toString().c_str());
     Serial.println("[WIFI] ========================================================\n");
-}
-
-void WifiControlManager::setMqttBroker(const char* host, uint16_t port) {
-    char newHost[64] = {0};
-    if (host && strlen(host) > 0) {
-        strncpy(newHost, host, sizeof(newHost) - 1);
-        newHost[sizeof(newHost) - 1] = '\0';
-    } else {
-        strncpy(newHost, mqttBrokerHost_, sizeof(newHost) - 1);
-    }
-    uint16_t newPort = (port > 0) ? port : mqttBrokerPort_;
-
-    if (strcmp(mqttBrokerHost_, newHost) == 0 && mqttBrokerPort_ == newPort && mqttClient_.connected()) {
-        return;
-    }
-
-    strncpy(mqttBrokerHost_, newHost, sizeof(mqttBrokerHost_) - 1);
-    mqttBrokerHost_[sizeof(mqttBrokerHost_) - 1] = '\0';
-    mqttBrokerPort_ = newPort;
-
-    if (mqttClient_.connected()) {
-        mqttClient_.disconnect();
-    }
-    mqttClient_.setServer(mqttBrokerHost_, mqttBrokerPort_);
-    Serial.printf("[MQTT] Cap nhat dia chi Broker moi: %s:%d\n", mqttBrokerHost_, mqttBrokerPort_);
-}
-
-void WifiControlManager::reconnectMqtt() {
-    if (WiFi.status() != WL_CONNECTED && !WiFi.softAPgetStationNum()) return;
-
-    mqttNetClient_.setTimeout(100);
-    String clientId = "ESP32C6_Drone_" + String((uint32_t)ESP.getEfuseMac(), HEX);
-
-    if (mqttClient_.connect(clientId.c_str(), "isilab/drone/status", 1, true, "offline")) {
-        Serial.println("[MQTT] >>> KET NOI BROKER THANH CONG!");
-        mqttClient_.publish("isilab/drone/status", "online", true);
-        mqttClient_.subscribe("isilab/drone/rc", 0);
-        mqttClient_.subscribe("isilab/drone/cmd", 0);
-        Serial.println("[MQTT] >>> Da dang ky topic: 'isilab/drone/rc' va 'isilab/drone/cmd'");
-    }
-}
-
-void WifiControlManager::handleMqtt(FlightControllerManager& manager, QuadEscController& esc) {
-    uint32_t now = millis();
-    if (!mqttClient_.connected()) {
-        // Neu drone dang ARMED hoac WebSocket dang ket noi truc tiep, KHONG goi connect()
-        // de tranh TCP SYN bi Windows Firewall chan gay nghen luong dieu khien WebSocket!
-        if (esc.isArmed() || (clientConnected_ && wsHandshakeDone_)) {
-            return;
-        }
-        if (now - lastMqttReconnectMs_ >= 5000) {
-            lastMqttReconnectMs_ = now;
-            reconnectMqtt();
-        }
-    } else {
-        mqttClient_.loop();
-    }
 }
 
 void WifiControlManager::update(const FusedData& fusedData, FlightControllerManager& manager, QuadEscController& esc) {
@@ -233,17 +145,16 @@ void WifiControlManager::update(const FusedData& fusedData, FlightControllerMana
     handleNewClient();
     handleWebSocketData(manager, esc);
     handleUdpData(manager, esc);
-    handleMqtt(manager, esc);
 
-    // Failsafe Watchdog: Neu ARMED ma qua 2000ms khong nhan goi RC -> Cat ga ve an toan
+    // Failsafe Watchdog: Neu ARMED ma qua 3000ms hoan toan khong nhan goi RC -> Cat ga ve an toan
     if ((manager.getFlightMode() == FlightControlMode::DIRECT_MANUAL ||
          manager.getFlightMode() == FlightControlMode::ALTITUDE_HOLD) && esc.isArmed()) {
-        if (lastRcPacketMs_ > 0 && (now - lastRcPacketMs_ > 2000)) {
+        if (lastRcPacketMs_ > 0 && (now - lastRcPacketMs_ > 3000)) {
             manager.setRcChannels(0.0f, 0.0f, 0.0f, 0.0f);
         }
     }
 
-    // Phat telemetry dinh ky 50Hz (20ms) qua MQTT & WebSocket giup Web 3D khong do tre
+    // Phat telemetry dinh ky 50Hz (20ms) qua WebSocket giup Web 3D khong do tre
     if (now - lastTelemetryMs_ >= 20) {
         lastTelemetryMs_ = now;
         broadcastTelemetry(fusedData, manager, esc);
@@ -295,7 +206,7 @@ bool WifiControlManager::doWebSocketHandshake(const String& req) {
 
     client_.print(resp);
     wsHandshakeDone_ = true;
-    Serial.println("[WIFI] WebSocket Handshake RFC 6455 thanh cong!");
+    Serial.println("[WIFI] WebSocket Handshake RFC 6455 thanh cong! San sang dieu khien bay.");
     return true;
 }
 
@@ -403,7 +314,7 @@ void WifiControlManager::handleWebSocketData(FlightControllerManager& manager, Q
             client_.write(pong, sizeof(pong));
             if (payloadLen > 0) client_.write(reinterpret_cast<const uint8_t*>(payload), payloadLen);
         } else if (opcode == 0x1) { // Text command
-            processCommandPayload(reinterpret_cast<const uint8_t*>(payload), payloadLen, RC_SOURCE_WEBSOCKET, manager, esc);
+            processCommandPayload(reinterpret_cast<const uint8_t*>(payload), payloadLen, manager, esc);
         }
         consumed += static_cast<size_t>(frameLen);
     }
@@ -422,7 +333,7 @@ void WifiControlManager::handleUdpData(FlightControllerManager& manager, QuadEsc
     char buffer[256];
     int len = udp_.read(buffer, sizeof(buffer) - 1);
     if (len > 0) {
-        processCommandPayload(reinterpret_cast<const uint8_t*>(buffer), static_cast<size_t>(len), RC_SOURCE_WEBSOCKET, manager, esc);
+        processCommandPayload(reinterpret_cast<const uint8_t*>(buffer), static_cast<size_t>(len), manager, esc);
     }
 }
 
@@ -464,21 +375,16 @@ static bool parseFloatField(char*& p, float& out, char delimiter) {
     return true;
 }
 
-static inline bool isSeqNewer(uint32_t candidate, uint32_t previous) {
-    return static_cast<int32_t>(candidate - previous) > 0;
+void WifiControlManager::processCommandString(const String& rawCmd, FlightControllerManager& manager, QuadEscController& esc) {
+    processCommandPayload(reinterpret_cast<const uint8_t*>(rawCmd.c_str()), rawCmd.length(), manager, esc);
 }
 
-void WifiControlManager::processCommandString(const String& rawCmd, FlightControllerManager& manager, QuadEscController& esc, RcTransportSource source) {
-    processCommandPayload(reinterpret_cast<const uint8_t*>(rawCmd.c_str()), rawCmd.length(), source, manager, esc);
-}
-
-void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t payloadLen, RcTransportSource source, FlightControllerManager& manager, QuadEscController& esc) {
+void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t payloadLen, FlightControllerManager& manager, QuadEscController& esc) {
     constexpr size_t MAX_PACKET_LEN = 128;
     if (payload == nullptr || payloadLen == 0 || payloadLen >= MAX_PACKET_LEN) {
         return;
     }
     if (std::memchr(payload, '\0', payloadLen) != nullptr) {
-        // Tu choi payload chua embedded NUL
         return;
     }
 
@@ -486,7 +392,6 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
     std::memcpy(buf, payload, payloadLen);
     buf[payloadLen] = '\0';
 
-    // Bo ky tu CR, LF, space o cuoi chuoi
     while (payloadLen > 0 && (buf[payloadLen - 1] == '\r' || buf[payloadLen - 1] == '\n' ||
                               buf[payloadLen - 1] == ' '  || buf[payloadLen - 1] == '\t')) {
         buf[--payloadLen] = '\0';
@@ -496,74 +401,53 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
     char* p = buf;
 
     // =========================================================================
-    // 1. GIAO THUC DIEU KHIEN RC V2 & V1:
+    // 1. GIAO THUC DIEU KHIEN RC (HO TRO CA V2 VA V1 TRUC TIEP):
     //    V2: "RC,2,<sessionId>,<seq>,<throttle>,<roll>,<pitch>,<yaw>"
     //    V1: "RC,<throttle>,<roll>,<pitch>,<yaw>"
     // =========================================================================
-    if (strncmp(p, "RC,", 3) == 0 || strncmp(p, "rc,", 3) == 0) {
+    if (strncasecmp(p, "RC,", 3) == 0) {
         p += 3;
         skipSpaces(p);
 
-        // Kiem tra neu bat dau bang "2," -> Protocol V2
+        float thr = 0.0f, roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
+        bool valid = false;
+
         if (strncmp(p, "2,", 2) == 0) {
+            // Protocol V2
             p += 2;
             uint32_t sessId = 0, seq = 0;
-            float thr = 0.0f, roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
-            if (!parseUInt32Field(p, sessId, ','))  { rcRejectFormatCount_++; return; }
-            if (!parseUInt32Field(p, seq, ','))     { rcRejectFormatCount_++; return; }
-            if (!parseFloatField(p, thr, ','))      { rcRejectFormatCount_++; return; }
-            if (!parseFloatField(p, roll, ','))     { rcRejectFormatCount_++; return; }
-            if (!parseFloatField(p, pitch, ','))    { rcRejectFormatCount_++; return; }
-            if (!parseFloatField(p, yaw, '\0'))     { rcRejectFormatCount_++; return; }
-
-            // Range validation nghiem ngat theo protocol:
-            // throttle: 0..100%, roll/pitch/yaw: -100..100%
-            if (thr < 0.0f || thr > 100.0f ||
-                roll < -100.0f || roll > 100.0f ||
-                pitch < -100.0f || pitch > 100.0f ||
-                yaw < -100.0f || yaw > 100.0f) {
-                rcRejectFormatCount_++;
-                return;
+            if (parseUInt32Field(p, sessId, ',') &&
+                parseUInt32Field(p, seq, ',') &&
+                parseFloatField(p, thr, ',') &&
+                parseFloatField(p, roll, ',') &&
+                parseFloatField(p, pitch, ',') &&
+                parseFloatField(p, yaw, '\0')) {
+                valid = true;
             }
+        } else {
+            // Protocol V1
+            if (parseFloatField(p, thr, ',') &&
+                parseFloatField(p, roll, ',') &&
+                parseFloatField(p, pitch, ',') &&
+                parseFloatField(p, yaw, '\0')) {
+                valid = true;
+            }
+        }
+
+        if (valid) {
+            thr   = constrain(thr, 0.0f, 100.0f);
+            roll  = constrain(roll, -100.0f, 100.0f);
+            pitch = constrain(pitch, -100.0f, 100.0f);
+            yaw   = constrain(yaw, -100.0f, 100.0f);
 
             uint32_t now = millis();
-            activeTransport_ = source;
-            if (source == RC_SOURCE_MQTT) {
-                lastMqttRcMs_ = now;
-            }
-
-            // SESSION & SEQUENCE DEDUPLICATION (RFC 1982):
-            // Ca WebSocket va MQTT cung gui (sessionId, seq). Goi nao den truoc se duoc xu ly ngay lap tuc (0ms delay),
-            // goi trung lap den sau tren kenh kia se tu dong bi deduplicate boi isSeqNewer!
-            if (sessId != activeSessionId_) {
-                activeSessionId_ = sessId;
-                lastValidRcSeq_ = seq;
-                Serial.printf("[RC_SESSION] >>> BAT DAU PHIEN MOI SessionID=0x%08X (Seq baseline: %u, Src: %s)\n",
-                              sessId, seq, (source == RC_SOURCE_MQTT) ? "MQTT" : "WS");
-            } else {
-                if (!isSeqNewer(seq, lastValidRcSeq_)) {
-                    rcDropStaleCount_++;
-                    return; // Goi tin trung lap giua WS/MQTT hoac goi cu den muon -> Bo qua an toan
-                }
-                lastValidRcSeq_ = seq;
-            }
-
-            // Ghi goi tin hop le vao Atomic Snapshot bao ve bang FreeRTOS Critical Section
-            RcSnapshot snap{};
-            snap.sessionId    = sessId;
-            snap.seq          = seq;
-            snap.receivedAtMs = now;
-            snap.throttle     = thr;
-            snap.roll         = roll;
-            snap.pitch        = pitch;
-            snap.yaw          = yaw;
-            snap.source       = source;
-            snap.valid        = true;
-
-            manager.updateRcSnapshot(snap);
             lastRcPacketMs_ = now;
-            rcAcceptCount_++;
 
+            // Truyen ngay lap tuc gia tri can vao flightManager
+            manager.setRcChannels(thr, roll, pitch, yaw);
+            esc.feedWatchdog();
+
+            // In gia tri truc tiep ra Serial Monitor de kiem tra su thay doi cua can analog
             static uint32_t lastRcPrint = 0;
             static float lastPThr = -999.0f, lastPRoll = -999.0f, lastPPitch = -999.0f, lastPYaw = -999.0f;
             bool stickMoved = (fabsf(thr - lastPThr) >= 0.5f ||
@@ -571,8 +455,6 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
                                fabsf(pitch - lastPPitch) >= 0.5f ||
                                fabsf(yaw - lastPYaw) >= 0.5f);
 
-            // In tuc thi khi can gat di chuyen (toi da 20 dong/giay de khong nghen UART),
-            // hoac dinh ky moi 1000ms neu giu nguyen (Heartbeat)
             if ((stickMoved && (now - lastRcPrint >= 50)) || (now - lastRcPrint >= 1000)) {
                 lastRcPrint = now;
                 lastPThr = thr; lastPRoll = roll; lastPPitch = pitch; lastPYaw = yaw;
@@ -586,55 +468,13 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
                 uint16_t p3 = (uint16_t)constrain(basePulse + dRoll - dPitch - dYaw, 1050.0f, 2000.0f);
                 uint16_t p4 = (uint16_t)constrain(basePulse - dRoll + dPitch - dYaw, 1050.0f, 2000.0f);
 
-                Serial.printf(">> [RC_STICK] Thr:%5.1f%% | Roll:%+5.1f%% | Pitch:%+5.1f%% | Yaw:%+5.1f%% | %s | PWM:[%u,%u,%u,%u]us (%s)\n",
+                Serial.printf(">> [RC_STICK] Thr:%5.1f%% | Roll:%+5.1f%% | Pitch:%+5.1f%% | Yaw:%+5.1f%% | %s | PWM:[%u,%u,%u,%u]us\n",
                               thr, roll, pitch, yaw,
                               esc.isArmed() ? "ARMED" : "DISARMED",
-                              p1, p2, p3, p4,
-                              (source == RC_SOURCE_MQTT) ? "MQTT" : "WS");
+                              p1, p2, p3, p4);
             }
-            return;
-        } else {
-            // Fallback cho Protocol V1: RC,<thr>,<roll>,<pitch>,<yaw>
-            char* v1Ptr = p;
-            float v1Thr = 0.0f, v1Roll = 0.0f, v1Pitch = 0.0f, v1Yaw = 0.0f;
-            if (parseFloatField(v1Ptr, v1Thr, ',') &&
-                parseFloatField(v1Ptr, v1Roll, ',') &&
-                parseFloatField(v1Ptr, v1Pitch, ',') &&
-                parseFloatField(v1Ptr, v1Yaw, '\0')) {
-
-                v1Thr   = constrain(v1Thr, 0.0f, 100.0f);
-                v1Roll  = constrain(v1Roll, -100.0f, 100.0f);
-                v1Pitch = constrain(v1Pitch, -100.0f, 100.0f);
-                v1Yaw   = constrain(v1Yaw, -100.0f, 100.0f);
-
-                uint32_t now = millis();
-                RcSnapshot snap{};
-                snap.sessionId    = 0xCAFE0001;
-                snap.seq          = ++lastValidRcSeq_;
-                snap.receivedAtMs = now;
-                snap.throttle     = v1Thr;
-                snap.roll         = v1Roll;
-                snap.pitch        = v1Pitch;
-                snap.yaw          = v1Yaw;
-                snap.source       = source;
-                snap.valid        = true;
-
-                manager.updateRcSnapshot(snap);
-                lastRcPacketMs_ = now;
-                rcAcceptCount_++;
-
-                static uint32_t lastV1Print = 0;
-                if (now - lastV1Print >= 100) {
-                    lastV1Print = now;
-                    Serial.printf(">> [RC_STICK_V1] Thr:%5.1f%% | Roll:%+5.1f%% | Pitch:%+5.1f%% | Yaw:%+5.1f%% (%s)\n",
-                                  v1Thr, v1Roll, v1Pitch, v1Yaw, (source == RC_SOURCE_MQTT) ? "MQTT" : "WS");
-                }
-                return;
-            }
-
-            rcRejectFormatCount_++;
-            return;
         }
+        return;
     }
 
     // =========================================================================
@@ -645,25 +485,10 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
             manager.getFlightMode() == FlightControlMode::MANUAL_CLI) {
             manager.setFlightMode(savedFlightMode_);
         }
-        // Lam moi RC snapshot timestamp ngay khi ARM de tranh Failsafe Level 3 ngat som
-        RcSnapshot snap{};
-        if (!manager.getRcSnapshotAtomic(snap)) {
-            snap.sessionId = activeSessionId_;
-            snap.seq = lastValidRcSeq_;
-            snap.throttle = 0.0f;
-            snap.roll = 0.0f;
-            snap.pitch = 0.0f;
-            snap.yaw = 0.0f;
-            snap.source = source;
-        }
-        snap.receivedAtMs = millis();
-        snap.valid = true;
-        manager.updateRcSnapshot(snap);
-        lastRcPacketMs_ = snap.receivedAtMs;
-
+        lastRcPacketMs_ = millis();
         esc.arm();
         esc.feedWatchdog();
-        Serial.println("[WIRELESS_CMD] >>> DA NHAN LENH ARM TUC THI! Mo khoa 4 dong co.");
+        Serial.println("[WIFI_CMD] >>> DA NHAN LENH ARM TUC THI! Mo khoa 4 dong co.");
         return;
     }
 
@@ -673,7 +498,7 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
     if (strcasecmp(buf, "DISARM") == 0 || strcasecmp(buf, "STOP") == 0 || strcasecmp(buf, "KILL") == 0) {
         manager.setFlightMode(FlightControlMode::EMERGENCY_DISARM);
         esc.disarm();
-        Serial.println("[WIRELESS_CMD] >>> DA KHOA KHAN CAP (DISARMED)! Ca 4 dong co ngat ve 900us.");
+        Serial.println("[WIFI_CMD] >>> DA KHOA KHAN CAP (DISARMED)! Ca 4 dong co ngat ve 900us.");
         return;
     }
 
@@ -686,53 +511,27 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
         if (strcasecmp(modeName, "DIRECT_MANUAL") == 0 || strcasecmp(modeName, "DIRECT") == 0) {
             savedFlightMode_ = FlightControlMode::DIRECT_MANUAL;
             manager.setFlightMode(FlightControlMode::DIRECT_MANUAL);
-            Serial.println("[WIRELESS_CMD] >>> Chuyen mode: DIRECT_MANUAL (Bench Test - No Prop).");
+            Serial.println("[WIFI_CMD] >>> Chuyen mode: DIRECT_MANUAL (Direct Stick -> Motors).");
         } else if (strcasecmp(modeName, "ALTITUDE") == 0 || strcasecmp(modeName, "ALT_HOLD") == 0 ||
                    strcasecmp(modeName, "ALT") == 0 || strcasecmp(modeName, "ITSMC_ATT") == 0 ||
                    strcasecmp(modeName, "STABILIZED") == 0) {
             savedFlightMode_ = FlightControlMode::ALTITUDE_HOLD;
             manager.setFlightMode(FlightControlMode::ALTITUDE_HOLD);
-            Serial.println("[WIRELESS_CMD] >>> Chuyen mode: ALTITUDE_HOLD (Cascaded PID).");
+            Serial.println("[WIFI_CMD] >>> Chuyen mode: ALTITUDE_HOLD (Cascaded PID).");
         } else if (strcasecmp(modeName, "POSHOLD") == 0 || strcasecmp(modeName, "ITSMC_POS") == 0) {
             savedFlightMode_ = FlightControlMode::ITSMC_POSITION_HOLD;
             manager.setFlightMode(FlightControlMode::ITSMC_POSITION_HOLD);
-            Serial.println("[WIRELESS_CMD] >>> Chuyen mode: ITSMC_POSITION_HOLD.");
+            Serial.println("[WIFI_CMD] >>> Chuyen mode: ITSMC_POSITION_HOLD.");
         } else if (strcasecmp(modeName, "MANUAL_CLI") == 0) {
             savedFlightMode_ = FlightControlMode::MANUAL_CLI;
             manager.setFlightMode(FlightControlMode::MANUAL_CLI);
-            Serial.println("[WIRELESS_CMD] >>> Chuyen mode: MANUAL_CLI.");
+            Serial.println("[WIFI_CMD] >>> Chuyen mode: MANUAL_CLI.");
         }
         return;
     }
 
     // =========================================================================
-    // 5. LỆNH CẤU HÌNH BROKER MQTT: "MQTT,<host>,<port>"
-    // =========================================================================
-    if (strncasecmp(buf, "MQTT,", 5) == 0) {
-        const char* pMqtt = buf + 5;
-        while (*pMqtt == ' ') pMqtt++;
-        char hostBuf[64] = {0};
-        uint16_t portVal = 1883;
-        const char* commaPos = strchr(pMqtt, ',');
-        if (commaPos != nullptr) {
-            size_t hostLen = commaPos - pMqtt;
-            if (hostLen >= sizeof(hostBuf)) hostLen = sizeof(hostBuf) - 1;
-            strncpy(hostBuf, pMqtt, hostLen);
-            hostBuf[hostLen] = '\0';
-            long pNum = strtol(commaPos + 1, nullptr, 10);
-            if (pNum > 0 && pNum <= 65535) portVal = static_cast<uint16_t>(pNum);
-        } else {
-            strncpy(hostBuf, pMqtt, sizeof(hostBuf) - 1);
-            hostBuf[sizeof(hostBuf) - 1] = '\0';
-        }
-        if (strlen(hostBuf) > 0) {
-            setMqttBroker(hostBuf, portVal);
-        }
-        return;
-    }
-
-    // =========================================================================
-    // 6. LỆNH TEST MOTOR RIÊNG LẺ: "TEST,<motor_id>,<pct>,<sec>"
+    // 5. LỆNH TEST MOTOR RIÊNG LẺ: "TEST,<motor_id>,<pct>,<sec>"
     // =========================================================================
     if (strncasecmp(buf, "TEST,", 5) == 0) {
         char* tPtr = buf + 5;
@@ -748,6 +547,8 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
 }
 
 void WifiControlManager::broadcastTelemetry(const FusedData& fusedData, const FlightControllerManager& manager, const QuadEscController& esc) {
+    if (!client_ || !client_.connected() || !wsHandshakeDone_) return;
+
     const char* modeStr = "DIRECT_MANUAL";
     FlightControlMode m = manager.getFlightMode();
     if (m == FlightControlMode::ALTITUDE_HOLD) modeStr = "ALT_HOLD";
@@ -771,14 +572,6 @@ void WifiControlManager::broadcastTelemetry(const FusedData& fusedData, const Fl
              esc.isArmed() ? 1 : 0,
              ipAddress_.toString().c_str());
 
-    // 1. Phat qua giao thuc MQTT khong day
-    if (mqttClient_.connected()) {
-        mqttClient_.publish("isilab/drone/telemetry", jsonBuf);
-    }
-
-    // 2. Phat qua giao thuc WebSocket khong day
-    if (client_ && client_.connected() && wsHandshakeDone_) {
-        String msg(jsonBuf);
-        sendWebSocketText(msg);
-    }
+    String msg(jsonBuf);
+    sendWebSocketText(msg);
 }

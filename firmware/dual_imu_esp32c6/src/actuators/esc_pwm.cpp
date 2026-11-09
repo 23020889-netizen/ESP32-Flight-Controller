@@ -10,7 +10,8 @@ QuadEscController quadMotors;
 EscMotor::EscMotor()
     : _id(0), _pin(0), _direction(MOTOR_DIR_CCW),
       _freq_hz(ESC_DEFAULT_FREQ_HZ), _period_us(20000), _max_duty(16383),
-      _current_us(ESC_PULSE_DISARM_US), _target_us(ESC_PULSE_DISARM_US),
+      _min_us(ESC_PULSE_MIN_US), _max_us(ESC_PULSE_MAX_US),
+      _current_us(ESC_PULSE_MIN_US), _target_us(ESC_PULSE_MIN_US),
       _throttle_pct(0.0f), _attached(false) {
 }
 
@@ -21,15 +22,17 @@ uint32_t EscMotor::usToDuty(uint16_t pulse_us) const {
     return (uint32_t)(((uint64_t)pulse_us * _max_duty) / _period_us);
 }
 
-bool EscMotor::init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz) {
+bool EscMotor::init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz, uint16_t min_us, uint16_t max_us) {
     _id          = id;
     _pin         = pin;
     _direction   = dir;
     _freq_hz     = freq_hz;
     _period_us   = 1000000UL / freq_hz;
     _max_duty    = (1UL << ESC_RESOLUTION_BITS) - 1UL;
-    _current_us  = ESC_PULSE_DISARM_US;
-    _target_us   = ESC_PULSE_DISARM_US;
+    _min_us      = min_us;
+    _max_us      = max_us;
+    _current_us  = _min_us;
+    _target_us   = _min_us;
     _throttle_pct= 0.0f;
 
     pinMode(_pin, OUTPUT);
@@ -42,11 +45,11 @@ bool EscMotor::init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_h
         return false;
     }
 
-    // Luôn phát xung an toàn 900 µs chuẩn PX4 ngay khi khởi động
-    ledcWrite(_pin, usToDuty(ESC_PULSE_DISARM_US));
+    // Phát xung an toàn đúng tại mốc Min của từng ESC ngay khi khởi động
+    ledcWrite(_pin, usToDuty(_min_us));
 
-    Serial.printf("[ESC_MOTOR_%d] Khoi tao thanh cong: GPIO %d | Huong: %s | Freq: %u Hz (T=%u us) | Res: 14-bit\n",
-                  _id, _pin, getDirectionStr(), _freq_hz, _period_us);
+    Serial.printf("[ESC_MOTOR_%d] Khoi tao thanh cong: GPIO %d | Huong: %s | Dai: %u..%u us | Freq: %u Hz\n",
+                  _id, _pin, getDirectionStr(), _min_us, _max_us, _freq_hz);
     return true;
 }
 
@@ -75,18 +78,18 @@ void EscMotor::writePulseUs(uint16_t pulse_us) {
     _current_us = pulse_us;
     _target_us  = pulse_us;
 
-    if (_current_us <= ESC_PULSE_MIN_US) {
+    if (_current_us <= _min_us) {
         _throttle_pct = 0.0f;
     } else {
-        _throttle_pct = ((float)(_current_us - ESC_PULSE_MIN_US) * 100.0f) / 
-                        (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US);
+        _throttle_pct = ((float)(_current_us - _min_us) * 100.0f) / 
+                        (float)(_max_us - _min_us);
     }
     ledcWrite(_pin, usToDuty(_current_us));
 }
 
 void EscMotor::setTargetPulseUs(uint16_t pulse_us) {
-    if (pulse_us < ESC_PULSE_MIN_US) pulse_us = ESC_PULSE_MIN_US;
-    if (pulse_us > ESC_PULSE_MAX_US) pulse_us = ESC_PULSE_MAX_US;
+    if (pulse_us < _min_us) pulse_us = _min_us;
+    if (pulse_us > _max_us) pulse_us = _max_us;
     _target_us = pulse_us;
 }
 
@@ -94,7 +97,7 @@ void EscMotor::setTargetThrottlePct(float pct) {
     if (pct < 0.0f)   pct = 0.0f;
     if (pct > 100.0f) pct = 100.0f;
 
-    uint16_t pulse_us = ESC_PULSE_MIN_US + (uint16_t)((pct * (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US)) / 100.0f);
+    uint16_t pulse_us = _min_us + (uint16_t)((pct * (float)(_max_us - _min_us)) / 100.0f);
     setTargetPulseUs(pulse_us);
 }
 
@@ -114,19 +117,19 @@ void EscMotor::updateRamp(float dt) {
         ledcWrite(_pin, usToDuty(_current_us));
     }
 
-    if (_current_us <= ESC_PULSE_MIN_US) {
+    if (_current_us <= _min_us) {
         _throttle_pct = 0.0f;
     } else {
-        _throttle_pct = ((float)(_current_us - ESC_PULSE_MIN_US) * 100.0f) / 
-                        (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US);
+        _throttle_pct = ((float)(_current_us - _min_us) * 100.0f) / 
+                        (float)(_max_us - _min_us);
     }
 }
 
 void EscMotor::stop() {
-    _current_us   = ESC_PULSE_DISARM_US;
-    _target_us    = ESC_PULSE_DISARM_US;
+    _current_us   = _min_us;
+    _target_us    = _min_us;
     _throttle_pct = 0.0f;
-    ledcWrite(_pin, usToDuty(ESC_PULSE_DISARM_US));
+    ledcWrite(_pin, usToDuty(_min_us));
 }
 
 // ============================================================================
@@ -145,21 +148,21 @@ bool QuadEscController::init(uint32_t freq_hz) {
     Serial.println("\n[ESC_QUAD] ========================================================");
     Serial.println("[ESC_QUAD] KHOI TAO HE THONG 4 DONG CO QUADCOPTER (CHUAN PX4):");
 
-    // Khởi tạo 4 động cơ theo đúng cấu hình yêu cầu:
-    // Motor 1: GPIO 7, CCW (Ngược chiều kim đồng hồ)
-    // Motor 2: GPIO 6, CCW (Ngược chiều kim đồng hồ)
-    // Motor 3: GPIO 5, CW  (Thuận chiều kim đồng hồ)
-    // Motor 4: GPIO 4, CW  (Thuận chiều kim đồng hồ)
-    success &= _motors[0].init(1, MOTOR1_PIN, MOTOR_DIR_CCW, freq_hz);
-    success &= _motors[1].init(2, MOTOR2_PIN, MOTOR_DIR_CCW, freq_hz);
-    success &= _motors[2].init(3, MOTOR3_PIN, MOTOR_DIR_CW,  freq_hz);
-    success &= _motors[3].init(4, MOTOR4_PIN, MOTOR_DIR_CW,  freq_hz);
+    // Khởi tạo 4 động cơ theo đúng cấu hình phần cứng thực tế:
+    // Motor 1: GPIO 7, CCW - ESC Vàng 30A (1000..2000 us)
+    // Motor 2: GPIO 6, CCW - ESC Vàng 30A (1000..2000 us)
+    // Motor 3: GPIO 5, CW  - ESC Đen  40A ( 850..1850 us)
+    // Motor 4: GPIO 4, CW  - ESC Vàng 30A (1000..2000 us)
+    success &= _motors[0].init(1, MOTOR1_PIN, MOTOR_DIR_CCW, freq_hz, 1000, 2000);
+    success &= _motors[1].init(2, MOTOR2_PIN, MOTOR_DIR_CCW, freq_hz, 1000, 2000);
+    success &= _motors[2].init(3, MOTOR3_PIN, MOTOR_DIR_CW,  freq_hz,  850, 1850);
+    success &= _motors[3].init(4, MOTOR4_PIN, MOTOR_DIR_CW,  freq_hz, 1000, 2000);
 
     _state            = ESC_STATE_DISARMED;
     _watchdog_enabled = false;
     _last_update_us   = micros();
 
-    Serial.println("[ESC_QUAD] Tat ca 4 ESC deu duoc khoa o xung 900us (DISARMED).");
+    Serial.println("[ESC_QUAD] Tat ca 4 ESC deu duoc khoa o moc Min an toan (M1,2,4=1000us, M3=850us).");
     Serial.println("[ESC_QUAD] ========================================================\n");
 
     return success;
@@ -188,7 +191,7 @@ bool QuadEscController::arm() {
 
     Serial.println("\n[ESC_QUAD] ========================================================");
     Serial.println("[ESC_QUAD] >>> BAT DAU CHUOI MO KHOA DONG LOAT 4 ESC (ARMING)...");
-    Serial.println("[ESC_QUAD]     Phat xung 1000us trong 2s de ca 4 ESC nhan dien...");
+    Serial.println("[ESC_QUAD]     Phat xung Min (M1,2,4=1000us | M3=850us) trong 2s...");
     Serial.println("[ESC_QUAD] ========================================================");
 
     _state            = ESC_STATE_ARMING;
@@ -197,7 +200,7 @@ bool QuadEscController::arm() {
     _watchdog_enabled = false;
 
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-        _motors[i].writePulseUs(ESC_PULSE_MIN_US); // 1000 µs
+        _motors[i].writePulseUs(_motors[i].getMinPulseUs());
     }
     return true;
 }
@@ -207,9 +210,9 @@ void QuadEscController::disarm() {
     _watchdog_enabled = false;
 
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-        _motors[i].stop(); // 900 µs
+        _motors[i].stop();
     }
-    Serial.println("[ESC_QUAD] >>> DA KHOA AN TOAN CA 4 DONG CO (DISARMED)! Xung ve 900us.");
+    Serial.println("[ESC_QUAD] >>> DA KHOA AN TOAN CA 4 DONG CO (DISARMED)!");
 }
 
 bool QuadEscController::setAllThrottlePct(float pct) {
@@ -279,10 +282,10 @@ void QuadEscController::update() {
     _last_update_us = now_us;
     if (dt <= 0.0f || dt > 0.1f) dt = 0.005f;
 
-    // A. Quản lý trạng thái Arming (2 giây giữ 1000µs cho cả 4 ESC)
+    // A. Quản lý trạng thái Arming (2 giây giữ xung Min cho cả 4 ESC)
     if (_state == ESC_STATE_ARMING) {
         for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-            _motors[i].writePulseUs(ESC_PULSE_MIN_US);
+            _motors[i].writePulseUs(_motors[i].getMinPulseUs());
         }
 
         if (now_ms - _arming_start_ms >= ESC_ARMING_TIME_MS) {
@@ -291,15 +294,15 @@ void QuadEscController::update() {
             _watchdog_enabled = true;
 
             for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-                _motors[i].setTargetPulseUs(ESC_PULSE_MIN_US); // 1000 µs (0% ga - ĐỨNG YÊN HOÀN TOÀN KHI VỪA ARM)
+                _motors[i].setTargetPulseUs(_motors[i].getMinPulseUs()); // 0% ga - ĐỨNG YÊN HOÀN TOÀN KHI VỪA ARM
             }
 
             Serial.println("\n[ESC_QUAD] ========================================================");
             Serial.println("[ESC_QUAD] >>> CA 4 ESC DA MO KHOA HOAN TAT (ARMED)!");
-            Serial.println("[ESC_QUAD]     Motor 1 (GPIO 7 - CCW) : Idle 1050us");
-            Serial.println("[ESC_QUAD]     Motor 2 (GPIO 6 - CCW) : Idle 1050us");
-            Serial.println("[ESC_QUAD]     Motor 3 (GPIO 5 - CW)  : Idle 1050us");
-            Serial.println("[ESC_QUAD]     Motor 4 (GPIO 4 - CW)  : Idle 1050us");
+            Serial.println("[ESC_QUAD]     Motor 1 (GPIO 7 - CCW) : Min 1000us (ESC Vang)");
+            Serial.println("[ESC_QUAD]     Motor 2 (GPIO 6 - CCW) : Min 1000us (ESC Vang)");
+            Serial.println("[ESC_QUAD]     Motor 3 (GPIO 5 - CW)  : Min  850us (ESC Den 40A)");
+            Serial.println("[ESC_QUAD]     Motor 4 (GPIO 4 - CW)  : Min 1000us (ESC Vang)");
             Serial.println("[ESC_QUAD]     San sang nhan lenh dieu toc (0% - 100%)...");
             Serial.println("[ESC_QUAD] ========================================================\n");
         }
@@ -317,7 +320,7 @@ void QuadEscController::update() {
             }
 
             Serial.println("\n[ESC_QUAD] [CANH BAO AN TOAN] Mat ket noi lenh qua 3s!");
-            Serial.println("[ESC_QUAD] >>> Kich hoat FAILSAFE: Ngat ga ca 4 dong co ve 900us!\n");
+            Serial.println("[ESC_QUAD] >>> Kich hoat FAILSAFE: Ngat ga ca 4 dong co ve moc Min!\n");
             return;
         }
     }
@@ -346,12 +349,12 @@ void QuadEscController::startCalibration() {
     _watchdog_enabled = false;
 
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-        _motors[i].writePulseUs(ESC_PULSE_MAX_US); // 2000 µs
+        _motors[i].writePulseUs(_motors[i].getMaxPulseUs());
     }
 
     Serial.println("\n[ESC_CALIB] ========================================================");
     Serial.println("[ESC_CALIB] >>> BAT CHE DO HIEU CHUAN DONG LOAT 4 ESC (THROTTLE RANGE)");
-    Serial.println("[ESC_CALIB] 1. ESP32 dang phat xung MAX 2000us tren ca 4 chan (7, 6, 5, 4).");
+    Serial.println("[ESC_CALIB] 1. ESP32 dang phat xung MAX tren ca 4 chan (7, 6, 5, 4).");
     Serial.println("[ESC_CALIB] 2. Hay CAM NGUON PIN LiPo vao ESC.");
     Serial.println("[ESC_CALIB] 3. Lang nghe ca 4 ESC phat 2 tieng bip ngan (Bip-Bip).");
     Serial.println("[ESC_CALIB] 4. Ngay sau do, nhap 'calib_finish' tren Serial de luu vao EEPROM!");
@@ -365,12 +368,12 @@ void QuadEscController::finishCalibration() {
     }
 
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-        _motors[i].writePulseUs(ESC_PULSE_DISARM_US); // 900 µs
+        _motors[i].writePulseUs(_motors[i].getMinPulseUs());
     }
     _state = ESC_STATE_DISARMED;
 
     Serial.println("\n[ESC_CALIB] ========================================================");
-    Serial.println("[ESC_CALIB] >>> DA HA XUNG CA 4 CHAN VE MIN 900us!");
+    Serial.println("[ESC_CALIB] >>> DA HA XUNG CA 4 CHAN VE MOC MIN (M1,2,4=1000us | M3=850us)!");
     Serial.println("[ESC_CALIB] Cac ESC se phat 1 tieng bip dai xac nhan da luu vao EEPROM.");
     Serial.println("[ESC_CALIB] Hieu chuan thanh cong! 4 dong co ve DISARMED an toan.");
     Serial.println("[ESC_CALIB] ========================================================\n");

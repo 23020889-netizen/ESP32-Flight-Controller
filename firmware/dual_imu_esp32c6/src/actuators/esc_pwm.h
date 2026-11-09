@@ -56,8 +56,9 @@ class EscMotor {
 public:
     EscMotor();
 
-    // Khởi tạo kênh động cơ với ID, chân GPIO, chiều quay và tần số
-    bool init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz);
+    // Khởi tạo kênh động cơ với ID, chân GPIO, chiều quay, tần số và dải xung Min/Max riêng
+    bool init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz,
+              uint16_t min_us = ESC_PULSE_MIN_US, uint16_t max_us = ESC_PULSE_MAX_US);
 
     // Cập nhật lại tần số xung PWM phần cứng
     bool setFrequency(uint32_t freq_hz);
@@ -74,7 +75,7 @@ public:
     // Cập nhật tốc độ tăng ga từ từ (Soft Ramp Limiter)
     void updateRamp(float dt);
 
-    // Dừng khẩn cấp động cơ (xuất 900 µs ngay lập tức)
+    // Dừng khẩn cấp động cơ (xuất mốc Min riêng của ESC đó ngay lập tức)
     void stop();
 
     // Getters
@@ -84,6 +85,8 @@ public:
     const char*    getDirectionStr() const   { return (_direction == MOTOR_DIR_CCW) ? "CCW" : "CW"; }
     uint16_t       getCurrentPulseUs() const { return _current_us; }
     uint16_t       getTargetPulseUs() const  { return _target_us; }
+    uint16_t       getMinPulseUs() const     { return _min_us; }
+    uint16_t       getMaxPulseUs() const     { return _max_us; }
     float          getThrottlePct() const    { return _throttle_pct; }
     bool           isAttached() const        { return _attached; }
 
@@ -94,6 +97,8 @@ private:
     uint32_t       _freq_hz;
     uint32_t       _period_us;
     uint32_t       _max_duty;
+    uint16_t       _min_us;
+    uint16_t       _max_us;
     uint16_t       _current_us;
     uint16_t       _target_us;
     float          _throttle_pct;

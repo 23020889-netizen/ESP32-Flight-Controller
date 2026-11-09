@@ -833,7 +833,7 @@
             wsUrl: 'ws://10.11.162.210:81/ws',
             mqttClient: null,
             mqttConnected: false,
-            mqttBrokerUrl: `ws://${(typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== '') ? window.location.hostname : '10.11.153.160'}:9001`,
+            mqttBrokerUrl: `ws://${(typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== '') ? window.location.hostname : '10.11.162.171'}:9001`,
             mqttTopicTelemetry: 'isilab/drone/telemetry',
             mqttTopicRc: 'isilab/drone/rc',
             mqttTopicCmd: 'isilab/drone/cmd',
@@ -2829,8 +2829,8 @@
                     const espMode = (selectedMode === 'direct') ? 'DIRECT_MANUAL' :
                                     (selectedMode === 'poshold') ? 'POSHOLD' : 'ALTITUDE';
                     sendHardwarePacket(`MODE,${espMode}\n`);
-                    // Tự động đồng bộ IP Broker MQTT hiện tại của PC (10.11.153.160:1883) xuống ESP32
-                    sendHardwarePacket(`MQTT,10.11.153.160,1883\n`);
+                    // Tự động đồng bộ IP Broker MQTT hiện tại của PC (10.11.162.171:1883) xuống ESP32
+                    sendHardwarePacket(`MQTT,10.11.162.171,1883\n`);
 
                     const badge = document.getElementById('wifiBadge');
                     const icon = document.getElementById('wifiIcon');
@@ -2984,7 +2984,7 @@ Nhập IP hoặc Host muốn kết nối:`, targetIp);
             const current = state.mqttBrokerUrl;
             const newUrl = prompt(`CẤU HÌNH KẾT NỐI KHÔNG DÂY MQTT:
 1. Local PC Broker: ws://127.0.0.1:9001 (khuyên dùng khi chạy 'start_mqtt_broker.bat')
-2. LAN Broker: ws://10.11.153.160:9001
+2. LAN Broker: ws://10.11.162.171:9001
 3. Public Cloud Broker: wss://broker.emqx.io:8084/mqtt
 4. Drone SoftAP Broker: ws://192.168.4.1:9001
 

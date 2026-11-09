@@ -102,8 +102,8 @@ void setup() {
     // 5. Initialize Flight Controller Supervisor
     flightManager.initialize();
 
-    // 6. Initialize Wi-Fi & MQTT (Auto-scan 'VNU-IS TTDBCLKT' + SoftAP + MQTT Broker 10.11.153.160:1883)
-    wifiControl.begin("VNU-IS TTDBCLKT", "Ttdbclkt9", "ISILAB_DRONE_AP", "isilab2026", "10.11.153.160", 1883);
+    // 6. Initialize Wi-Fi & MQTT (Auto-scan 'VNU-IS TTDBCLKT' + SoftAP + MQTT Broker 10.11.162.171:1883)
+    wifiControl.begin("VNU-IS TTDBCLKT", "Ttdbclkt9", "ISILAB_DRONE_AP", "isilab2026", "10.11.162.171", 1883);
 
     // 7. Create FreeRTOS Real-Time Tasks (Preemptive Multitasking)
     // Task 1: Flight Control (Priority 5 - Preempts all communication tasks)

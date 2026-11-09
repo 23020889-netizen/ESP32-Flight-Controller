@@ -556,16 +556,74 @@ void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t pa
             rcAcceptCount_++;
 
             static uint32_t lastRcPrint = 0;
-            if (now - lastRcPrint >= 1000) {
+            static float lastPThr = -999.0f, lastPRoll = -999.0f, lastPPitch = -999.0f, lastPYaw = -999.0f;
+            bool stickMoved = (fabsf(thr - lastPThr) >= 0.5f ||
+                               fabsf(roll - lastPRoll) >= 0.5f ||
+                               fabsf(pitch - lastPPitch) >= 0.5f ||
+                               fabsf(yaw - lastPYaw) >= 0.5f);
+
+            // In tức thì khi cần gạt di chuyển (tối đa 20 dòng/giây để không nghẽn UART),
+            // hoặc định kỳ mỗi 1000ms nếu giữ nguyên (Heartbeat)
+            if ((stickMoved && (now - lastRcPrint >= 50)) || (now - lastRcPrint >= 1000)) {
                 lastRcPrint = now;
-                Serial.printf("[RC_RX] Src:%s Sess:0x%08X Seq:%u T:%.1f R:%.1f P:%.1f Y:%.1f | ESC:%s MODE:%s\n",
-                              (source == RC_SOURCE_MQTT) ? "MQTT" : "WS",
-                              sessId, seq, thr, roll, pitch, yaw,
+                lastPThr = thr; lastPRoll = roll; lastPPitch = pitch; lastPYaw = yaw;
+
+                // Tính nhanh xung PWM tương ứng theo Quad-X Mixer
+                float basePulse = 1050.0f + (thr * 9.50f);
+                float dRoll  = roll * 1.8f;
+                float dPitch = pitch * 1.8f;
+                float dYaw   = yaw * 1.2f;
+                uint16_t p1 = (uint16_t)constrain(basePulse - dRoll - dPitch + dYaw, 1050.0f, 2000.0f);
+                uint16_t p2 = (uint16_t)constrain(basePulse + dRoll + dPitch + dYaw, 1050.0f, 2000.0f);
+                uint16_t p3 = (uint16_t)constrain(basePulse + dRoll - dPitch - dYaw, 1050.0f, 2000.0f);
+                uint16_t p4 = (uint16_t)constrain(basePulse - dRoll + dPitch - dYaw, 1050.0f, 2000.0f);
+
+                Serial.printf(">> [RC_STICK] Thr:%5.1f%% | Roll:%+5.1f%% | Pitch:%+5.1f%% | Yaw:%+5.1f%% | %s | PWM:[%u,%u,%u,%u]us (%s)\n",
+                              thr, roll, pitch, yaw,
                               esc.isArmed() ? "ARMED" : "DISARMED",
-                              (manager.getFlightMode() == FlightControlMode::DIRECT_MANUAL) ? "DIRECT_MANUAL" : "ALT_HOLD");
+                              p1, p2, p3, p4,
+                              (source == RC_SOURCE_MQTT) ? "MQTT" : "WS");
             }
             return;
         } else {
+            // Kiểm tra fallback cho Protocol V1: RC,<thr>,<roll>,<pitch>,<yaw>
+            char* v1Ptr = buf + 3;
+            float v1Thr = 0.0f, v1Roll = 0.0f, v1Pitch = 0.0f, v1Yaw = 0.0f;
+            if (parseFloatField(v1Ptr, v1Thr, ',') &&
+                parseFloatField(v1Ptr, v1Roll, ',') &&
+                parseFloatField(v1Ptr, v1Pitch, ',') &&
+                parseFloatField(v1Ptr, v1Yaw, '\0')) {
+                
+                v1Thr   = constrain(v1Thr, 0.0f, 100.0f);
+                v1Roll  = constrain(v1Roll, -100.0f, 100.0f);
+                v1Pitch = constrain(v1Pitch, -100.0f, 100.0f);
+                v1Yaw   = constrain(v1Yaw, -100.0f, 100.0f);
+
+                uint32_t now = millis();
+                RcSnapshot snap{};
+                snap.sessionId    = 0xCAFE0001;
+                snap.seq          = ++lastValidRcSeq_;
+                snap.receivedAtMs = now;
+                snap.throttle     = v1Thr;
+                snap.roll         = v1Roll;
+                snap.pitch        = v1Pitch;
+                snap.yaw          = v1Yaw;
+                snap.source       = source;
+                snap.valid        = true;
+
+                manager.updateRcSnapshot(snap);
+                lastRcPacketMs_ = now;
+                rcAcceptCount_++;
+
+                static uint32_t lastV1Print = 0;
+                if (now - lastV1Print >= 100) {
+                    lastV1Print = now;
+                    Serial.printf(">> [RC_STICK_V1] Thr:%5.1f%% | Roll:%+5.1f%% | Pitch:%+5.1f%% | Yaw:%+5.1f%% (%s)\n",
+                                  v1Thr, v1Roll, v1Pitch, v1Yaw, (source == RC_SOURCE_MQTT) ? "MQTT" : "WS");
+                }
+                return;
+            }
+
             // Version giao thức không tương thích
             rcRejectFormatCount_++;
             return;

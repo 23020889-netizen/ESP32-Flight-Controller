@@ -142,11 +142,12 @@ def main():
     stop_thread = False
 
     def serial_reader():
+        ignore_prefixes = ("[PX4_EKF]", "[ESC_QUAD]", "[MPU6050]", "[Xsens", "[PX4_PID]", "---------")
         while not stop_thread:
             try:
                 if ser.in_waiting > 0:
                     line = ser.readline().decode("utf-8", errors="ignore").strip()
-                    if line:
+                    if line and not line.startswith(ignore_prefixes):
                         print(f"\r[ESP32] {line:<75}")
                 else:
                     time.sleep(0.01)
@@ -302,7 +303,10 @@ def main():
                 else:
                     cmd = f"throttle {total_thr:.1f}"
 
-                if cmd != last_sent_cmd and (now - last_send_time >= 0.025 or total_thr == 0.0):
+                # Gửi ngay khi lệnh thay đổi (tối đa 40Hz) HOẶC gửi Heartbeat mỗi 0.5s để nuôi Watchdog 3s trên ESP32
+                state_changed = (cmd != last_sent_cmd) and (now - last_send_time >= 0.025 or total_thr == 0.0)
+                heartbeat_due = (now - last_send_time >= 0.5)
+                if state_changed or heartbeat_due:
                     send_cmd(cmd)
                     last_sent_cmd = cmd
                     last_send_time = now

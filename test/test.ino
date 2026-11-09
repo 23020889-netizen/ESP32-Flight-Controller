@@ -532,4 +532,18 @@ void loop() {
         String cmd = Serial.readStringUntil('\n');
         processCommand(cmd);
     }
+
+    // Phát gói Telemetry chuẩn 20Hz (50ms) để đồng bộ trực tiếp với Web 3D Monitor (WebSerial)
+    uint32_t nowMs = millis();
+    if (nowMs - lastTelemetryMs >= 50) {
+        lastTelemetryMs = nowMs;
+        Serial.println("[PX4_EKF] R:   0.0° P:   0.0° Y:   0.0° | Acc:[  0.00,  0.00,  9.81] | Gyr:[   0.0,   0.0,   0.0] (OPTIMAL)");
+        Serial.printf("[ESC_QUAD] State:%-8s | M1(P7-CCW):%4uus(%4.1f%%) | M2(P6-CCW):%4uus(%4.1f%%) | M3(P5-CW):%4uus(%4.1f%%) | M4(P4-CW):%4uus(%4.1f%%) @ %dHz\n",
+                      isArmed ? "ARMED" : "DISARMED",
+                      currentPulseUs[0], getMotorThrottlePct(0),
+                      currentPulseUs[1], getMotorThrottlePct(1),
+                      currentPulseUs[2], getMotorThrottlePct(2),
+                      currentPulseUs[3], getMotorThrottlePct(3),
+                      ESC_FREQ_HZ);
+    }
 }

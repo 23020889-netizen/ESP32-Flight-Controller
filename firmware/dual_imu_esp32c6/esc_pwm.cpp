@@ -193,23 +193,27 @@ bool QuadEscController::setFrequency(uint32_t freq_hz) {
 
 bool QuadEscController::arm() {
     if (_state == ESC_STATE_ARMED) {
-        Serial.println("[ESC_QUAD] Ca 4 dong co da o trang thai ARMED tu truoc!");
+        _last_cmd_ms = millis();
         return true;
     }
 
-    Serial.println("\n[ESC_QUAD] ========================================================");
-    Serial.println("[ESC_QUAD] >>> BAT DAU CHUOI MO KHOA DONG LOAT 4 ESC (ARMING)...");
-    Serial.println("[ESC_QUAD]     Phat xung 1000us trong 2s de ca 4 ESC nhan dien...");
-    Serial.println("[ESC_QUAD] ========================================================");
-
-    _state            = ESC_STATE_ARMING;
+    _state            = ESC_STATE_ARMED;
     _arming_start_ms  = millis();
     _last_cmd_ms      = millis();
-    _watchdog_enabled = false;
+    _watchdog_enabled = true;
 
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-        _motors[i].writePulseUs(_motors[i].getMinPulseUs()); // M1,2,4=1000us | M3=850us
+        _motors[i].writePulseUs(_motors[i].getMinPulseUs()); // M1,2,4=1000us | M3=850us (0% ga - đứng yên)
     }
+
+    Serial.println("\n[ESC_QUAD] ========================================================");
+    Serial.println("[ESC_QUAD] >>> CA 4 ESC DA MO KHOA HOAN TAT (ARMED)!");
+    Serial.printf("[ESC_QUAD]     Motor 1 (GPIO 7 - CCW - ESC Vang) : %u us (0%%)\n", _motors[0].getMinPulseUs());
+    Serial.printf("[ESC_QUAD]     Motor 2 (GPIO 6 - CCW - ESC Vang) : %u us (0%%)\n", _motors[1].getMinPulseUs());
+    Serial.printf("[ESC_QUAD]     Motor 3 (GPIO 5 - CW  - ESC Den)  : %u us (0%%)\n", _motors[2].getMinPulseUs());
+    Serial.printf("[ESC_QUAD]     Motor 4 (GPIO 4 - CW  - ESC Vang) : %u us (0%%)\n", _motors[3].getMinPulseUs());
+    Serial.println("[ESC_QUAD]     San sang nhan lenh dieu toc ngay lap tuc (0% - 100%)...");
+    Serial.println("[ESC_QUAD] ========================================================\n");
     return true;
 }
 

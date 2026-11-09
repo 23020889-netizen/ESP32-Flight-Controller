@@ -302,6 +302,7 @@ class DashboardApplicationController {
 
   startXboxGamepadLoop(setThrottle, setMotorTest) {
     let prevButtons = [];
+    let isGamepadArmed = false;
     let baseThrottle = 0;
     let activeMotor = 0; // 0 = All (Throttle), 1..4 = Motor 1..4
     let lastSentThrottle = -1;
@@ -323,20 +324,25 @@ class DashboardApplicationController {
 
         // Nút B (1) hoặc Back (8): DISARM / DỪNG KHẨN CẤP
         if (justPressed(1) || justPressed(8)) {
+          isGamepadArmed = false;
           baseThrottle = 0;
           lastSentThrottle = 0;
+          lastSendTime = performance.now();
           this.telemetryStore.sendCommand("disarm");
           setThrottle(0);
         }
         // Nút A (0): ARM
         else if (justPressed(0)) {
+          isGamepadArmed = true;
           baseThrottle = 0;
+          lastSentThrottle = 0;
+          lastSendTime = performance.now();
           this.telemetryStore.sendCommand("arm");
         }
 
         // RB (5) / LB (4): Tăng giảm ga giữ nền (+5% / -5%)
-        if (justPressed(5)) baseThrottle = Math.min(60, baseThrottle + 5);
-        if (justPressed(4)) baseThrottle = Math.max(0, baseThrottle - 5);
+        if (justPressed(5)) { isGamepadArmed = true; baseThrottle = Math.min(60, baseThrottle + 5); }
+        if (justPressed(4)) { baseThrottle = Math.max(0, baseThrottle - 5); }
 
         // D-Pad: Up(12)=M1, Right(15)=M2, Down(13)=M3, Left(14)=M4, Y(3)=ALL
         if (justPressed(12)) { activeMotor = 1; baseThrottle = 0; this.telemetryStore.sendCommand("m1"); }
@@ -352,7 +358,10 @@ class DashboardApplicationController {
         const totalThr = Math.min(60, Math.max(0, Math.round((baseThrottle + stickThr * 60) * 10) / 10));
 
         const now = performance.now();
-        if (Math.abs(totalThr - lastSentThrottle) >= 0.5 && (now - lastSendTime >= 40 || totalThr === 0)) {
+        const valueChanged = Math.abs(totalThr - lastSentThrottle) >= 0.5 && (now - lastSendTime >= 40 || totalThr === 0);
+        const heartbeatDue = (isGamepadArmed || totalThr > 0) && (now - lastSendTime >= 500);
+
+        if (valueChanged || heartbeatDue) {
           lastSentThrottle = totalThr;
           lastSendTime = now;
           if (activeMotor === 0) {

@@ -32,7 +32,7 @@
 #define ESC_M3_PULSE_MAX_US      1850     // Xung ga tối đa riêng cho Motor 3 - ESC Đen 40A (1850 µs = 100.0% Throttle)
 #define ESC_PULSE_IDLE_US        1050     // Xung ga quay chậm không tải (Idle Spin ~ 5%)
 
-#define ESC_ARMING_TIME_MS       500      // Thời gian đồng bộ mở khóa ESC (0.5s)
+#define ESC_ARMING_TIME_MS       0        // Mở khóa ARM tức thì (vì init() đã giữ mốc 0% từ lúc khởi động)
 #define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: Tự động ngắt ga về 0% nếu mất lệnh điều khiển quá 3s
 #define ESC_SLEW_RATE_US_PER_SEC 2500     // Tốc độ tăng giảm ga an toàn (Soft Ramp): 2500 µs/s
 

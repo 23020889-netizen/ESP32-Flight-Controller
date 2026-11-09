@@ -137,19 +137,10 @@ class TelemetryDataStore {
         this.currentRoll = parseFloat(mR[1]);
         this.currentPitch = parseFloat(mP[1]);
         this.currentYaw = parseFloat(mY[1]);
-
-        this.pushSample({
-          roll: this.currentRoll,
-          pitch: this.currentPitch,
-          yaw: this.currentYaw,
-          z: this.currentZ,
-          vz: this.currentVz,
-          m: this.currentMotors
-        });
       }
     }
-    // 2. Phân tích trạng thái động cơ:
-    // [ESC_QUAD] State:DISARMED | M1(P7-CCW): 900us( 0.0%) | M2(P6-CCW): 900us( 0.0%) | ...
+    // 2. Phân tích trạng thái động cơ (dòng cuối của mỗi chu kỳ Telemetry 20Hz):
+    // [ESC_QUAD] State:ARMED | M1(P7-CCW):1000us( 0.0%) | M2(P6-CCW):1000us( 0.0%) | M3(P5-CW): 850us( 0.0%) | M4(P4-CW):1000us( 0.0%) @ 50Hz
     else if (line.includes("[ESC_QUAD]")) {
       const pcts = [...line.matchAll(/\(\s*([-\d.]+)%\)/g)];
       if (pcts.length >= 4) {
@@ -160,6 +151,14 @@ class TelemetryDataStore {
           parseFloat(pcts[3][1]) * 10
         ];
       }
+      this.pushSample({
+        roll: this.currentRoll,
+        pitch: this.currentPitch,
+        yaw: this.currentYaw,
+        z: this.currentZ,
+        vz: this.currentVz,
+        m: this.currentMotors
+      });
     }
   }
 
@@ -181,7 +180,11 @@ class TelemetryDataStore {
       this.webSocketConnection = new WebSocket(endpointUrl);
       this.webSocketConnection.onmessage = (event) => {
         try {
-          this.pushSample(JSON.parse(event.data));
+          const parsed = JSON.parse(event.data);
+          // Bỏ qua các bản tin log thuần túy {"log":"..."} để không ghi đè góc 0 vào đồ thị 3D
+          if (parsed && (typeof parsed.roll === "number" || Array.isArray(parsed.m))) {
+            this.pushSample(parsed);
+          }
         } catch (_ignoredError) {}
       };
       this.webSocketConnection.onclose = () => {

@@ -193,8 +193,13 @@ void executeCommand(String cmd, const char* sourceTag) {
             }
             Serial.printf("[%s] Dat ga Motor %d: %.1f%%\n", sourceTag, activeTestMotor, pct);
         } else {
+            if (pct > 0.0f && quadMotors.getState() != ESC_STATE_ARMED) {
+                quadMotors.arm();
+                px4Controller.reset();
+                px4Controller.lockCurrentHeading(fusedData.yaw);
+            }
             px4Controller.setTargetThrottle(pct);
-            if (pct < 5.0f && quadMotors.getState() == ESC_STATE_ARMED) {
+            if (quadMotors.getState() == ESC_STATE_ARMED) {
                 quadMotors.setAllThrottlePct(pct);
             }
             Serial.printf("[%s] Dat muc ga tong the PX4: %.1f%%\n", sourceTag, pct);
@@ -420,9 +425,10 @@ void loop() {
                              fusedData.gx,   fusedData.gy,    fusedData.gz,
                              dt, isArmed);
 
-        // Chỉ khi đang Armed VÀ có mức ga bay (targetThrottle >= 5%):
+        // Chỉ khi đang Armed, có cảm biến IMU hoạt động VÀ có mức ga bay (targetThrottle >= 5%):
         // PID mới tính toán mô-men cân bằng và truyền xung vào 4 động cơ
-        if (isArmed && px4Controller.getTargetThrottle() >= 5.0f) {
+        bool hasImu = (mpuData.ready || xsensData.has_orientation);
+        if (isArmed && hasImu && px4Controller.getTargetThrottle() >= 5.0f) {
             const uint16_t* motor_us = px4Controller.getMotorOutputsUs();
             for (int i = 0; i < ESC_NUM_MOTORS; i++) {
                 quadMotors.setMotorThrottleUs(i + 1, motor_us[i]);

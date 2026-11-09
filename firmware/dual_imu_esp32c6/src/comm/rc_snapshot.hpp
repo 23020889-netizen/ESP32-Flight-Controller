@@ -21,3 +21,4 @@ struct RcSnapshot {
     RcTransportSource source;
     bool valid;
 };
+

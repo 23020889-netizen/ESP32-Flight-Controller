@@ -1,4 +1,5 @@
 #include "serial_telemetry_reporter.hpp"
+#include "../comm/wifi_control.hpp"
 #include <Arduino.h>
 
 SerialTelemetryReporter telemetryReporter;
@@ -19,28 +20,25 @@ void SerialTelemetryReporter::update(
     lastReportTimestampMs_ = currentTimeMs;
 
     Serial.println("-----------------------------------------------------------------------------------------------------------------");
-    if (mpuData.ready) {
-        Serial.printf("[MPU6050] R:%6.1f P:%6.1f Y:%6.1f | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f]\n",
-                      mpuData.roll, mpuData.pitch, mpuData.yaw,
-                      mpuData.ax, mpuData.ay, mpuData.az,
-                      mpuData.gx, mpuData.gy, mpuData.gz);
-    }
-    if (xsensData.has_orientation || xsensData.has_accel) {
-        Serial.printf("[Xsens  ] R:%6.1f P:%6.1f Y:%6.1f | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f]\n",
-                      xsensData.roll, xsensData.pitch, xsensData.yaw,
-                      xsensData.ax, xsensData.ay, xsensData.az,
-                      xsensData.gx, xsensData.gy, xsensData.gz);
-    }
-    Serial.printf("[PX4_EKF] R:%6.1f P:%6.1f Y:%6.1f | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f] (OPTIMAL)\n",
+    Serial.printf("[PX4_EKF FUSED] R:%6.1f P:%6.1f Y:%6.1f | Alt:%5.2fm Vz:%+5.2fm/s | Gyr:[%+5.1f,%+5.1f,%+5.1f] (100%% Fused Single-Source)\n",
                   fusedData.roll, fusedData.pitch, fusedData.yaw,
-                  fusedData.ax, fusedData.ay, fusedData.az,
+                  fusedData.altitudeZ, fusedData.velocityVz,
                   fusedData.gx, fusedData.gy, fusedData.gz);
 
     const char* modeStr = "MANUAL";
-    if (manager.getFlightMode() == FlightControlMode::ITSMC_ATTITUDE_HOLD) modeStr = "ITSMC_ATT";
+    if (manager.getFlightMode() == FlightControlMode::ALTITUDE_HOLD ||
+        manager.getFlightMode() == FlightControlMode::ITSMC_ATTITUDE_HOLD) modeStr = "ALT_HOLD";
+    else if (manager.getFlightMode() == FlightControlMode::DIRECT_MANUAL) modeStr = "DIRECT_RC";
     else if (manager.getFlightMode() == FlightControlMode::ITSMC_POSITION_HOLD) modeStr = "ITSMC_POS";
+    else if (manager.getFlightMode() == FlightControlMode::EMERGENCY_DISARM) modeStr = "EMERGENCY";
 
     const QuadMotorThrottleOutput& out = manager.getMotorOutputs();
+    float rcThrottle = 0.0f, rcRoll = 0.0f, rcPitch = 0.0f, rcYaw = 0.0f;
+    manager.getRcChannels(rcThrottle, rcRoll, rcPitch, rcYaw);
+    const char* escState = quadMotors.isArmed() ? "ARMED" : "DISARMED";
+    Serial.printf("[FC_INPUT] ESC:%s | RC T:%.1f R:%.1f P:%.1f Y:%.1f | Failsafe:%d\n",
+                  escState, rcThrottle, rcRoll, rcPitch, rcYaw,
+                  static_cast<int>(manager.getFailsafeLevel()));
     Serial.printf("[ITSMC_CTRL] Mode:%-10s | M1:%.1f%% | M2:%.1f%% | M3:%.1f%% | M4:%.1f%%\n",
                   modeStr,
                   out.motor1FrontRight * 100.0f,
@@ -55,5 +53,18 @@ void SerialTelemetryReporter::update(
                   quadMotors.getMotor(2).getCurrentPulseUs(),
                   quadMotors.getMotor(3).getCurrentPulseUs(),
                   quadMotors.getFrequency());
+
+    // Xuat JSON telemetry cho WebSerial UI de cap nhat do thi, dong bo IP va xung dong co truc quan
+    Serial.printf("{\"r\":%.2f,\"p\":%.2f,\"y\":%.2f,\"alt\":%.2f,\"vz\":%.2f,\"m1\":%d,\"m2\":%d,\"m3\":%d,\"m4\":%d,\"state\":\"%s\",\"mode\":\"%s\",\"arm\":%d,\"ip\":\"%s\"}\n",
+                  fusedData.roll, fusedData.pitch, fusedData.yaw,
+                  fusedData.altitudeZ, fusedData.velocityVz,
+                  quadMotors.getMotor(0).getCurrentPulseUs(),
+                  quadMotors.getMotor(1).getCurrentPulseUs(),
+                  quadMotors.getMotor(2).getCurrentPulseUs(),
+                  quadMotors.getMotor(3).getCurrentPulseUs(),
+                  quadMotors.getStateStr(),
+                  modeStr,
+                  quadMotors.isArmed() ? 1 : 0,
+                  wifiControl.getIpAddress().toString().c_str());
 }
 

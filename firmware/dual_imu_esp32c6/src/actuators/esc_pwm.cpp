@@ -122,20 +122,21 @@ void EscMotor::updateRamp(float dt) {
     }
 }
 
-void EscMotor::stop() {
-    _current_us   = ESC_PULSE_DISARM_US;
-    _target_us    = ESC_PULSE_DISARM_US;
+void EscMotor::stop(uint16_t disarm_us) {
+    _current_us   = disarm_us;
+    _target_us    = disarm_us;
     _throttle_pct = 0.0f;
-    ledcWrite(_pin, usToDuty(ESC_PULSE_DISARM_US));
+    ledcWrite(_pin, usToDuty(disarm_us));
 }
 
 // ============================================================================
 // OOP IMPLEMENTATION: QuadEscController
 // ============================================================================
 QuadEscController::QuadEscController()
-    : _state(ESC_STATE_UNINITIALIZED), _freq_hz(ESC_DEFAULT_FREQ_HZ),
+    : _state(ESC_STATE_UNINITIALIZED), _freq_hz(ESC_DEFAULT_FREQ_HZ), _disarmed_pulse_us(ESC_PULSE_DISARM_US),
       _arming_start_ms(0), _last_cmd_ms(0), _last_update_us(0),
-      _watchdog_enabled(false) {
+      _watchdog_enabled(false), _motor_test_end_ms(0), _motor_test_active(false),
+      _active_test_motor(0) {
 }
 
 bool QuadEscController::init(uint32_t freq_hz) {
@@ -186,30 +187,31 @@ bool QuadEscController::arm() {
         return true;
     }
 
-    Serial.println("\n[ESC_QUAD] ========================================================");
-    Serial.println("[ESC_QUAD] >>> BAT DAU CHUOI MO KHOA DONG LOAT 4 ESC (ARMING)...");
-    Serial.println("[ESC_QUAD]     Phat xung 1000us trong 2s de ca 4 ESC nhan dien...");
-    Serial.println("[ESC_QUAD] ========================================================");
-
-    _state            = ESC_STATE_ARMING;
+    _state            = ESC_STATE_ARMED;
     _arming_start_ms  = millis();
     _last_cmd_ms      = millis();
-    _watchdog_enabled = false;
+    _watchdog_enabled = true;
 
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-        _motors[i].writePulseUs(ESC_PULSE_MIN_US); // 1000 µs
+        _motors[i].setTargetPulseUs(ESC_PULSE_IDLE_US); // 1050 µs idle spin
     }
+
+    Serial.println("\n[ESC_QUAD] ========================================================");
+    Serial.println("[ESC_QUAD] >>> CA 4 ESC DA MO KHOA TUC THI (ARMED)! Idle 1050us.");
+    Serial.println("[ESC_QUAD] ========================================================\n");
     return true;
 }
 
 void QuadEscController::disarm() {
-    _state            = ESC_STATE_DISARMED;
-    _watchdog_enabled = false;
+    _state             = ESC_STATE_DISARMED;
+    _motor_test_active = false;
+    _active_test_motor = 0;
+    _watchdog_enabled  = false;
 
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-        _motors[i].stop(); // 900 µs
+        _motors[i].stop(_disarmed_pulse_us);
     }
-    Serial.println("[ESC_QUAD] >>> DA KHOA AN TOAN CA 4 DONG CO (DISARMED)! Xung ve 900us.");
+    Serial.printf("[ESC_QUAD] >>> DA KHOA AN TOAN CA 4 DONG CO (DISARMED)! Xung ve %dus.\n", _disarmed_pulse_us);
 }
 
 bool QuadEscController::setAllThrottlePct(float pct) {
@@ -218,6 +220,8 @@ bool QuadEscController::setAllThrottlePct(float pct) {
         return false;
     }
 
+    _motor_test_active = false;
+    _active_test_motor = 0;
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
         _motors[i].setTargetThrottlePct(pct);
     }
@@ -232,6 +236,8 @@ bool QuadEscController::setAllThrottleUs(uint16_t pulse_us) {
         return false;
     }
 
+    _motor_test_active = false;
+    _active_test_motor = 0;
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
         _motors[i].setTargetPulseUs(pulse_us);
     }
@@ -247,6 +253,11 @@ bool QuadEscController::setMotorThrottlePct(uint8_t motor_id, float pct) {
     }
     if (motor_id < 1 || motor_id > ESC_NUM_MOTORS) {
         Serial.printf("[ESC_QUAD] ID dong co khong hop le: %d (Chi ho tro 1..4)\n", motor_id);
+        return false;
+    }
+
+    // Nếu đang test motor riêng lẻ khác, bỏ qua để không làm quay motor ngoài ý muốn
+    if (_motor_test_active && motor_id != _active_test_motor) {
         return false;
     }
 
@@ -266,9 +277,44 @@ bool QuadEscController::setMotorThrottleUs(uint8_t motor_id, uint16_t pulse_us) 
         return false;
     }
 
+    if (_motor_test_active && motor_id != _active_test_motor) {
+        return false;
+    }
+
     _motors[motor_id - 1].setTargetPulseUs(pulse_us);
     _last_cmd_ms      = millis();
     _watchdog_enabled = true;
+    return true;
+}
+
+bool QuadEscController::testSingleMotor(uint8_t motor_id, float pct, uint32_t duration_ms) {
+    if (motor_id < 1 || motor_id > ESC_NUM_MOTORS) {
+        Serial.printf("[ESC_QUAD] ID motor khong hop le: %d (Chi ho tro 1..4)\n", motor_id);
+        return false;
+    }
+
+    // Nếu đang DISARMED, tự động chuyển sang ARMED để cho phép test motor
+    if (_state != ESC_STATE_ARMED) {
+        _state = ESC_STATE_ARMED;
+    }
+
+    _motor_test_active = true;
+    _active_test_motor = motor_id;
+    _motor_test_end_ms = millis() + duration_ms;
+    _last_cmd_ms       = millis();
+    _watchdog_enabled  = false; // Tạm tắt watchdog mất kết nối khi đang test
+
+    // Dừng triệt để tất cả các motor khác về MIN 1000us để ĐỨNG YÊN HOÀN TOÀN (0 RPM)
+    for (int i = 0; i < ESC_NUM_MOTORS; i++) {
+        if (i == (motor_id - 1)) {
+            _motors[i].setTargetThrottlePct(pct);
+        } else {
+            _motors[i].setTargetPulseUs(ESC_PULSE_MIN_US); // 1000us -> Dừng hẳn (0 RPM)
+        }
+    }
+
+    Serial.printf("[ESC_TEST] >>> DANG TEST MOTOR %d o %.1f%% ga trong %u ms (3 motor con lai: DUNG YEN 1000us / 0 RPM)\n",
+                  motor_id, pct, duration_ms);
     return true;
 }
 
@@ -279,29 +325,25 @@ void QuadEscController::update() {
     _last_update_us = now_us;
     if (dt <= 0.0f || dt > 0.1f) dt = 0.005f;
 
-    // A. Quản lý trạng thái Arming (2 giây giữ 1000µs cho cả 4 ESC)
-    if (_state == ESC_STATE_ARMING) {
-        for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-            _motors[i].writePulseUs(ESC_PULSE_MIN_US);
-        }
-
-        if (now_ms - _arming_start_ms >= ESC_ARMING_TIME_MS) {
-            _state            = ESC_STATE_ARMED;
-            _last_cmd_ms      = now_ms;
-            _watchdog_enabled = true;
-
+    // Kiểm tra hết thời gian Motor Test tự động ngắt
+    if (_motor_test_active) {
+        if (now_ms >= _motor_test_end_ms) {
+            _motor_test_active = false;
+            _active_test_motor = 0;
             for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-                _motors[i].setTargetPulseUs(ESC_PULSE_IDLE_US); // 1050 µs (~5% ga quay không tải)
+                _motors[i].setTargetPulseUs(ESC_PULSE_MIN_US);
             }
+            Serial.println("[ESC_TEST] >>> Ket thuc thoi gian test motor! Da dung toan bo dong co.");
+        }
+    }
 
-            Serial.println("\n[ESC_QUAD] ========================================================");
-            Serial.println("[ESC_QUAD] >>> CA 4 ESC DA MO KHOA HOAN TAT (ARMED)!");
-            Serial.println("[ESC_QUAD]     Motor 1 (GPIO 7 - CCW) : Idle 1050us");
-            Serial.println("[ESC_QUAD]     Motor 2 (GPIO 6 - CCW) : Idle 1050us");
-            Serial.println("[ESC_QUAD]     Motor 3 (GPIO 5 - CW)  : Idle 1050us");
-            Serial.println("[ESC_QUAD]     Motor 4 (GPIO 4 - CW)  : Idle 1050us");
-            Serial.println("[ESC_QUAD]     San sang nhan lenh dieu toc (0% - 100%)...");
-            Serial.println("[ESC_QUAD] ========================================================\n");
+    // A. Quản lý trạng thái Arming (tức thì)
+    if (_state == ESC_STATE_ARMING) {
+        _state            = ESC_STATE_ARMED;
+        _last_cmd_ms      = now_ms;
+        _watchdog_enabled = true;
+        for (int i = 0; i < ESC_NUM_MOTORS; i++) {
+            _motors[i].setTargetPulseUs(ESC_PULSE_IDLE_US);
         }
         return;
     }
@@ -325,7 +367,7 @@ void QuadEscController::update() {
     // C. Khóa an toàn DISARMED / FAILSAFE
     if (_state == ESC_STATE_DISARMED || _state == ESC_STATE_FAILSAFE) {
         for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-            _motors[i].stop();
+            _motors[i].stop(_disarmed_pulse_us);
         }
         return;
     }

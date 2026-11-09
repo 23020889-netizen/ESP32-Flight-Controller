@@ -32,8 +32,7 @@ public:
 
 private:
     uint32_t lastReportTimestampMs_;
-    static constexpr uint32_t REPORT_INTERVAL_MS = 50; // 20 Hz
+    static constexpr uint32_t REPORT_INTERVAL_MS = 1000; // 1 Hz (Tranh nghen UART TX buffer, giai phong CPU cho vong lap 200Hz)
 };
 
 extern SerialTelemetryReporter telemetryReporter;
-

@@ -10,14 +10,18 @@ QuadMotorThrottleOutput QuadrotorMotorMixer::computeMixer(
     float pitchTorque,
     float yawTorque
 ) {
-    // Quad-X mixer matrix equations matching PX4 airframe
+    // Quad-X Mixer Matrix chuẩn PX4 / Multirotor:
+    // Động cơ 1: M1 Front-Right (+X, +Y, CCW) -> -roll +pitch +yaw
+    // Động cơ 2: M2 Rear-Left   (-X, -Y, CCW) -> +roll -pitch +yaw
+    // Động cơ 3: M3 Front-Left  (-X, +Y, CW)  -> +roll +pitch -yaw
+    // Động cơ 4: M4 Rear-Right  (+X, -Y, CW)  -> -roll -pitch -yaw
     float motorRaw[4];
-    motorRaw[0] = normalizedThrust - rollTorque + pitchTorque - yawTorque; // M1 Front-Right (CCW)
-    motorRaw[1] = normalizedThrust + rollTorque - pitchTorque - yawTorque; // M2 Rear-Left   (CCW)
-    motorRaw[2] = normalizedThrust + rollTorque + pitchTorque + yawTorque; // M3 Front-Left  (CW)
-    motorRaw[3] = normalizedThrust - rollTorque - pitchTorque + yawTorque; // M4 Rear-Right  (CW)
+    motorRaw[0] = normalizedThrust - rollTorque + pitchTorque + yawTorque; // M1 Front-Right (CCW)
+    motorRaw[1] = normalizedThrust + rollTorque - pitchTorque + yawTorque; // M2 Rear-Left   (CCW)
+    motorRaw[2] = normalizedThrust + rollTorque + pitchTorque - yawTorque; // M3 Front-Left  (CW)
+    motorRaw[3] = normalizedThrust - rollTorque - pitchTorque - yawTorque; // M4 Rear-Right  (CW)
 
-    // Anti-saturation: find minimum and maximum motor demands
+    // Anti-saturation: tìm giá trị nhỏ nhất và lớn nhất
     float minimumMotor = motorRaw[0];
     float maximumMotor = motorRaw[0];
     for (int i = 1; i < 4; ++i) {
@@ -25,7 +29,7 @@ QuadMotorThrottleOutput QuadrotorMotorMixer::computeMixer(
         if (motorRaw[i] > maximumMotor) maximumMotor = motorRaw[i];
     }
 
-    // Shift thrust if below zero to prevent motor cutoff during active attitude control
+    // Dịch chuyển tổng thể nếu có motor bị âm để không ngắt động cơ khi cân bằng góc
     if (minimumMotor < 0.0f) {
         float upwardOffset = -minimumMotor;
         for (int i = 0; i < 4; ++i) {
@@ -34,7 +38,7 @@ QuadMotorThrottleOutput QuadrotorMotorMixer::computeMixer(
         maximumMotor += upwardOffset;
     }
 
-    // Scale down if exceeding maximum throttle while preserving control torque balance
+    // Tỉ lệ hóa nếu vượt quá 1.0 (100% throttle) để bảo toàn moment cân bằng góc
     if (maximumMotor > 1.0f) {
         float scaleFactor = 1.0f / maximumMotor;
         for (int i = 0; i < 4; ++i) {
@@ -49,4 +53,3 @@ QuadMotorThrottleOutput QuadrotorMotorMixer::computeMixer(
     output.motor4RearRight  = std::max(0.0f, std::min(1.0f, motorRaw[3]));
     return output;
 }
-

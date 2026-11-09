@@ -22,14 +22,14 @@
 #define ESC_PX4_FREQ_HZ          400      // 400 Hz: Chuẩn PX4 Multirotor (Chu kỳ 2500 µs)
 #define ESC_RESOLUTION_BITS      14       // Độ phân giải phần cứng 14-bit (16384 nấc, bước nhảy siêu mịn 0.15 µs)
 
-// CHUẨN PX4: PWM_DISARMED = 900 µs (Chống triệt để lỗi kêu bíp bíp liên tục khi cắm nguồn)
-#define ESC_PULSE_DISARM_US      900      // Xung an toàn tuyệt đối khi Disarm (900 µs chuẩn PX4)
+// CHUẨN PX4: PWM_DISARMED = 900 µs (hoặc 1000 µs cho ESC SimonK/BLHeli cấu hình riêng)
+#define ESC_PULSE_DISARM_US      900      // Mặc định chuẩn PX4 Disarm
 #define ESC_PULSE_MIN_US         1000     // Xung ga tối thiểu (1000 µs = 0.0% Throttle)
 #define ESC_PULSE_MAX_US         2000     // Xung ga tối đa (2000 µs = 100.0% Throttle)
 #define ESC_PULSE_IDLE_US        1050     // Xung ga quay chậm không tải sau khi Arm (Idle Spin 1050 µs ~ 5%)
 
-#define ESC_ARMING_TIME_MS       2000     // Thời gian giữ 1000µs để ESC bíp nhận lệnh mở khóa (2s)
-#define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: Tự động ngắt ga về 900µs nếu mất lệnh điều khiển quá 3s
+#define ESC_ARMING_TIME_MS       0        // Mở khóa ARM tức thì (0ms) - Phản ứng ngay lập tức khi bấm nút ARM
+#define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: Tự động ngắt ga nếu mất lệnh điều khiển quá 3s
 #define ESC_SLEW_RATE_US_PER_SEC 1500     // Tốc độ tăng giảm ga an toàn (Soft Ramp): 1500 µs/s
 
 // ============================================================================
@@ -42,7 +42,7 @@ enum MotorDirection {
 
 enum EscState {
     ESC_STATE_UNINITIALIZED = 0,
-    ESC_STATE_DISARMED,       // Động cơ bị khóa an toàn (xung 900µs, không nhận lệnh ga)
+    ESC_STATE_DISARMED,       // Động cơ bị khóa an toàn (xung disarm, không nhận lệnh ga)
     ESC_STATE_ARMING,         // Đang gửi chuỗi xung 1000µs chờ ESC phát tiếng bíp sẵn sàng
     ESC_STATE_ARMED,          // Đã mở khóa, cho phép điều khiển ga 0% - 100%
     ESC_STATE_CALIBRATION,    // Chế độ hiệu chuẩn hành trình ga Max/Min
@@ -74,8 +74,8 @@ public:
     // Cập nhật tốc độ tăng ga từ từ (Soft Ramp Limiter)
     void updateRamp(float dt);
 
-    // Dừng khẩn cấp động cơ (xuất 900 µs ngay lập tức)
-    void stop();
+    // Dừng khẩn cấp động cơ (xuất xung disarm an toàn)
+    void stop(uint16_t disarm_us = ESC_PULSE_DISARM_US);
 
     // Getters
     uint8_t        getId() const             { return _id; }
@@ -118,8 +118,12 @@ public:
     // Bắt đầu chuỗi mở khóa an toàn (Arming) chuẩn PX4
     bool arm();
 
-    // Khóa an toàn khẩn cấp cả 4 động cơ (ngắt ga về 900µs)
+    // Khóa an toàn khẩn cấp cả 4 động cơ (ngắt ga về _disarmed_pulse_us)
     void disarm();
+
+    // Cấu hình linh hoạt mức xung Disarm (900µs chuẩn PX4 hoặc 1000µs chuẩn SimonK/BLHeli)
+    void setDisarmPulseUs(uint16_t us) { _disarmed_pulse_us = us; }
+    uint16_t getDisarmPulseUs() const   { return _disarmed_pulse_us; }
 
     // Đặt ga đồng loạt cả 4 động cơ theo phần trăm (0.0% .. 100.0%)
     bool setAllThrottlePct(float pct);
@@ -130,6 +134,9 @@ public:
     // Đặt ga riêng cho từng động cơ (motor_id: 1, 2, 3, 4)
     bool setMotorThrottlePct(uint8_t motor_id, float pct);
     bool setMotorThrottleUs(uint8_t motor_id, uint16_t pulse_us);
+
+    // Test riêng 1 motor độc lập chuẩn QGC (các motor khác đứng yên tuyệt đối 1000us)
+    bool testSingleMotor(uint8_t motor_id, float pct, uint32_t duration_ms = 3000);
 
     // Cập nhật vòng lặp loop() cho FSM, Soft Ramp và Watchdog
     void update();
@@ -147,15 +154,22 @@ public:
     uint32_t        getFrequency() const     { return _freq_hz; }
     const EscMotor& getMotor(uint8_t index) const; // index 0..3 (tương ứng Motor 1..4)
     EscMotor&       getMotor(uint8_t index);
+    bool            isMotorTestActive() const { return _motor_test_active; }
+    uint8_t         getActiveTestMotor() const { return _active_test_motor; }
+    bool            isArmed() const          { return _state == ESC_STATE_ARMED; }
 
 private:
     EscMotor _motors[ESC_NUM_MOTORS];
     EscState _state;
     uint32_t _freq_hz;
+    uint16_t _disarmed_pulse_us;
     uint32_t _arming_start_ms;
     uint32_t _last_cmd_ms;
     uint32_t _last_update_us;
     bool     _watchdog_enabled;
+    uint32_t _motor_test_end_ms;
+    bool     _motor_test_active;
+    uint8_t  _active_test_motor;
 };
 
 // Đối tượng Controller toàn cục

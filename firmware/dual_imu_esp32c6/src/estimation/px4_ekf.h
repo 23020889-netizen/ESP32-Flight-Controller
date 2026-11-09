@@ -11,8 +11,10 @@ struct FusedData {
     float pitch;      // Góc Pitch tối ưu (độ)
     float yaw;        // Góc Yaw tối ưu (độ)
     float q[4];       // Quaternion trạng thái [q0, q1, q2, q3]
-    float ax, ay, az; // Gia tốc dung hợp (m/s^2)
+    float ax, ay, az; // Gia tốc dung hợp hệ thân (m/s^2)
     float gx, gy, gz; // Vận tốc góc dung hợp (deg/s)
+    float altitudeZ;  // Độ cao ước tính quán tính (m)
+    float velocityVz; // Vận tốc thẳng đứng ước tính (m/s)
 };
 
 class PX4_EKF {
@@ -31,16 +33,28 @@ public:
     // Lấy góc Euler hiện tại
     void getEuler(float &r, float &p, float &y) const;
 
+    // Reset ước tính độ cao
+    void resetAltitude();
+
 private:
     float state_q[4];      // State Quaternion [q0, q1, q2, q3]
     float covP[3];         // Error covariance diagonal for roll, pitch, yaw [rad^2]
     float covQ[3];         // Process noise covariance (Gyro drift)
     float covR_acc;        // Measurement noise covariance (Gravity vector)
-    float covR_xsens;      // Measurement noise covariance Xsens (rất nhỏ -> hệ số tin cậy cao)
+    float covR_xsens;      // Measurement noise covariance Xsens
     float covR_mpu;        // Measurement noise covariance MPU
 
     float weight_xsens;    // Trọng số Xsens (mặc định 0.85)
     float weight_mpu;      // Trọng số MPU (mặc định 0.15)
+
+    // Bộ lọc làm mịn góc mượt mà chống rung động cơ
+    float smooth_roll;
+    float smooth_pitch;
+    float smooth_yaw;
+
+    // Ước lượng độ cao & vận tốc thẳng đứng
+    float estimated_vz;
+    float estimated_z;
 
     uint32_t last_time_us;
     bool is_initialized;
@@ -51,4 +65,3 @@ private:
 };
 
 #endif // PX4_EKF_H
-

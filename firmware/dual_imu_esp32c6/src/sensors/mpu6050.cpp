@@ -58,10 +58,10 @@ bool mpu6050_init(uint8_t sda_pin, uint8_t scl_pin, uint32_t freq) {
     writeReg(0x1C, 0x00);
     // Gyro +/- 250 deg/s
     writeReg(0x1B, 0x00);
-    // DLPF 42Hz Bandwidth
-    writeReg(0x1A, 0x03);
-    // Sample Rate Divider (200Hz)
-    writeReg(0x19, 0x04);
+    // DLPF 188Hz Bandwidth (Giam do tre filter xuong chi con 1.9ms)
+    writeReg(0x1A, 0x01);
+    // Sample Rate Divider: 1000Hz / (1 + 1) = 500Hz lay mau IMU cuc nhanh
+    writeReg(0x19, 0x01);
 
     delay(20);
     is_ready = true;

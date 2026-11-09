@@ -16,6 +16,9 @@ test_audio.mp3
 vio_trajectory_6dof.csv
 test_trajectory.csv
 
+# Local scratch directory
+scratch/
+
 # IDE & OS files
 .vscode/
 .idea/

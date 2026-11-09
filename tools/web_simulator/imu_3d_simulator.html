@@ -8,6 +8,13 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Three.js r128 -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- MQTT.js Client for Browser WebSockets (Local + CDN Fallback) -->
+    <script src="./mqtt.min.js"></script>
+    <script>
+        if (typeof mqtt === 'undefined') {
+            document.write('<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"><\/script>');
+        }
+    </script>
     <!-- Google Fonts: Inter & JetBrains Mono -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -242,12 +249,13 @@
                     <span id="dataSourceBadge" class="px-2 py-0.5 rounded-full bg-blue-950 text-blue-400 border border-blue-500/30 text-[10px] font-bold">■ SIM DEMO</span>
                 </div>
 
-                <!-- USB Serial Link (Clickable Button) -->
-                <button id="usbSerialBtn" onclick="connectWebSerial()" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-space-950/90 border border-slate-800 hover:border-emerald-500/50 text-slate-300 hover:text-emerald-300 transition cursor-pointer" title="Cắm cáp USB trực tiếp vào PC (115200 baud)">
-                    <svg id="serialIcon" class="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <!-- MQTT Wireless Link (Clickable Button / Config) -->
+                <button id="mqttLinkBtn" onclick="toggleOrConfigMqtt()" class="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-space-950/90 border border-slate-800 hover:border-emerald-500/50 transition cursor-pointer" title="Nhấn để cấu hình hoặc kết nối lại MQTT Broker">
+                    <svg id="mqttIcon" class="w-3.5 h-3.5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
                     </svg>
-                    <span id="serialStatusText">USB Serial</span>
+                    <span id="mqttBrokerText" class="text-emerald-300 font-bold">MQTT: Local</span>
+                    <span id="mqttBadge" class="px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 border border-rose-500/30 text-[10px] font-semibold">Offline</span>
                 </button>
 
                 <!-- Battery Voltage -->
@@ -823,9 +831,12 @@
             ws: null,
             wsConnected: false,
             wsUrl: 'ws://10.11.162.210:81/ws',
-            serialPort: null,
-            serialWriter: null,
-            serialConnected: false,
+            mqttClient: null,
+            mqttConnected: false,
+            mqttBrokerUrl: 'ws://10.11.162.171:9001',
+            mqttTopicTelemetry: 'isilab/drone/telemetry',
+            mqttTopicRc: 'isilab/drone/rc',
+            mqttTopicCmd: 'isilab/drone/cmd',
             gamepadConnected: false,
             gamepadMapping: '',
             gamepadAxes: [],
@@ -2200,7 +2211,7 @@
 
             // Luon luon cap nhat state.throttle de HUD Card the hien dung vi tri can ga
             state.throttle = thrPct / 100.0;
-            if (!state.wsConnected && !state.serialConnected) {
+            if (!state.wsConnected && !state.mqttConnected) {
                 state.targetRoll = rollPct * 0.28;
                 state.targetPitch = pitchPct * 0.28;
                 state.targetYawRate = yawPct * 0.65;
@@ -2241,7 +2252,7 @@
                 }
 
                 state.throttle = rawThr / 100.0;
-                if (!state.wsConnected && !state.serialConnected) {
+                if (!state.wsConnected && !state.mqttConnected) {
                     state.targetRoll = rollPct * 0.28;
                     state.targetPitch = pitchPct * 0.28;
                     state.targetYawRate = yawPct * 0.65;
@@ -2266,7 +2277,7 @@
             const prevPitch = state.pitch;
             const prevYaw = state.yaw;
 
-            const hardwareLive = state.wsConnected || state.serialConnected || (Date.now() - (state.lastHardwarePacketMs || 0) < 1500);
+            const hardwareLive = state.wsConnected || state.mqttConnected || (Date.now() - (state.lastHardwarePacketMs || 0) < 1500);
 
             if (!hardwareLive) {
                 // CHỈ CHẠY MÔ PHỎNG GIẢ LẬP KHI KHÔNG CÓ PHẦN CỨNG THẬT ĐANG TRUYỀN DỮ LIỆU
@@ -2360,8 +2371,8 @@
             state.velocityVz = (state.throttle - 0.50) * 1.5;
             state.altitudeZ = Math.max(0.0, Math.min(15.0, state.altitudeZ + state.velocityVz * dt));
 
-            // X-Quadcopter Mixer: Chỉ chạy mô phỏng khi KHÔNG có kết nối phần cứng thật (WebSocket/WebSerial)!
-            if (!state.hardwareLive && !state.wsConnected && !state.serialConnected) {
+            // X-Quadcopter Mixer: Chỉ chạy mô phỏng khi KHÔNG có kết nối phần cứng thật (WebSocket/MQTT)!
+            if (!state.hardwareLive && !state.wsConnected && !state.mqttConnected) {
                 if (state.armed) {
                     if (state.mode !== 'csv') {
                         const basePulse = 1050 + state.throttle * 850;
@@ -2614,23 +2625,24 @@
         // ==================== LOWER-LAYER ESP32 HARDWARE & NETWORK ENGINE ====================
         function sendHardwarePacket(pkt) {
             const sentVia = [];
+            // 1. Giao thức MQTT không dây (Chuẩn giao thức chính)
+            if (state.mqttClient && state.mqttConnected) {
+                const topic = pkt.startsWith('RC,') ? state.mqttTopicRc : state.mqttTopicCmd;
+                state.mqttClient.publish(topic, pkt.trim(), { qos: 0 });
+                sentVia.push('mqtt');
+            }
+            // 2. Giao thức WebSocket không dây (Dự phòng P2P)
             if (state.ws && state.ws.readyState === WebSocket.OPEN) {
-                // Bỏ gói RC đang cũ nếu socket bị nghẽn, nhưng vẫn cho phép
-                // đường Serial gửi gói và tránh return trước phần Serial.
                 if (!(state.ws.bufferedAmount > 4096 && pkt.startsWith('RC,'))) {
                     state.ws.send(pkt);
                     sentVia.push('websocket');
                 }
             }
-            if (state.serialWriter) {
-                state.serialWriter.write(pkt).catch(() => {});
-                sentVia.push('serial');
-            }
             if (pkt.startsWith('RC,') && sentVia.length) {
                 const now = performance.now();
                 if (now - state.lastRcTxLogMs >= 1000) {
                     state.lastRcTxLogMs = now;
-                    console.info('[RC_TX]', {
+                    console.info('[RC_TX_WIRELESS]', {
                         throttle: state.rcInput.throttle,
                         roll: state.rcInput.roll,
                         pitch: state.rcInput.pitch,
@@ -2685,8 +2697,8 @@
         }
 
         function armMotors() {
-            if (!state.wsConnected && !state.serialConnected) {
-                showToast('⚠️ CHƯA KẾT NỐI VỚI DRONE! Hãy kiểm tra Wi-Fi (10.11.162.210 hoặc SoftAP 192.168.4.1), hoặc cắm cáp USB rồi bấm "USB Serial"!', 4500);
+            if (!state.wsConnected && !state.mqttConnected) {
+                showToast('⚠️ CHƯA KẾT NỐI KHÔNG DÂY! Hãy kiểm tra Wi-Fi hoặc kết nối MQTT Broker!', 4500);
                 return;
             }
             if (state.armed) return;
@@ -2865,61 +2877,116 @@ Nhập IP hoặc Host muốn kết nối:`, targetIp);
             }
         }
 
-        // WebSerial USB Client (115200 baud)
-        async function connectWebSerial() {
-            if (!('serial' in navigator)) {
-                showToast('WebSerial is not supported in this browser. Use Chrome or Edge Desktop!');
+        // ==================== WIRELESS MQTT CLIENT ENGINE ====================
+        let mqttReconnectTimer = null;
+
+        function connectMqtt(customUrl) {
+            if (customUrl) state.mqttBrokerUrl = customUrl;
+            if (typeof mqtt === 'undefined') {
+                console.warn('[MQTT] mqtt.js library not loaded yet; will retry...');
+                setTimeout(() => connectMqtt(customUrl), 1000);
                 return;
             }
+            if (state.mqttClient) {
+                try { state.mqttClient.end(true); } catch(e) {}
+                state.mqttClient = null;
+            }
+
+            const badge = document.getElementById('mqttBadge');
+            const icon = document.getElementById('mqttIcon');
+            if (badge) {
+                badge.textContent = 'Đang nối...';
+                badge.className = 'px-1.5 py-0.2 rounded bg-amber-950 text-amber-400 border border-amber-500/30 text-[10px] font-semibold';
+            }
+            if (icon) icon.className = 'w-3.5 h-3.5 text-amber-400 animate-pulse';
+
             try {
-                const port = await navigator.serial.requestPort();
-                await port.open({ baudRate: 115200 });
-                state.serialPort = port;
+                console.info(`[MQTT] Connecting to broker: ${state.mqttBrokerUrl}...`);
+                const client = mqtt.connect(state.mqttBrokerUrl, {
+                    clientId: 'GCS_Web_' + Math.random().toString(16).substr(2, 8),
+                    reconnectPeriod: 2500,
+                    connectTimeout: 5000,
+                    clean: true
+                });
+                state.mqttClient = client;
 
-                const encoder = new TextEncoderStream();
-                encoder.readable.pipeTo(port.writable);
-                state.serialWriter = encoder.writable.getWriter();
-                state.serialConnected = true;
+                client.on('connect', () => {
+                    state.mqttConnected = true;
+                    console.info(`[MQTT] Connected successfully to ${state.mqttBrokerUrl}`);
+                    if (badge) {
+                        badge.textContent = 'Online';
+                        badge.className = 'px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-400 border border-emerald-500/30 text-[10px] font-semibold';
+                    }
+                    if (icon) icon.className = 'w-3.5 h-3.5 text-emerald-400';
+                    showToast(`🟢 ĐÃ KẾT NỐI MQTT BROKER: ${state.mqttBrokerUrl}!`, 4000);
 
-                const btn = document.getElementById('usbSerialBtn');
-                const icon = document.getElementById('serialIcon');
-                const txt = document.getElementById('serialStatusText');
-                if (btn) btn.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 text-xs transition cursor-pointer';
-                if (icon) icon.className = 'w-3.5 h-3.5 text-emerald-400';
-                if (txt) txt.textContent = 'USB Online';
+                    // Subscribe các topic nhận từ Drone
+                    client.subscribe(state.mqttTopicTelemetry, { qos: 0 }, (err) => {
+                        if (!err) console.info(`[MQTT] Đã đăng ký topic telemetry: ${state.mqttTopicTelemetry}`);
+                    });
+                    client.subscribe('isilab/drone/status', { qos: 0 });
+                });
 
-                showToast('Connected to ESP32-C6 via USB Serial 115200 baud!');
+                client.on('message', (topic, message) => {
+                    if (topic === state.mqttTopicTelemetry) {
+                        handleIncomingHardwareData(message.toString());
+                    } else if (topic === 'isilab/drone/status') {
+                        console.info('[MQTT] Drone Status Message:', message.toString());
+                    }
+                });
 
-                const decoder = new TextDecoderStream();
-                port.readable.pipeTo(decoder.writable);
-                const reader = decoder.readable.getReader();
-                let buffer = '';
+                client.on('error', (err) => {
+                    console.warn('[MQTT Error]', err);
+                });
 
-                while (true) {
-                    const { value, done } = await reader.read();
-                    if (done) break;
-                    buffer += value;
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-                    for (const line of lines) {
-                        const trimmed = line.trim();
-                        if (trimmed) handleIncomingHardwareData(trimmed);
+                client.on('offline', () => {
+                    state.mqttConnected = false;
+                    if (badge) {
+                        badge.textContent = 'Offline';
+                        badge.className = 'px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 border border-rose-500/30 text-[10px] font-semibold';
+                    }
+                    if (icon) icon.className = 'w-3.5 h-3.5 text-rose-400';
+                });
+
+                client.on('close', () => {
+                    state.mqttConnected = false;
+                    if (badge) {
+                        badge.textContent = 'Offline';
+                        badge.className = 'px-1.5 py-0.2 rounded bg-rose-950 text-rose-400 border border-rose-500/30 text-[10px] font-semibold';
+                    }
+                    if (icon) icon.className = 'w-3.5 h-3.5 text-rose-400';
+                });
+            } catch (err) {
+                console.error('[MQTT Init Error]', err);
+            }
+        }
+
+        function toggleOrConfigMqtt() {
+            const current = state.mqttBrokerUrl;
+            const newUrl = prompt(`CẤU HÌNH KẾT NỐI KHÔNG DÂY MQTT:
+1. Local PC Broker: ws://10.11.162.171:9001 (khuyên dùng khi chạy 'start_mqtt_broker.bat')
+2. Localhost: ws://localhost:9001
+3. Public Cloud Broker: wss://broker.emqx.io:8084/mqtt
+4. Drone SoftAP Broker: ws://192.168.4.1:9001
+
+Nhập URL MQTT WebSocket Broker:`, current);
+
+            if (newUrl !== null && newUrl.trim().length > 0) {
+                let clean = newUrl.trim();
+                if (!clean.startsWith('ws://') && !clean.startsWith('wss://')) {
+                    clean = 'ws://' + clean;
+                }
+                state.mqttBrokerUrl = clean;
+                const hostText = document.getElementById('mqttBrokerText');
+                if (hostText) {
+                    try {
+                        const u = new URL(clean);
+                        hostText.textContent = `MQTT: ${u.hostname}:${u.port || '80'}`;
+                    } catch(e) {
+                        hostText.textContent = `MQTT: Custom`;
                     }
                 }
-            } catch (err) {
-                console.error('Serial Error:', err);
-                showToast(`USB Serial: ${err.message}`);
-            } finally {
-                state.serialConnected = false;
-                state.serialWriter = null;
-                state.serialPort = null;
-                const btn = document.getElementById('usbSerialBtn');
-                const icon = document.getElementById('serialIcon');
-                const txt = document.getElementById('serialStatusText');
-                if (btn) btn.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-space-950/90 border border-slate-800 hover:border-emerald-500/50 text-slate-400 text-xs transition cursor-pointer';
-                if (icon) icon.className = 'w-3.5 h-3.5 text-slate-500';
-                if (txt) txt.textContent = 'USB Serial';
-                console.info('[SERIAL] Cổng USB đã ngắt kết nối an toàn.');
+                connectMqtt(state.mqttBrokerUrl);
             }
         }
 
@@ -3172,6 +3239,8 @@ Nhập IP hoặc Host muốn kết nối:`, targetIp);
             setInterval(stepTelemetrySimulation, 20); // 50 Hz Telemetry Loop
             // Auto connect to ESP32-C6 SoftAP WebSocket on load
             setTimeout(() => connectWebSocket('ws://10.11.162.210:81/ws'), 600);
+            // Auto connect to MQTT Wireless Broker on load
+            setTimeout(() => connectMqtt(), 800);
             animate(); // Start 3D & Oscilloscope Render Loop
         };
     </script>

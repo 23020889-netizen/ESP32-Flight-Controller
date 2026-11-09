@@ -6,6 +6,15 @@
 
 WifiControlManager wifiControl;
 
+static void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    if (length == 0 || length >= 512) return;
+    char buf[513];
+    memcpy(buf, payload, length);
+    buf[length] = '\0';
+    String cmd(buf);
+    wifiControl.processCommandString(cmd, flightManager, quadMotors);
+}
+
 static String computeWsAcceptKey(const String& key) {
     String input = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     unsigned char sha1Result[20];
@@ -25,19 +34,31 @@ static String computeWsAcceptKey(const String& key) {
 
 WifiControlManager::WifiControlManager()
     : server_(81),
+      mqttClient_(mqttNetClient_),
       clientConnected_(false),
       wsHandshakeDone_(false),
       staConnected_(false),
       lastTelemetryMs_(0),
       lastRcPacketMs_(0),
       lastWifiCheckMs_(0),
+      lastMqttReconnectMs_(0),
       savedFlightMode_(FlightControlMode::DIRECT_MANUAL),
-      wsRxSize_(0) {}
+      mqttBrokerPort_(1883),
+      wsRxSize_(0) {
+    strncpy(mqttBrokerHost_, "10.11.162.171", sizeof(mqttBrokerHost_));
+}
 
 void WifiControlManager::begin(const char* staSsid, const char* staPass,
-                               const char* apSsid, const char* apPass) {
+                               const char* apSsid, const char* apPass,
+                               const char* mqttBroker, uint16_t mqttPort) {
+    if (mqttBroker && strlen(mqttBroker) > 0) {
+        strncpy(mqttBrokerHost_, mqttBroker, sizeof(mqttBrokerHost_) - 1);
+        mqttBrokerHost_[sizeof(mqttBrokerHost_) - 1] = '\0';
+    }
+    if (mqttPort > 0) mqttBrokerPort_ = mqttPort;
+
     Serial.println("\n[WIFI] ========================================================");
-    Serial.println("[WIFI] KHOI TAO DUAL WI-FI (STATIC IP 10.11.162.210 + SOFTAP BACKUP):");
+    Serial.println("[WIFI] KHOI TAO DUAL WI-FI & GIAO THUC KHONG DAY MQTT:");
 
     WiFi.mode(WIFI_AP_STA);
 
@@ -57,7 +78,7 @@ void WifiControlManager::begin(const char* staSsid, const char* staPass,
         Serial.println("[WIFI] >>> DA FIX CUNG STATIC IP: 10.11.162.210 (Gateway: 10.11.162.1)");
     }
 
-    // 2. Quet cac mang Wi-Fi xung quanh de tim SSID chinh xac cua phong Lab
+    // 3. Quet cac mang Wi-Fi xung quanh de tim SSID chinh xac cua phong Lab
     Serial.println("[WIFI] Dang quet danh sach song Wi-Fi 2.4GHz...");
     int n = WiFi.scanNetworks();
     String chosenSsid = String(staSsid);
@@ -98,10 +119,10 @@ void WifiControlManager::begin(const char* staSsid, const char* staPass,
         Serial.println("[WIFI] ========================================================");
         Serial.printf("[WIFI] >>> KET NOI WIFI THANH CONG! SSID: '%s'\n", WiFi.SSID().c_str());
         Serial.printf("[WIFI] >>> IP STATION (DUNG IP NAY DE TRUY CAP TREN TRINH DUYET): %s\n", ipAddress_.toString().c_str());
-        Serial.printf("[WIFI] >>> MO TRANG WEB VA KET NOI DEN: ws://%s:81/ws\n", ipAddress_.toString().c_str());
         Serial.println("[WIFI] ========================================================");
     } else {
         staConnected_ = false;
+        ipAddress_ = WiFi.softAPIP();
         Serial.println("[WIFI] [CHU Y] Chua nhan duoc IP tu Router. He thong duy tri SoftAP!");
         Serial.printf("[WIFI] Dung SoftAP IP: %s\n", ipAddress_.toString().c_str());
     }
@@ -114,9 +135,55 @@ void WifiControlManager::begin(const char* staSsid, const char* staPass,
         Serial.println("[WIFI] >>> Khoi tao mDNS thanh cong: ws://drone.local:81/ws");
     }
 
-    Serial.printf("[WIFI] WebSocket Server dang lang nghe tai cong 81 (ws://%s:81/ws)\n", ipAddress_.toString().c_str());
-    Serial.println("[WIFI] UDP Server dang lang nghe tai cong 8888");
+    // 4. Cau hinh MQTT Client
+    mqttClient_.setServer(mqttBrokerHost_, mqttBrokerPort_);
+    mqttClient_.setBufferSize(1024);
+    mqttClient_.setCallback(mqttCallback);
+
+    Serial.printf("[MQTT] Broker Target: %s:%d\n", mqttBrokerHost_, mqttBrokerPort_);
+    Serial.println("[MQTT] Subscribe Topics: 'isilab/drone/rc', 'isilab/drone/cmd'");
+    Serial.println("[MQTT] Publish Topic   : 'isilab/drone/telemetry'");
     Serial.println("[WIFI] ========================================================\n");
+}
+
+void WifiControlManager::setMqttBroker(const char* host, uint16_t port) {
+    if (host && strlen(host) > 0) {
+        strncpy(mqttBrokerHost_, host, sizeof(mqttBrokerHost_) - 1);
+        mqttBrokerHost_[sizeof(mqttBrokerHost_) - 1] = '\0';
+    }
+    if (port > 0) mqttBrokerPort_ = port;
+    mqttClient_.disconnect();
+    mqttClient_.setServer(mqttBrokerHost_, mqttBrokerPort_);
+    Serial.printf("[MQTT] Cap nhat dia chi Broker moi: %s:%d\n", mqttBrokerHost_, mqttBrokerPort_);
+}
+
+void WifiControlManager::reconnectMqtt() {
+    if (WiFi.status() != WL_CONNECTED && !WiFi.softAPgetStationNum()) return;
+
+    Serial.printf("[MQTT] Dang ket noi toi Broker: %s:%d...\n", mqttBrokerHost_, mqttBrokerPort_);
+    String clientId = "ESP32C6_Drone_" + String((uint32_t)ESP.getEfuseMac(), HEX);
+
+    if (mqttClient_.connect(clientId.c_str(), "isilab/drone/status", 1, true, "offline")) {
+        Serial.println("[MQTT] >>> KET NOI BROKER THANH CONG!");
+        mqttClient_.publish("isilab/drone/status", "online", true);
+        mqttClient_.subscribe("isilab/drone/rc", 0);
+        mqttClient_.subscribe("isilab/drone/cmd", 0);
+        Serial.println("[MQTT] >>> Da dang ky topic: 'isilab/drone/rc' va 'isilab/drone/cmd'");
+    } else {
+        Serial.printf("[MQTT] Ket noi that bai, rc=%d (thu lai sau 3s)\n", mqttClient_.state());
+    }
+}
+
+void WifiControlManager::handleMqtt(FlightControllerManager& manager, QuadEscController& esc) {
+    uint32_t now = millis();
+    if (!mqttClient_.connected()) {
+        if (now - lastMqttReconnectMs_ >= 3000) {
+            lastMqttReconnectMs_ = now;
+            reconnectMqtt();
+        }
+    } else {
+        mqttClient_.loop();
+    }
 }
 
 void WifiControlManager::update(const FusedData& fusedData, FlightControllerManager& manager, QuadEscController& esc) {
@@ -144,8 +211,9 @@ void WifiControlManager::update(const FusedData& fusedData, FlightControllerMana
     handleNewClient();
     handleWebSocketData(manager, esc);
     handleUdpData(manager, esc);
+    handleMqtt(manager, esc);
 
-    // Failsafe Watchdog: Neu ARMED ma qua 600ms khong nhan goi RC -> Cat ga ve an toan
+    // Failsafe Watchdog: Neu ARMED ma qua 2000ms khong nhan goi RC -> Cat ga ve an toan
     if ((manager.getFlightMode() == FlightControlMode::DIRECT_MANUAL ||
          manager.getFlightMode() == FlightControlMode::ALTITUDE_HOLD) && esc.isArmed()) {
         if (lastRcPacketMs_ > 0 && (now - lastRcPacketMs_ > 2000)) {
@@ -153,7 +221,7 @@ void WifiControlManager::update(const FusedData& fusedData, FlightControllerMana
         }
     }
 
-    // Phat telemetry dinh ky 40Hz (25ms) giup Web UI phan anh goc 3D sieu muot ma khong do tre
+    // Phat telemetry dinh ky 40Hz (25ms) qua MQTT & WebSocket
     if (now - lastTelemetryMs_ >= 25) {
         lastTelemetryMs_ = now;
         broadcastTelemetry(fusedData, manager, esc);
@@ -169,7 +237,7 @@ void WifiControlManager::handleNewClient() {
                 client_.stop();
             }
             client_ = newClient;
-            client_.setNoDelay(true); // Vo hieu hoa thuat toan Nagle de truyen goi tin tuc thi
+            client_.setNoDelay(true);
             clientConnected_ = true;
             wsHandshakeDone_ = false;
             wsRxSize_ = 0;
@@ -249,8 +317,6 @@ void WifiControlManager::handleWebSocketData(FlightControllerManager& manager, Q
         return;
     }
 
-    // Đọc không blocking vào buffer. Không được dùng readBytes() cho cả frame:
-    // TCP có thể chia header/payload thành nhiều lần nhận.
     while (client_.available() > 0 && wsRxSize_ < WS_RX_BUFFER_SIZE) {
         int value = client_.read();
         if (value < 0) break;
@@ -272,7 +338,6 @@ void WifiControlManager::handleWebSocketData(FlightControllerManager& manager, Q
                          wsRxBuffer_[consumed + 3];
             headerLen = 4;
         } else if (payloadLen == 127) {
-            // Các lệnh điều khiển của UI luôn nhỏ; từ chối frame quá lớn an toàn.
             Serial.println("[WS] Tu choi frame payload 64-bit khong ho tro.");
             wsRxSize_ = 0;
             return;
@@ -288,7 +353,7 @@ void WifiControlManager::handleWebSocketData(FlightControllerManager& manager, Q
             wsRxSize_ = 0;
             return;
         }
-        if (wsRxSize_ - consumed < frameLen) break; // giữ nguyên frame dở dang
+        if (wsRxSize_ - consumed < frameLen) break;
 
         const size_t maskOffset = consumed + headerLen;
         const size_t payloadOffset = maskOffset + maskLen;
@@ -352,11 +417,8 @@ void WifiControlManager::processCommandString(const String& rawCmd, FlightContro
         if (parsed >= 4) {
             lastRcPacketMs_ = millis();
             esc.feedWatchdog();
-
-            // Luon truyen kenh RC vao flightManager
             manager.setRcChannels(t, r, p, y);
 
-            // Log kiem chung 1s/lan ra Serial de nguoi dung quan sat truc quan
             static uint32_t lastRcPrint = 0;
             if (millis() - lastRcPrint > 1000) {
                 lastRcPrint = millis();
@@ -370,21 +432,21 @@ void WifiControlManager::processCommandString(const String& rawCmd, FlightContro
                     case FlightControlMode::EMERGENCY_DISARM: modeName = "EMERGENCY_DISARM"; break;
                     case FlightControlMode::MANUAL_CLI: break;
                 }
-                Serial.printf("[RC_RX] T:%.1f R:%.1f P:%.1f Y:%.1f | ESC:%s MODE:%s\n",
+                Serial.printf("[RC_WIRELESS] T:%.1f R:%.1f P:%.1f Y:%.1f | ESC:%s MODE:%s\n",
                               rcT, rcR, rcP, rcY, esc.isArmed() ? "ARMED" : "DISARMED", modeName);
             }
         }
         return;
     }
 
-    // 2. Lenh ARM: Khoi phuc che do nguoi dung da chon (mac dinh ALTITUDE_HOLD voi PID), khong ep ve DIRECT_MANUAL
+    // 2. Lenh ARM
     if (cmd.equalsIgnoreCase("ARM") || cmd.equalsIgnoreCase("arm")) {
         if (manager.getFlightMode() == FlightControlMode::EMERGENCY_DISARM ||
             manager.getFlightMode() == FlightControlMode::MANUAL_CLI) {
             manager.setFlightMode(savedFlightMode_);
         }
         esc.arm();
-        Serial.println("[WIFI_CMD] >>> DA NHAN LENH ARM TUC THI! Mo khoa 4 dong co, kich hoat bo dieu khien PID.");
+        Serial.println("[WIRELESS_CMD] >>> DA NHAN LENH ARM TUC THI! Mo khoa 4 dong co, kich hoat bo dieu khien PID.");
         return;
     }
 
@@ -393,7 +455,7 @@ void WifiControlManager::processCommandString(const String& rawCmd, FlightContro
         cmd.equalsIgnoreCase("STOP")   || cmd.equalsIgnoreCase("KILL")) {
         manager.setFlightMode(FlightControlMode::EMERGENCY_DISARM);
         esc.disarm();
-        Serial.println("[WIFI_CMD] >>> DA KHOA KHAN CAP (DISARMED)! Ca 4 dong co ngat ve 900us.");
+        Serial.println("[WIRELESS_CMD] >>> DA KHOA KHAN CAP (DISARMED)! Ca 4 dong co ngat ve 900us.");
         return;
     }
 
@@ -404,26 +466,36 @@ void WifiControlManager::processCommandString(const String& rawCmd, FlightContro
         if (modeName.equalsIgnoreCase("DIRECT_MANUAL") || modeName.equalsIgnoreCase("DIRECT")) {
             savedFlightMode_ = FlightControlMode::DIRECT_MANUAL;
             manager.setFlightMode(FlightControlMode::DIRECT_MANUAL);
-            Serial.println("[WIFI_CMD] Chuyen sang che do: DIRECT_MANUAL (Khong can IMU)");
+            Serial.println("[WIRELESS_CMD] Chuyen sang che do: DIRECT_MANUAL");
         } else if (modeName.equalsIgnoreCase("ALTITUDE") || modeName.equalsIgnoreCase("ALT_HOLD") ||
                    modeName.equalsIgnoreCase("ALT") || modeName.equalsIgnoreCase("ITSMC_ATT") ||
                    modeName.equalsIgnoreCase("STABILIZED")) {
             savedFlightMode_ = FlightControlMode::ALTITUDE_HOLD;
             manager.setFlightMode(FlightControlMode::ALTITUDE_HOLD);
-            Serial.println("[WIFI_CMD] Chuyen sang che do: ALTITUDE_HOLD (Cascaded PID giu do cao & can bang)");
+            Serial.println("[WIRELESS_CMD] Chuyen sang che do: ALTITUDE_HOLD");
         } else if (modeName.equalsIgnoreCase("POSHOLD") || modeName.equalsIgnoreCase("ITSMC_POS")) {
             savedFlightMode_ = FlightControlMode::ITSMC_POSITION_HOLD;
             manager.setFlightMode(FlightControlMode::ITSMC_POSITION_HOLD);
-            Serial.println("[WIFI_CMD] Chuyen sang che do: ITSMC_POSITION_HOLD");
+            Serial.println("[WIRELESS_CMD] Chuyen sang che do: ITSMC_POSITION_HOLD");
         } else if (modeName.equalsIgnoreCase("MANUAL_CLI")) {
             savedFlightMode_ = FlightControlMode::MANUAL_CLI;
             manager.setFlightMode(FlightControlMode::MANUAL_CLI);
-            Serial.println("[WIFI_CMD] Chuyen sang che do: MANUAL_CLI");
+            Serial.println("[WIRELESS_CMD] Chuyen sang che do: MANUAL_CLI");
         }
         return;
     }
 
-    // 5. Lenh Test Motor don le: "TEST,<motor_id>,<pct>,<sec>"
+    // 5. Lenh doi Broker MQTT: "MQTT,<host>,<port>"
+    if (cmd.startsWith("MQTT,") || cmd.startsWith("mqtt,")) {
+        char host[64] = {0};
+        int port = 1883;
+        if (sscanf(cmd.c_str() + 5, "%63[^,],%d", host, &port) >= 1) {
+            setMqttBroker(host, (uint16_t)port);
+        }
+        return;
+    }
+
+    // 6. Lenh Test Motor don le: "TEST,<motor_id>,<pct>,<sec>"
     if (cmd.startsWith("TEST,") || cmd.startsWith("test,")) {
         int mId = 1, sec = 3;
         float pct = 10.0f;
@@ -435,10 +507,6 @@ void WifiControlManager::processCommandString(const String& rawCmd, FlightContro
 }
 
 void WifiControlManager::broadcastTelemetry(const FusedData& fusedData, const FlightControllerManager& manager, const QuadEscController& esc) {
-    if ((!client_ || !client_.connected() || !wsHandshakeDone_) && udp_.parsePacket() == 0) {
-        return;
-    }
-
     const char* modeStr = "DIRECT_MANUAL";
     FlightControlMode m = manager.getFlightMode();
     if (m == FlightControlMode::ALTITUDE_HOLD) modeStr = "ALT_HOLD";
@@ -462,6 +530,14 @@ void WifiControlManager::broadcastTelemetry(const FusedData& fusedData, const Fl
              esc.isArmed() ? 1 : 0,
              ipAddress_.toString().c_str());
 
-    String msg(jsonBuf);
-    sendWebSocketText(msg);
+    // 1. Phat qua giao thuc MQTT khong day
+    if (mqttClient_.connected()) {
+        mqttClient_.publish("isilab/drone/telemetry", jsonBuf);
+    }
+
+    // 2. Phat qua giao thuc WebSocket khong day
+    if (client_ && client_.connected() && wsHandshakeDone_) {
+        String msg(jsonBuf);
+        sendWebSocketText(msg);
+    }
 }

@@ -17,7 +17,7 @@ except ImportError:
     print("[ERROR] Thieu thu vien paho-mqtt! Chay: pip install paho-mqtt")
     sys.exit(1)
 
-BROKER_HOST = "10.11.162.171"
+BROKER_HOST = sys.argv[1] if len(sys.argv) > 1 else "10.11.153.160"
 BROKER_PORT = 1883
 WS_PORT = 9001
 
@@ -153,8 +153,12 @@ def main():
     time.sleep(0.3)
 
     test_start = time.time()
+    seq_counter = 1
+    session_id = 88888
     while time.time() - test_start < 2.0:
-        client.publish("isilab/drone/rc", "RC,50.0,0.0,0.0,0.0")
+        pkt = f"RC,2,{session_id},{seq_counter},50.0,0.0,0.0,0.0\n"
+        client.publish("isilab/drone/rc", pkt, qos=0, retain=False)
+        seq_counter += 1
         time.sleep(0.025)
 
     time.sleep(0.3)

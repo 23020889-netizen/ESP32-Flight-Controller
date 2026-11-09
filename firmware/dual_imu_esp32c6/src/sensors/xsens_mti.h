@@ -25,4 +25,7 @@ void xsens_mti_set_axis_inversion(bool invert_x = true, bool invert_y = false, b
 // Hàm máy trạng thái FSM đọc luồng byte UART non-blocking
 bool xsens_mti_update(XsensData &data);
 
+// Thống kê luồng truyền thông UART Xsens MTi-3
+void xsens_mti_get_stats(uint32_t &validPackets, uint32_t &checksumErrors, uint32_t &bytesReceived);
+
 #endif // XSENS_MTI_H

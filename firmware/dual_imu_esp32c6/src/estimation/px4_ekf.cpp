@@ -219,11 +219,12 @@ void PX4_EKF::update(const MpuData &mpu, const XsensData &xsens, FusedData &fuse
     float ekf_r, ekf_p, ekf_y;
     quaternionToEuler(ekf_r, ekf_p, ekf_y);
 
-    // Bộ lọc thích nghi siêu nhạy (Adaptive Fast Tracking):
-    // Khi có chuyển động quay (Gyro > 12 deg/s): alpha = 0.0 (đáp ứng 0ms tức thời, không trễ pha)
-    // Khi tĩnh trên bàn test: alpha = 0.08 (khử rung vi cơ học mà không gây trễ)
+    // Bộ lọc thích nghi trơn tru liên tục (Smooth Continuous Adaptive Tracking):
+    // Tránh nhảy bậc (hard-switch discontinuity) tại ngưỡng vận tốc góc.
+    // Khi tĩnh (gyroMag -> 0): lpf_alpha -> 0.08 (hấp thụ vi rung cơ học)
+    // Khi quay nhanh (gyroMag >= 10 deg/s): lpf_alpha -> 0 (bám sát tức thời Quaternion EKF 200 Hz)
     float gyroMag = sqrtf(gx_fused * gx_fused + gy_fused * gy_fused + gz_fused * gz_fused);
-    const float lpf_alpha = (gyroMag > 12.0f) ? 0.0f : 0.08f;
+    const float lpf_alpha = 0.08f / (1.0f + (gyroMag * gyroMag * 0.01f));
 
     smooth_roll  = lpf_alpha * smooth_roll  + (1.0f - lpf_alpha) * ekf_r;
     smooth_pitch = lpf_alpha * smooth_pitch + (1.0f - lpf_alpha) * ekf_p;

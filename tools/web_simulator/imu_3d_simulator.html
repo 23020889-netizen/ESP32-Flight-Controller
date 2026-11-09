@@ -833,7 +833,7 @@
             wsUrl: 'ws://10.11.162.210:81/ws',
             mqttClient: null,
             mqttConnected: false,
-            mqttBrokerUrl: `ws://${(typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== '') ? window.location.hostname : '127.0.0.1'}:9001`,
+            mqttBrokerUrl: `ws://${(typeof window !== 'undefined' && window.location.hostname && window.location.hostname !== '') ? window.location.hostname : '10.11.153.160'}:9001`,
             mqttTopicTelemetry: 'isilab/drone/telemetry',
             mqttTopicRc: 'isilab/drone/rc',
             mqttTopicCmd: 'isilab/drone/cmd',
@@ -841,6 +841,7 @@
             gamepadMapping: '',
             gamepadAxes: [],
             rcInput: { throttle: 0, roll: 0, pitch: 0, yaw: 0 },
+            sessionId: Math.floor(Math.random() * 0x7FFFFFFE) + 1,
             rcSeq: 0,
             lastRcTxLogMs: 0,
 
@@ -2207,7 +2208,7 @@
                 state.lastSentYaw = yawPct;
 
                 state.rcSeq = (state.rcSeq || 0) + 1;
-                const rcPacket = `RC,${state.rcSeq},${effectiveThr.toFixed(1)},${rollPct.toFixed(1)},${pitchPct.toFixed(1)},${yawPct.toFixed(1)}\n`;
+                const rcPacket = `RC,2,${state.sessionId},${state.rcSeq},${effectiveThr.toFixed(1)},${rollPct.toFixed(1)},${pitchPct.toFixed(1)},${yawPct.toFixed(1)}\n`;
                 sendHardwarePacket(rcPacket);
             }
 
@@ -2250,7 +2251,7 @@
                     state.lastSentYaw = yawPct;
 
                     state.rcSeq = (state.rcSeq || 0) + 1;
-                    const rcPacket = `RC,${state.rcSeq},${effectiveThr.toFixed(1)},${rollPct.toFixed(1)},${pitchPct.toFixed(1)},${yawPct.toFixed(1)}\n`;
+                    const rcPacket = `RC,2,${state.sessionId},${state.rcSeq},${effectiveThr.toFixed(1)},${rollPct.toFixed(1)},${pitchPct.toFixed(1)},${yawPct.toFixed(1)}\n`;
                     sendHardwarePacket(rcPacket);
                 }
 
@@ -2635,7 +2636,7 @@
             // Điều này triệt tiêu hoàn toàn race condition, out-of-order execution và duplicate packet.
             if (isRc) {
                 if (state.mqttClient && state.mqttConnected) {
-                    state.mqttClient.publish(state.mqttTopicRc, pkt.trim(), { qos: 0 });
+                    state.mqttClient.publish(state.mqttTopicRc, pkt.trim(), { qos: 0, retain: false });
                     sentVia.push('mqtt');
                 } else if (state.ws && state.ws.readyState === WebSocket.OPEN) {
                     if (!(state.ws.bufferedAmount > 4096)) {
@@ -2646,7 +2647,7 @@
             } else {
                 // Đối với lệnh cấu hình/chuyển chế độ (ARM, DISARM, MODE): phát song song để đảm bảo tới đích ngay
                 if (state.mqttClient && state.mqttConnected) {
-                    state.mqttClient.publish(state.mqttTopicCmd, pkt.trim(), { qos: 0 });
+                    state.mqttClient.publish(state.mqttTopicCmd, pkt.trim(), { qos: 0, retain: false });
                     sentVia.push('mqtt');
                 }
                 if (state.ws && state.ws.readyState === WebSocket.OPEN) {

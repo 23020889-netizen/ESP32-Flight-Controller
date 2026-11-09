@@ -1,7 +1,10 @@
 #pragma once
 
 #include <stdint.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/portmacro.h>
 #include "../estimation/px4_ekf.h"
+#include "../comm/rc_snapshot.hpp"
 #include "../controllers/itsmc_parameters.hpp"
 #include "../controllers/itsmc_attitude_controller.hpp"
 #include "../controllers/itsmc_position_controller.hpp"
@@ -52,7 +55,10 @@ public:
     void setHoverThrustRatio(float ratio) { hoverThrustRatio_ = (ratio < 0.15f) ? 0.15f : ((ratio > 0.85f) ? 0.85f : ratio); }
     float getHoverThrustRatio() const { return hoverThrustRatio_; }
 
-    // Kênh điều khiển RC từ Gamepad / Web UI (Cần trái: Throttle/Yaw, Cần phải: Roll/Pitch)
+    // Kênh điều khiển RC từ Gamepad / Web UI (Atomic RC Snapshot V2)
+    void updateRcSnapshot(const RcSnapshot& snapshot);
+    bool getRcSnapshotAtomic(RcSnapshot& out) const;
+
     void setRcChannels(float throttlePct, float rollPct, float pitchPct, float yawPct);
     void getRcChannels(float& throttlePct, float& rollPct, float& pitchPct, float& yawPct) const;
 
@@ -88,7 +94,10 @@ private:
     float manualThrottleRatio_;
     float hoverThrustRatio_; // Tỉ lệ lực đẩy cân bằng trọng lực (T_hover)
 
-    // Kênh lệnh RC hiện tại từ Gamepad
+    // Kênh lệnh RC hiện tại từ Gamepad (Được bảo vệ bằng FreeRTOS Critical Section)
+    RcSnapshot rcSnapshot_;
+    mutable portMUX_TYPE rcMux_;
+
     float rcThrottle_; // 0.0 .. 100.0%
     float rcRoll_;     // -35.0 .. +35.0%
     float rcPitch_;    // -35.0 .. +35.0%

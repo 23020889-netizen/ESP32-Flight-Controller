@@ -5,6 +5,7 @@
 #include <WiFiServer.h>
 #include <WiFiUdp.h>
 #include "PubSubClient.h"
+#include "rc_snapshot.hpp"
 #include "../supervisor/flight_controller_manager.hpp"
 #include "../actuators/esc_pwm.h"
 #include "../estimation/px4_ekf.h"
@@ -36,7 +37,14 @@ public:
     uint32_t getLastRcPacketTimeMs() const { return lastRcPacketMs_; }
 
     void setMqttBroker(const char* host, uint16_t port);
-    void processCommandString(const String& cmd, FlightControllerManager& manager, QuadEscController& esc);
+    void processCommandString(const String& cmd, FlightControllerManager& manager, QuadEscController& esc, RcTransportSource source = RC_SOURCE_WEBSOCKET);
+    void processCommandPayload(const uint8_t* payload, size_t length, RcTransportSource source, FlightControllerManager& manager, QuadEscController& esc);
+
+    void getRcStats(uint32_t& accepted, uint32_t& stale, uint32_t& rejected) const {
+        accepted = rcAcceptCount_;
+        stale    = rcDropStaleCount_;
+        rejected = rcRejectFormatCount_;
+    }
 
 private:
     WiFiServer   server_;
@@ -45,15 +53,21 @@ private:
     WiFiClient   mqttNetClient_;
     PubSubClient mqttClient_;
 
-    bool       clientConnected_;
-    bool       wsHandshakeDone_;
-    bool       staConnected_;
-    IPAddress  ipAddress_;
-    uint32_t   lastTelemetryMs_;
-    uint32_t   lastRcPacketMs_;
-    uint32_t   lastValidRcSeq_;
-    uint32_t   lastWifiCheckMs_;
-    uint32_t   lastMqttReconnectMs_;
+    bool              clientConnected_;
+    bool              wsHandshakeDone_;
+    bool              staConnected_;
+    IPAddress         ipAddress_;
+    uint32_t          lastTelemetryMs_;
+    uint32_t          lastRcPacketMs_;
+    uint32_t          activeSessionId_;
+    uint32_t          lastValidRcSeq_;
+    RcTransportSource activeTransport_;
+    uint32_t          lastMqttRcMs_;
+    uint32_t          rcAcceptCount_;
+    uint32_t          rcDropStaleCount_;
+    uint32_t          rcRejectFormatCount_;
+    uint32_t          lastWifiCheckMs_;
+    uint32_t          lastMqttReconnectMs_;
     FlightControlMode savedFlightMode_;
 
     char       mqttBrokerHost_[64];

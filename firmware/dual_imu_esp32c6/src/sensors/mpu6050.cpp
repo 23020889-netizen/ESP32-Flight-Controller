@@ -58,14 +58,25 @@ bool mpu6050_init(uint8_t sda_pin, uint8_t scl_pin, uint32_t freq) {
     writeReg(0x1C, 0x00);
     // Gyro +/- 250 deg/s
     writeReg(0x1B, 0x00);
-    // DLPF 260Hz Bandwidth (Do tre filter cuc nho: chi 0.98ms giup dap ung tuc thi)
-    writeReg(0x1A, 0x00);
-    // Sample Rate Divider: 1000Hz / (1 + 0) = 1000Hz lay mau IMU toi da
+    // DLPF_CFG = 1 (Gyro BW = 188 Hz, Delay = 1.9 ms; Accel BW = 184 Hz, Delay = 2.0 ms; Base Gyro Rate = 1 kHz)
+    writeReg(0x1A, 0x01);
+    // Sample Rate Divider: SMPLRT_DIV = 0 -> Sample Rate = 1000 Hz / (1 + 0) = 1000 Hz
     writeReg(0x19, 0x00);
 
     delay(20);
+
+    // Kiem tra doc nguoc thanh ghi (Register Readback) de xac thuc thong so cau hinh
+    uint8_t regDiv = 0, regCfg = 0, regGyro = 0, regAccel = 0;
+    readReg(0x19, regDiv);
+    readReg(0x1A, regCfg);
+    readReg(0x1B, regGyro);
+    readReg(0x1C, regAccel);
+
     is_ready = true;
     Serial.printf("[MPU6050] Khoi tao thanh cong! (WHO_AM_I = 0x%02X)\n", who);
+    Serial.printf("[MPU6050] Readback: SMPLRT_DIV=0x%02X, CONFIG=0x%02X (DLPF_CFG=%u), GYRO_CFG=0x%02X, ACCEL_CFG=0x%02X\n",
+                  regDiv, regCfg, regCfg & 0x07, regGyro, regAccel);
+    Serial.println("[MPU6050] Che do: Gyro Base Rate 1 kHz | DLPF_CFG=1 (BW=188Hz, Delay=1.9ms) | ODR = 1000 Hz.");
     return true;
 }
 
@@ -117,7 +128,8 @@ bool mpu6050_read(MpuData &data) {
     if (Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)14) != 14) return false;
 
     uint8_t buf[14];
-    Wire.readBytes(buf, 14);
+    size_t bytesRead = Wire.readBytes(reinterpret_cast<char*>(buf), 14);
+    if (bytesRead != 14) return false;
 
     int16_t raw_ax = (int16_t)((buf[0]  << 8) | buf[1]);
     int16_t raw_ay = (int16_t)((buf[2]  << 8) | buf[3]);

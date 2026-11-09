@@ -82,7 +82,7 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
     Serial.println("\n[SYSTEM] ESP32-C6 MULTI-TASK REAL-TIME FLIGHT CONTROLLER");
-    Serial.printf("[BUILD] V2.6-FAST-IMU-EKF-STRICT-RC (Compiled: %s %s)\n", __DATE__, __TIME__);
+    Serial.printf("[BUILD] V2.6-PROTOCOL-V2-ATOMIC-RC (Compiled: %s %s)\n", __DATE__, __TIME__);
 
     // 1. Initialize MPU-6050 via Fast I2C (400 kHz) and calibrate Zero-Bias
     if (mpu6050_init(MPU_SDA_PIN, MPU_SCL_PIN, 400000)) {

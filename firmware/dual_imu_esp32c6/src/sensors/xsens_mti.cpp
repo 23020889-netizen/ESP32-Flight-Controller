@@ -10,6 +10,10 @@ static bool opt_invert_z = true;
 
 static XsensData current_xsens = {0};
 
+static uint32_t xsens_valid_packets_count = 0;
+static uint32_t xsens_checksum_errors_count = 0;
+static uint32_t xsens_total_bytes_received = 0;
+
 static const float RAD_TO_DEG_F = 57.2957795f;
 
 // Máy trạng thái FSM đọc luồng byte UART Xbus non-blocking
@@ -164,6 +168,7 @@ bool xsens_mti_update(XsensData &data) {
 
     while (XsensUart.available() > 0) {
         uint8_t b = XsensUart.read();
+        xsens_total_bytes_received++;
         lastByteTimeMs = millis();
 
         switch (state) {
@@ -233,10 +238,13 @@ bool xsens_mti_update(XsensData &data) {
             case XBUS_CHECKSUM:
                 checksumAcc += b;
                 if ((checksumAcc & 0xFF) == 0) {
+                    xsens_valid_packets_count++;
                     if (mid == 0x36) {
                         parseMTData2Payload(payloadBuf, length);
                         new_packet = true;
                     }
+                } else {
+                    xsens_checksum_errors_count++;
                 }
                 state = XBUS_PREAMBLE;
                 break;
@@ -245,4 +253,10 @@ bool xsens_mti_update(XsensData &data) {
 
     data = current_xsens;
     return new_packet;
+}
+
+void xsens_mti_get_stats(uint32_t &validPackets, uint32_t &checksumErrors, uint32_t &bytesReceived) {
+    validPackets = xsens_valid_packets_count;
+    checksumErrors = xsens_checksum_errors_count;
+    bytesReceived = xsens_total_bytes_received;
 }

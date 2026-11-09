@@ -7,12 +7,8 @@
 WifiControlManager wifiControl;
 
 static void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    if (length == 0 || length >= 512) return;
-    char buf[513];
-    memcpy(buf, payload, length);
-    buf[length] = '\0';
-    String cmd(buf);
-    wifiControl.processCommandString(cmd, flightManager, quadMotors);
+    if (length == 0 || length >= 256) return;
+    wifiControl.processCommandPayload(reinterpret_cast<const uint8_t*>(payload), length, RC_SOURCE_MQTT, flightManager, quadMotors);
 }
 
 static String computeWsAcceptKey(const String& key) {
@@ -40,7 +36,13 @@ WifiControlManager::WifiControlManager()
       staConnected_(false),
       lastTelemetryMs_(0),
       lastRcPacketMs_(0),
+      activeSessionId_(0),
       lastValidRcSeq_(0),
+      activeTransport_(RC_SOURCE_NONE),
+      lastMqttRcMs_(0),
+      rcAcceptCount_(0),
+      rcDropStaleCount_(0),
+      rcRejectFormatCount_(0),
       lastWifiCheckMs_(0),
       lastMqttReconnectMs_(0),
       savedFlightMode_(FlightControlMode::DIRECT_MANUAL),
@@ -382,7 +384,7 @@ void WifiControlManager::handleWebSocketData(FlightControllerManager& manager, Q
             client_.write(pong, sizeof(pong));
             if (payloadLen > 0) client_.write(reinterpret_cast<const uint8_t*>(payload), payloadLen);
         } else if (opcode == 0x1) { // Text command
-            processCommandString(String(payload), manager, esc);
+            processCommandPayload(reinterpret_cast<const uint8_t*>(payload), payloadLen, RC_SOURCE_WEBSOCKET, manager, esc);
         }
         consumed += static_cast<size_t>(frameLen);
     }
@@ -401,165 +403,264 @@ void WifiControlManager::handleUdpData(FlightControllerManager& manager, QuadEsc
     char buffer[256];
     int len = udp_.read(buffer, sizeof(buffer) - 1);
     if (len > 0) {
-        buffer[len] = '\0';
-        processCommandString(String(buffer), manager, esc);
+        processCommandPayload(reinterpret_cast<const uint8_t*>(buffer), static_cast<size_t>(len), RC_SOURCE_WEBSOCKET, manager, esc);
     }
 }
 
-static bool parseStrictFloatToken(const char*& ptr, const char* end, float& outVal) {
-    while (ptr < end && (*ptr == ' ' || *ptr == '\t')) ptr++;
-    if (ptr >= end) return false;
-    char* endptr = nullptr;
+static void skipSpaces(char*& p) {
+    while (*p == ' ' || *p == '\t') ++p;
+}
+
+static bool parseUInt32Field(char*& p, uint32_t& out, char delimiter) {
+    skipSpaces(p);
+    if (*p == '-' || *p == '+') return false;
+
     errno = 0;
-    float v = strtof(ptr, &endptr);
-    if (endptr == ptr || endptr > end || errno == ERANGE || !isfinite(v)) {
+    char* endPtr = nullptr;
+    const unsigned long value = strtoul(p, &endPtr, 10);
+    if (endPtr == p || errno == ERANGE || value > 0xFFFFFFFFUL) {
         return false;
     }
-    ptr = endptr;
-    while (ptr < end && (*ptr == ' ' || *ptr == '\t')) ptr++;
-    outVal = v;
+    p = endPtr;
+    skipSpaces(p);
+    if (*p != delimiter) return false;
+    if (delimiter != '\0') ++p;
+    out = static_cast<uint32_t>(value);
     return true;
 }
 
-void WifiControlManager::processCommandString(const String& rawCmd, FlightControllerManager& manager, QuadEscController& esc) {
-    String cmd = rawCmd;
-    cmd.trim();
-    if (cmd.length() == 0) return;
+static bool parseFloatField(char*& p, float& out, char delimiter) {
+    skipSpaces(p);
+    errno = 0;
+    char* endPtr = nullptr;
+    const float value = strtof(p, &endPtr);
+    if (endPtr == p || errno == ERANGE || !std::isfinite(value)) {
+        return false;
+    }
+    p = endPtr;
+    skipSpaces(p);
+    if (*p != delimiter) return false;
+    if (delimiter != '\0') ++p;
+    out = value;
+    return true;
+}
 
-    // 1. Lệnh RC: Hỗ trợ "RC,<seq>,<t>,<r>,<p>,<y>" hoặc "RC,<t>,<r>,<p>,<y>" (Zero-Allocation Strict Parser)
-    bool isRc = cmd.startsWith("RC,") || cmd.startsWith("rc,");
-    if (isRc) {
-        const char* str = cmd.c_str() + 3;
-        const char* end = str + strlen(str);
-        float tokens[5] = {0.0f};
-        int tokenCount = 0;
-        const char* cur = str;
+static inline bool isSeqNewer(uint32_t candidate, uint32_t previous) {
+    return static_cast<int32_t>(candidate - previous) > 0;
+}
 
-        while (cur < end && tokenCount < 5) {
-            float val = 0.0f;
-            if (!parseStrictFloatToken(cur, end, val)) break;
-            tokens[tokenCount++] = val;
-            if (cur < end && *cur == ',') {
-                cur++;
-            } else if (cur != end) {
-                tokenCount = -1; // Ký tự lạ ngoài dấu phẩy
-                break;
-            }
+void WifiControlManager::processCommandString(const String& rawCmd, FlightControllerManager& manager, QuadEscController& esc, RcTransportSource source) {
+    processCommandPayload(reinterpret_cast<const uint8_t*>(rawCmd.c_str()), rawCmd.length(), source, manager, esc);
+}
+
+void WifiControlManager::processCommandPayload(const uint8_t* payload, size_t payloadLen, RcTransportSource source, FlightControllerManager& manager, QuadEscController& esc) {
+    constexpr size_t MAX_PACKET_LEN = 128;
+    if (payload == nullptr || payloadLen == 0 || payloadLen >= MAX_PACKET_LEN) {
+        return;
+    }
+    if (std::memchr(payload, '\0', payloadLen) != nullptr) {
+        // Tu choi payload chua embedded NUL
+        return;
+    }
+
+    char buf[MAX_PACKET_LEN];
+    std::memcpy(buf, payload, payloadLen);
+    buf[payloadLen] = '\0';
+
+    // Bo ky tu CR, LF, space o cuoi chuoi
+    while (payloadLen > 0 && (buf[payloadLen - 1] == '\r' || buf[payloadLen - 1] == '\n' ||
+                              buf[payloadLen - 1] == ' '  || buf[payloadLen - 1] == '\t')) {
+        buf[--payloadLen] = '\0';
+    }
+    if (payloadLen == 0) return;
+
+    char* p = buf;
+
+    // =========================================================================
+    // 1. GIAO THUC DIEU KHIEN RC V2: "RC,2,<sessionId>,<seq>,<throttle>,<roll>,<pitch>,<yaw>"
+    // =========================================================================
+    if (strncmp(p, "RC,", 3) == 0 || strncmp(p, "rc,", 3) == 0) {
+        p += 3;
+        uint32_t protoVer = 0;
+        if (!parseUInt32Field(p, protoVer, ',')) {
+            rcRejectFormatCount_++;
+            return;
         }
 
-        if (cur == end && (tokenCount == 4 || tokenCount == 5)) {
-            uint32_t seq = 0;
-            float t = 0.0f, r = 0.0f, p = 0.0f, y = 0.0f;
-            if (tokenCount == 5) {
-                seq = (uint32_t)tokens[0];
-                t = tokens[1]; r = tokens[2]; p = tokens[3]; y = tokens[4];
-            } else {
-                t = tokens[0]; r = tokens[1]; p = tokens[2]; y = tokens[3];
-            }
+        if (protoVer == 2) {
+            uint32_t sessId = 0, seq = 0;
+            float thr = 0.0f, roll = 0.0f, pitch = 0.0f, yaw = 0.0f;
+            if (!parseUInt32Field(p, sessId, ','))  { rcRejectFormatCount_++; return; }
+            if (!parseUInt32Field(p, seq, ','))     { rcRejectFormatCount_++; return; }
+            if (!parseFloatField(p, thr, ','))      { rcRejectFormatCount_++; return; }
+            if (!parseFloatField(p, roll, ','))     { rcRejectFormatCount_++; return; }
+            if (!parseFloatField(p, pitch, ','))    { rcRejectFormatCount_++; return; }
+            if (!parseFloatField(p, yaw, '\0'))     { rcRejectFormatCount_++; return; }
 
-            // Kiểm tra miền giá trị chặt chẽ (Range & Sanity Validation)
-            if (t >= 0.0f && t <= 100.0f &&
-                fabsf(r) <= 100.0f && fabsf(p) <= 100.0f && fabsf(y) <= 100.0f) {
-                
-                // Deduplication / Sequence Check: Nếu có seq, loại bỏ gói tin cũ/trùng
-                if (seq > 0 && seq <= lastValidRcSeq_) {
-                    return; // Gói tin cũ đến muộn do trễ mạng -> Bỏ qua
-                }
-                if (seq > 0) lastValidRcSeq_ = seq;
-
-                lastRcPacketMs_ = millis();
-                // Phân định tầng: Chỉ cập nhật kênh RC cho Flight Manager. Watchdog được feed bởi FlightTask.
-                manager.setRcChannels(t, r, p, y);
-
-                static uint32_t lastRcPrint = 0;
-                if (millis() - lastRcPrint > 1000) {
-                    lastRcPrint = millis();
-                    float rcT = 0.0f, rcR = 0.0f, rcP = 0.0f, rcY = 0.0f;
-                    manager.getRcChannels(rcT, rcR, rcP, rcY);
-                    const char* modeName = "MANUAL_CLI";
-                    switch (manager.getFlightMode()) {
-                        case FlightControlMode::DIRECT_MANUAL: modeName = "DIRECT_MANUAL"; break;
-                        case FlightControlMode::ALTITUDE_HOLD: modeName = "ALT_HOLD_PID"; break;
-                        case FlightControlMode::ITSMC_POSITION_HOLD: modeName = "ITSMC_POSITION"; break;
-                        case FlightControlMode::EMERGENCY_DISARM: modeName = "EMERGENCY_DISARM"; break;
-                        case FlightControlMode::MANUAL_CLI: break;
-                    }
-                    Serial.printf("[RC_WIRELESS] Seq:%u T:%.1f R:%.1f P:%.1f Y:%.1f | ESC:%s MODE:%s\n",
-                                  seq, rcT, rcR, rcP, rcY, esc.isArmed() ? "ARMED" : "DISARMED", modeName);
-                }
+            // Range validation nghiem ngat theo protocol:
+            // throttle: 0..100%, roll/pitch/yaw: -100..100%
+            if (thr < 0.0f || thr > 100.0f ||
+                roll < -100.0f || roll > 100.0f ||
+                pitch < -100.0f || pitch > 100.0f ||
+                yaw < -100.0f || yaw > 100.0f) {
+                rcRejectFormatCount_++;
                 return;
             }
+
+            uint32_t now = millis();
+
+            // SINGLE ACTIVE TRANSPORT LEASE:
+            // Ưu tiên tuyệt đối kênh MQTT không dây. WebSocket chỉ đóng vai trò fallback khi MQTT mất kết nối.
+            if (source == RC_SOURCE_WEBSOCKET) {
+                if (activeTransport_ == RC_SOURCE_MQTT && (now - lastMqttRcMs_ < 600)) {
+                    // MQTT vẫn đang gửi RC đều đặn (< 600ms) -> Bỏ qua gói WebSocket để tránh race condition
+                    return;
+                }
+                activeTransport_ = RC_SOURCE_WEBSOCKET;
+            } else if (source == RC_SOURCE_MQTT) {
+                activeTransport_ = RC_SOURCE_MQTT;
+                lastMqttRcMs_ = now;
+            }
+
+            // SESSION MANAGEMENT:
+            // Nếu SessionID thay đổi (ví dụ người dùng Reload trang Web GCS hoặc đổi thiết bị),
+            // ESP32 reset sequence baseline an toàn về phiên mới mà không bị lock out!
+            if (sessId != activeSessionId_) {
+                activeSessionId_ = sessId;
+                lastValidRcSeq_ = seq;
+                Serial.printf("[RC_SESSION] >>> BAT DAU PHIEN MOI SessionID=0x%08X (Seq baseline: %u, Src: %s)\n",
+                              sessId, seq, (source == RC_SOURCE_MQTT) ? "MQTT" : "WS");
+            } else {
+                // Kiểm tra tính tăng đơn điệu của sequence theo RFC 1982
+                if (!isSeqNewer(seq, lastValidRcSeq_)) {
+                    rcDropStaleCount_++;
+                    return; // Gói tin cũ đến muộn do trễ mạng hoặc gói tin lặp -> Bỏ qua
+                }
+                lastValidRcSeq_ = seq;
+            }
+
+            // Ghi gói tin hợp lệ vào Atomic Snapshot bảo vệ bằng FreeRTOS Critical Section
+            RcSnapshot snap{};
+            snap.sessionId   = sessId;
+            snap.seq         = seq;
+            snap.receivedAtMs = now;
+            snap.throttle    = thr;
+            snap.roll        = roll;
+            snap.pitch       = pitch;
+            snap.yaw         = yaw;
+            snap.source      = source;
+            snap.valid       = true;
+
+            manager.updateRcSnapshot(snap);
+            lastRcPacketMs_ = now;
+            rcAcceptCount_++;
+
+            static uint32_t lastRcPrint = 0;
+            if (now - lastRcPrint >= 1000) {
+                lastRcPrint = now;
+                Serial.printf("[RC_RX] Src:%s Sess:0x%08X Seq:%u T:%.1f R:%.1f P:%.1f Y:%.1f | ESC:%s MODE:%s\n",
+                              (source == RC_SOURCE_MQTT) ? "MQTT" : "WS",
+                              sessId, seq, thr, roll, pitch, yaw,
+                              esc.isArmed() ? "ARMED" : "DISARMED",
+                              (manager.getFlightMode() == FlightControlMode::DIRECT_MANUAL) ? "DIRECT_MANUAL" : "ALT_HOLD");
+            }
+            return;
+        } else {
+            // Version giao thức không tương thích
+            rcRejectFormatCount_++;
+            return;
         }
     }
 
-    // 2. Lenh ARM
-    if (cmd.equalsIgnoreCase("ARM") || cmd.equalsIgnoreCase("arm")) {
+    // =========================================================================
+    // 2. LỆNH MỞ KHÓA ĐỘNG CƠ: "ARM"
+    // =========================================================================
+    if (strcasecmp(buf, "ARM") == 0) {
         if (manager.getFlightMode() == FlightControlMode::EMERGENCY_DISARM ||
             manager.getFlightMode() == FlightControlMode::MANUAL_CLI) {
             manager.setFlightMode(savedFlightMode_);
         }
         esc.arm();
-        Serial.println("[WIRELESS_CMD] >>> DA NHAN LENH ARM TUC THI! Mo khoa 4 dong co, kich hoat bo dieu khien PID.");
+        Serial.println("[WIRELESS_CMD] >>> DA NHAN LENH ARM TUC THI! Mo khoa 4 dong co.");
         return;
     }
 
-    // 3. Lenh DISARM / EMERGENCY STOP / KILL
-    if (cmd.equalsIgnoreCase("DISARM") || cmd.equalsIgnoreCase("disarm") ||
-        cmd.equalsIgnoreCase("STOP")   || cmd.equalsIgnoreCase("KILL")) {
+    // =========================================================================
+    // 3. LỆNH KHÓA KHẨN CẤP: "DISARM" / "STOP" / "KILL"
+    // =========================================================================
+    if (strcasecmp(buf, "DISARM") == 0 || strcasecmp(buf, "STOP") == 0 || strcasecmp(buf, "KILL") == 0) {
         manager.setFlightMode(FlightControlMode::EMERGENCY_DISARM);
         esc.disarm();
         Serial.println("[WIRELESS_CMD] >>> DA KHOA KHAN CAP (DISARMED)! Ca 4 dong co ngat ve 900us.");
         return;
     }
 
-    // 4. Lenh Chuyen Mode: "MODE,<name>"
-    if (cmd.startsWith("MODE,") || cmd.startsWith("mode,")) {
-        String modeName = cmd.substring(5);
-        modeName.trim();
-        if (modeName.equalsIgnoreCase("DIRECT_MANUAL") || modeName.equalsIgnoreCase("DIRECT")) {
+    // =========================================================================
+    // 4. LỆNH CHUYỂN CHẾ ĐỘ BAY: "MODE,<name>"
+    // =========================================================================
+    if (strncasecmp(buf, "MODE,", 5) == 0) {
+        const char* modeName = buf + 5;
+        while (*modeName == ' ') modeName++;
+        if (strcasecmp(modeName, "DIRECT_MANUAL") == 0 || strcasecmp(modeName, "DIRECT") == 0) {
             savedFlightMode_ = FlightControlMode::DIRECT_MANUAL;
             manager.setFlightMode(FlightControlMode::DIRECT_MANUAL);
-            Serial.println("[WIRELESS_CMD] Chuyen sang che do: DIRECT_MANUAL");
-        } else if (modeName.equalsIgnoreCase("ALTITUDE") || modeName.equalsIgnoreCase("ALT_HOLD") ||
-                   modeName.equalsIgnoreCase("ALT") || modeName.equalsIgnoreCase("ITSMC_ATT") ||
-                   modeName.equalsIgnoreCase("STABILIZED")) {
+            Serial.println("[WIRELESS_CMD] >>> Chuyen mode: DIRECT_MANUAL (Bench Test - No Prop).");
+        } else if (strcasecmp(modeName, "ALTITUDE") == 0 || strcasecmp(modeName, "ALT_HOLD") == 0 ||
+                   strcasecmp(modeName, "ALT") == 0 || strcasecmp(modeName, "ITSMC_ATT") == 0 ||
+                   strcasecmp(modeName, "STABILIZED") == 0) {
             savedFlightMode_ = FlightControlMode::ALTITUDE_HOLD;
             manager.setFlightMode(FlightControlMode::ALTITUDE_HOLD);
-            Serial.println("[WIRELESS_CMD] Chuyen sang che do: ALTITUDE_HOLD");
-        } else if (modeName.equalsIgnoreCase("POSHOLD") || modeName.equalsIgnoreCase("ITSMC_POS")) {
+            Serial.println("[WIRELESS_CMD] >>> Chuyen mode: ALTITUDE_HOLD (Cascaded PID).");
+        } else if (strcasecmp(modeName, "POSHOLD") == 0 || strcasecmp(modeName, "ITSMC_POS") == 0) {
             savedFlightMode_ = FlightControlMode::ITSMC_POSITION_HOLD;
             manager.setFlightMode(FlightControlMode::ITSMC_POSITION_HOLD);
-            Serial.println("[WIRELESS_CMD] Chuyen sang che do: ITSMC_POSITION_HOLD");
-        } else if (modeName.equalsIgnoreCase("MANUAL_CLI")) {
+            Serial.println("[WIRELESS_CMD] >>> Chuyen mode: ITSMC_POSITION_HOLD.");
+        } else if (strcasecmp(modeName, "MANUAL_CLI") == 0) {
             savedFlightMode_ = FlightControlMode::MANUAL_CLI;
             manager.setFlightMode(FlightControlMode::MANUAL_CLI);
-            Serial.println("[WIRELESS_CMD] Chuyen sang che do: MANUAL_CLI");
+            Serial.println("[WIRELESS_CMD] >>> Chuyen mode: MANUAL_CLI.");
         }
         return;
     }
 
-    // 5. Lenh doi Broker MQTT: "MQTT,<host>,<port>"
-    if (cmd.startsWith("MQTT,") || cmd.startsWith("mqtt,")) {
-        int comma = cmd.indexOf(',', 5);
-        String host = (comma != -1) ? cmd.substring(5, comma) : cmd.substring(5);
-        int port = (comma != -1) ? cmd.substring(comma + 1).toInt() : 1883;
-        if (port <= 0) port = 1883;
-        host.trim();
-        if (host.length() > 0) {
-            setMqttBroker(host.c_str(), (uint16_t)port);
+    // =========================================================================
+    // 5. LỆNH CẤU HÌNH BROKER MQTT: "MQTT,<host>,<port>"
+    // =========================================================================
+    if (strncasecmp(buf, "MQTT,", 5) == 0) {
+        const char* pMqtt = buf + 5;
+        while (*pMqtt == ' ') pMqtt++;
+        char hostBuf[64] = {0};
+        uint16_t portVal = 1883;
+        const char* commaPos = strchr(pMqtt, ',');
+        if (commaPos != nullptr) {
+            size_t hostLen = commaPos - pMqtt;
+            if (hostLen >= sizeof(hostBuf)) hostLen = sizeof(hostBuf) - 1;
+            strncpy(hostBuf, pMqtt, hostLen);
+            hostBuf[hostLen] = '\0';
+            long pNum = strtol(commaPos + 1, nullptr, 10);
+            if (pNum > 0 && pNum <= 65535) portVal = static_cast<uint16_t>(pNum);
+        } else {
+            strncpy(hostBuf, pMqtt, sizeof(hostBuf) - 1);
+            hostBuf[sizeof(hostBuf) - 1] = '\0';
+        }
+        if (strlen(hostBuf) > 0) {
+            setMqttBroker(hostBuf, portVal);
         }
         return;
     }
 
-    // 6. Lenh Test Motor don le: "TEST,<motor_id>,<pct>,<sec>"
-    if (cmd.startsWith("TEST,") || cmd.startsWith("test,")) {
-        int c1 = cmd.indexOf(',', 5);
-        int c2 = (c1 != -1) ? cmd.indexOf(',', c1 + 1) : -1;
-        int mId = (c1 != -1) ? cmd.substring(5, c1).toInt() : 1;
-        float pct = (c1 != -1) ? ((c2 != -1) ? cmd.substring(c1 + 1, c2).toFloat() : cmd.substring(c1 + 1).toFloat()) : 10.0f;
-        int sec = (c2 != -1) ? cmd.substring(c2 + 1).toInt() : 3;
-        manager.setFlightMode(FlightControlMode::MANUAL_CLI);
-        esc.testSingleMotor(mId, pct, sec * 1000);
+    // =========================================================================
+    // 6. LỆNH TEST MOTOR RIÊNG LẺ: "TEST,<motor_id>,<pct>,<sec>"
+    // =========================================================================
+    if (strncasecmp(buf, "TEST,", 5) == 0) {
+        char* tPtr = buf + 5;
+        uint32_t mId = 1, sec = 3;
+        float pct = 10.0f;
+        if (parseUInt32Field(tPtr, mId, ',') && parseFloatField(tPtr, pct, ',')) {
+            (void)parseUInt32Field(tPtr, sec, '\0');
+            manager.setFlightMode(FlightControlMode::MANUAL_CLI);
+            esc.testSingleMotor(static_cast<uint8_t>(mId), pct, sec * 1000);
+        }
         return;
     }
 }

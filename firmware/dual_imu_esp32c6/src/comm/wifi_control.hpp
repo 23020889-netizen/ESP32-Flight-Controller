@@ -29,7 +29,7 @@ public:
     // Phát telemetry JSON tới MQTT Broker và Web Client
     void broadcastTelemetry(const FusedData& fusedData, const FlightControllerManager& manager, const QuadEscController& esc);
 
-    bool isClientConnected() const { return clientConnected_ || mqttClient_.connected(); }
+    bool isClientConnected() { return clientConnected_ || mqttClient_.connected(); }
     bool isStaConnected() const { return staConnected_; }
     bool isMqttConnected() { return mqttClient_.connected(); }
     IPAddress getIpAddress() const { return ipAddress_; }

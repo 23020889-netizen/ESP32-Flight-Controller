@@ -82,6 +82,7 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
     Serial.println("\n[SYSTEM] ESP32-C6 MULTI-TASK REAL-TIME FLIGHT CONTROLLER");
+    Serial.printf("[BUILD] V2.5-ANALOG-MQTT-DELIMITER (Compiled: %s %s)\n", __DATE__, __TIME__);
 
     // 1. Initialize MPU-6050 via Fast I2C (400 kHz) and calibrate Zero-Bias
     if (mpu6050_init(MPU_SDA_PIN, MPU_SCL_PIN, 400000)) {
@@ -101,8 +102,8 @@ void setup() {
     // 5. Initialize Flight Controller Supervisor
     flightManager.initialize();
 
-    // 6. Initialize Wi-Fi & MQTT (Auto-scan 'VNU-IS TTDBCLKT' + SoftAP + MQTT Broker 10.11.162.171:1883)
-    wifiControl.begin("VNU-IS TTDBCLKT", "Ttdbclkt9", "ISILAB_DRONE_AP", "isilab2026", "10.11.162.171", 1883);
+    // 6. Initialize Wi-Fi & MQTT (Auto-scan 'VNU-IS TTDBCLKT' + SoftAP + MQTT Broker 10.11.153.160:1883)
+    wifiControl.begin("VNU-IS TTDBCLKT", "Ttdbclkt9", "ISILAB_DRONE_AP", "isilab2026", "10.11.153.160", 1883);
 
     // 7. Create FreeRTOS Real-Time Tasks (Preemptive Multitasking)
     // Task 1: Flight Control (Priority 5 - Preempts all communication tasks)

@@ -154,9 +154,16 @@ void SerialCommandInterpreter::processIncomingCommands(FlightControllerManager& 
         manager.setFlightMode(FlightControlMode::DIRECT_MANUAL);
         Serial.println("[CMD] Switched to DIRECT MANUAL (Open-loop Gamepad, No IMU) Mode.");
     } else if (cmd.startsWith("rc ") || cmd.startsWith("RC ")) {
-        float t = 0.0f, r = 0.0f, p = 0.0f, y = 0.0f;
-        int parsed = sscanf(cmd.c_str() + 3, "%f %f %f %f", &t, &r, &p, &y);
-        if (parsed >= 1) {
+        String args = cmd.substring(3);
+        args.trim();
+        int s1 = args.indexOf(' ');
+        int s2 = (s1 != -1) ? args.indexOf(' ', s1 + 1) : -1;
+        int s3 = (s2 != -1) ? args.indexOf(' ', s2 + 1) : -1;
+        if (s1 != -1) {
+            float t = args.substring(0, s1).toFloat();
+            float r = (s2 != -1) ? args.substring(s1 + 1, s2).toFloat() : args.substring(s1 + 1).toFloat();
+            float p = (s2 != -1 && s3 != -1) ? args.substring(s2 + 1, s3).toFloat() : ((s2 != -1) ? args.substring(s2 + 1).toFloat() : 0.0f);
+            float y = (s3 != -1) ? args.substring(s3 + 1).toFloat() : 0.0f;
             manager.setDirectManualRc(t, r, p, y);
             Serial.printf("[CMD] Direct RC -> Thr:%.1f%% Roll:%.1f%% Pitch:%.1f%% Yaw:%.1f%%\n", t, r, p, y);
         }
@@ -174,8 +181,13 @@ void SerialCommandInterpreter::processIncomingCommands(FlightControllerManager& 
         manager.setManualThrottle(pct * 0.01f);
         Serial.printf("[CMD] Target throttle set to: %.1f%%\n", pct);
     } else if (cmd.startsWith("target ")) {
-        float r = 0.0f, p = 0.0f, y = 0.0f;
-        sscanf(cmd.c_str() + 7, "%f %f %f", &r, &p, &y);
+        String args = cmd.substring(7);
+        args.trim();
+        int s1 = args.indexOf(' ');
+        int s2 = (s1 != -1) ? args.indexOf(' ', s1 + 1) : -1;
+        float r = (s1 != -1) ? args.substring(0, s1).toFloat() : args.toFloat();
+        float p = (s1 != -1 && s2 != -1) ? args.substring(s1 + 1, s2).toFloat() : ((s1 != -1) ? args.substring(s1 + 1).toFloat() : 0.0f);
+        float y = (s2 != -1) ? args.substring(s2 + 1).toFloat() : 0.0f;
         manager.setTargetAttitude(r, p, y);
         Serial.printf("[CMD] Target attitude: Roll=%.1f Pitch=%.1f Yaw=%.1f deg\n", r, p, y);
     } else if (cmd.startsWith("set ")) {

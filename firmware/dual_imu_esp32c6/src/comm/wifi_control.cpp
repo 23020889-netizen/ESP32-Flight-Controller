@@ -496,19 +496,24 @@ void WifiControlManager::processCommandString(const String& rawCmd, FlightContro
 
     // 5. Lenh doi Broker MQTT: "MQTT,<host>,<port>"
     if (cmd.startsWith("MQTT,") || cmd.startsWith("mqtt,")) {
-        char host[64] = {0};
-        int port = 1883;
-        if (sscanf(cmd.c_str() + 5, "%63[^,],%d", host, &port) >= 1) {
-            setMqttBroker(host, (uint16_t)port);
+        int comma = cmd.indexOf(',', 5);
+        String host = (comma != -1) ? cmd.substring(5, comma) : cmd.substring(5);
+        int port = (comma != -1) ? cmd.substring(comma + 1).toInt() : 1883;
+        if (port <= 0) port = 1883;
+        host.trim();
+        if (host.length() > 0) {
+            setMqttBroker(host.c_str(), (uint16_t)port);
         }
         return;
     }
 
     // 6. Lenh Test Motor don le: "TEST,<motor_id>,<pct>,<sec>"
     if (cmd.startsWith("TEST,") || cmd.startsWith("test,")) {
-        int mId = 1, sec = 3;
-        float pct = 10.0f;
-        sscanf(cmd.c_str() + 5, "%d,%f,%d", &mId, &pct, &sec);
+        int c1 = cmd.indexOf(',', 5);
+        int c2 = (c1 != -1) ? cmd.indexOf(',', c1 + 1) : -1;
+        int mId = (c1 != -1) ? cmd.substring(5, c1).toInt() : 1;
+        float pct = (c1 != -1) ? ((c2 != -1) ? cmd.substring(c1 + 1, c2).toFloat() : cmd.substring(c1 + 1).toFloat()) : 10.0f;
+        int sec = (c2 != -1) ? cmd.substring(c2 + 1).toInt() : 3;
         manager.setFlightMode(FlightControlMode::MANUAL_CLI);
         esc.testSingleMotor(mId, pct, sec * 1000);
         return;

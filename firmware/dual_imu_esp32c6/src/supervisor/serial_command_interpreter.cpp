@@ -53,8 +53,15 @@ void SerialCommandInterpreter::processIncomingCommands(FlightControllerManager& 
     // Web UI dùng chung giao thức dòng cho WebSocket và WebSerial.
     // Nhận RC,<throttle>,<roll>,<pitch>,<yaw> thay vì bỏ qua như lệnh lạ.
     if (cmd.startsWith("RC,") || cmd.startsWith("rc,")) {
-        float t = 0.0f, r = 0.0f, p = 0.0f, y = 0.0f;
-        if (sscanf(cmd.c_str() + 3, "%f,%f,%f,%f", &t, &r, &p, &y) == 4) {
+        int c1 = cmd.indexOf(',', 3);
+        int c2 = (c1 != -1) ? cmd.indexOf(',', c1 + 1) : -1;
+        int c3 = (c2 != -1) ? cmd.indexOf(',', c2 + 1) : -1;
+        if (c1 != -1 && c2 != -1 && c3 != -1) {
+            float t = cmd.substring(3, c1).toFloat();
+            float r = cmd.substring(c1 + 1, c2).toFloat();
+            float p = cmd.substring(c2 + 1, c3).toFloat();
+            float y = cmd.substring(c3 + 1).toFloat();
+
             quadMotors.feedWatchdog();
             manager.setRcChannels(t, r, p, y);
             static uint32_t lastRcLogMs = 0;

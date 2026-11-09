@@ -410,11 +410,20 @@ void WifiControlManager::processCommandString(const String& rawCmd, FlightContro
     cmd.trim();
     if (cmd.length() == 0) return;
 
-    // 1. Lenh RC tu Tay Cam: "RC,<throttle>,<roll>,<pitch>,<yaw>"
-    if (cmd.startsWith("RC,") || cmd.startsWith("rc,")) {
-        float t = 0.0f, r = 0.0f, p = 0.0f, y = 0.0f;
-        int parsed = sscanf(cmd.c_str() + 3, "%f,%f,%f,%f", &t, &r, &p, &y);
-        if (parsed >= 4) {
+    // 1. Lenh RC tu Tay Cam: "RC,<throttle>,<roll>,<pitch>,<yaw>" hoac "<throttle>,<roll>,<pitch>,<yaw>"
+    bool isRc = cmd.startsWith("RC,") || cmd.startsWith("rc,");
+    int startIdx = isRc ? 3 : 0;
+    int c1 = cmd.indexOf(',', startIdx);
+    int c2 = (c1 != -1) ? cmd.indexOf(',', c1 + 1) : -1;
+    int c3 = (c2 != -1) ? cmd.indexOf(',', c2 + 1) : -1;
+
+    if (isRc || (c1 != -1 && c2 != -1 && c3 != -1 && isdigit(cmd[0]))) {
+        if (c1 != -1 && c2 != -1 && c3 != -1) {
+            float t = cmd.substring(startIdx, c1).toFloat();
+            float r = cmd.substring(c1 + 1, c2).toFloat();
+            float p = cmd.substring(c2 + 1, c3).toFloat();
+            float y = cmd.substring(c3 + 1).toFloat();
+
             lastRcPacketMs_ = millis();
             esc.feedWatchdog();
             manager.setRcChannels(t, r, p, y);
@@ -435,8 +444,8 @@ void WifiControlManager::processCommandString(const String& rawCmd, FlightContro
                 Serial.printf("[RC_WIRELESS] T:%.1f R:%.1f P:%.1f Y:%.1f | ESC:%s MODE:%s\n",
                               rcT, rcR, rcP, rcY, esc.isArmed() ? "ARMED" : "DISARMED", modeName);
             }
+            return;
         }
-        return;
     }
 
     // 2. Lenh ARM

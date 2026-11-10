@@ -450,16 +450,16 @@ void loop() {
                              attitudeState.gx,   attitudeState.gy,    attitudeState.gz,
                              dt, isArmed);
 
-        // Khi Armed VÀ có mức ga bay (targetThrottle >= 5%):
+        // Khi Armed VÀ có mức ga bay (targetThrottle >= 2%):
         // PID tính toán mô-men thăng bằng và xuất ra 4 động cơ
-        if (isArmed && px4Controller.getTargetThrottle() >= 5.0f) {
+        if (isArmed && px4Controller.getTargetThrottle() >= 2.0f) {
             const uint16_t* motor_us = px4Controller.getMotorOutputsUs();
             for (int i = 0; i < ESC_NUM_MOTORS; i++) {
                 // Tự động bù dải xung riêng cho M3 (850..1850us) và M1,2,4 (1000..2000us)
                 quadMotors.setMotorThrottleUs(i + 1, motor_us[i]);
             }
         } else if (isArmed) {
-            // Ga < 5%: Cả 4 động cơ quay chậm không tải (Idle Spin)
+            // Ga < 2%: Cả 4 động cơ quay chậm không tải (Idle Spin)
             for (int i = 0; i < ESC_NUM_MOTORS; i++) {
                 quadMotors.setMotorThrottleUs(i + 1, ESC_PULSE_IDLE_US);
             }

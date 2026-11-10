@@ -133,8 +133,8 @@ void PX4_AttitudeControl::reset() {
 PX4_QuadMixer::PX4_QuadMixer() {}
 
 void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, float yaw_torque, uint16_t motor_out_us[4]) {
-    // Nếu throttle quá nhỏ (< 5%), cả 4 động cơ giữ xung Idle
-    if (throttle < 0.05f) {
+    // Nếu throttle quá nhỏ (< 2%), cả 4 động cơ giữ xung Idle
+    if (throttle < 0.02f) {
         for (int i = 0; i < 4; i++) {
             motor_out_us[i] = ESC_PULSE_IDLE_US;
         }
@@ -176,7 +176,7 @@ void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, f
         if (m[i] < min_val) min_val = m[i];
     }
 
-    const float min_floor = 0.05f; // Sàn ga tối thiểu 5% để cánh luôn quay ổn định khi có lệnh ga
+    const float min_floor = 0.02f; // Sàn ga tối thiểu 2% để cánh luôn quay ổn định khi có lệnh ga
     float span = max_val - min_val;
     if (span > (1.0f - min_floor)) {
         float scale = (1.0f - min_floor) / span;

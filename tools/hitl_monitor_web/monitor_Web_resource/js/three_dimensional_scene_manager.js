@@ -84,7 +84,8 @@ class ThreeDimensionalSceneManager {
     const degreesToRadians = Math.PI / 180;
     this.eulerAngles.set(sample.pitch * degreesToRadians, -sample.yaw * degreesToRadians, -sample.roll * degreesToRadians, "YXZ");
     this.targetQuaternion.setFromEuler(this.eulerAngles);
-    this.droneGroup.quaternion.slerp(this.targetQuaternion, Math.min(1, deltaSeconds * 18));
+    // Tăng tốc độ slerp lên 32 để mô hình 3D xoay mượt mà 60 FPS, không có độ trễ quán tính giả
+    this.droneGroup.quaternion.slerp(this.targetQuaternion, Math.min(1, deltaSeconds * 32));
     this.propellerNodes.forEach((propeller, index) => {
       propeller.rotateZ(this.spinDirections[index] * (sample.m[index] || 0) * deltaSeconds * 0.08);
     });

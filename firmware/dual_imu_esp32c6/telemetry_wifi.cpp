@@ -29,7 +29,7 @@ static bool g_wsHandshakeDone[MAX_WS_CLIENTS] = {false};
 
 static std::deque<String> g_cmdQueue;
 static uint32_t g_lastBroadcastMs = 0;
-static const uint32_t BROADCAST_INTERVAL_MS = 40; // 25 Hz mượt mà cho 3D Monitor
+static const uint32_t BROADCAST_INTERVAL_MS = 20; // 50 Hz siêu mượt mà cho 3D Monitor và PID Telemetry
 
 static String g_activeIpStr = "192.168.4.1";
 

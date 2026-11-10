@@ -48,13 +48,24 @@ class DashboardApplicationController {
       };
     }
 
-    // 2. KẾT NỐI QUA SÓNG WIFI (WebSocket - Yêu cầu bắt WiFi ESP32-UAV-FC)
+    // 2. KẾT NỐI QUA SÓNG WIFI TTDB / SOFTAP (WebSocket)
     const bLiveWs = getElement("bLiveWs");
+    const inpWsIp = getElement("inpWsIp");
+    if (inpWsIp) {
+      const savedIp = localStorage.getItem("esp32_ip") || "10.11.162.210";
+      inpWsIp.value = savedIp;
+      inpWsIp.onchange = () => {
+        if (inpWsIp.value.trim()) localStorage.setItem("esp32_ip", inpWsIp.value.trim());
+      };
+    }
+
     if (bLiveWs) {
       bLiveWs.onclick = () => {
         this.csvReplayer.stopPlayback();
-        const defaultUrl = "ws://192.168.4.1:81";
-        const wsUrl = prompt("Nhập URL WebSocket ESP32-C6 (Laptop phải đang kết nối vào WiFi 'ESP32-UAV-FC'):", defaultUrl) || defaultUrl;
+        const targetIp = (inpWsIp ? inpWsIp.value.trim() : "") || "10.11.162.210";
+        localStorage.setItem("esp32_ip", targetIp);
+        const wsUrl = `ws://${targetIp}:81`;
+        console.log("[Dashboard] Ket noi WebSocket toi:", wsUrl);
         this.telemetryStore.connectWebSocket(wsUrl);
         setActiveMode("bLiveWs");
       };
@@ -338,20 +349,38 @@ class DashboardApplicationController {
         }
       }
 
+      // UI Elements
+      const lblGpState     = document.getElementById("lblGpState");
+      const lblGpL         = document.getElementById("lblGpL");
+      const lblGpR         = document.getElementById("lblGpR");
+      const lblGpArmStatus = document.getElementById("lblGpArmStatus");
+
       if (gp) {
-        const btns = gp.buttons.map((b) => b.pressed);
+        if (lblGpState) {
+          const nameShort = gp.id.length > 20 ? gp.id.substring(0, 18) + ".." : gp.id;
+          lblGpState.textContent = "🟢 " + nameShort;
+          lblGpState.style.background = "#15803d";
+          lblGpState.style.color = "#fff";
+        }
+
+        const btns = gp.buttons.map((b) => (typeof b === "object" ? b.pressed : Boolean(b)));
         const justPressed = (idx) => btns[idx] && !prevButtons[idx];
 
-        // Nút B (1) hoặc Back (8): DISARM / DỪNG KHẨN CẤP
-        if (justPressed(1) || justPressed(8)) {
+        // Nút B (1) hoặc Back (8) hoặc Nút số 2/3: DISARM / DỪNG KHẨN CẤP
+        if (justPressed(1) || justPressed(8) || justPressed(9)) {
           isGamepadArmed = false;
           baseThrottle = 0;
           lastSentCmd = "disarm";
           lastSendTime = performance.now();
           this.telemetryStore.sendCommand("disarm");
+          this.telemetryStore.sendCommand("RC,0,0,0,0,0");
           updateMotorSlidersUI(0, 0, 0, 0, 0);
+          if (lblGpArmStatus) {
+            lblGpArmStatus.textContent = "DISARMED";
+            lblGpArmStatus.style.color = "#f87171";
+          }
         }
-        // Nút A (0): ARM
+        // Nút A (0) hoặc Start (9) hoặc Nút số 1: ARM
         else if (justPressed(0)) {
           isGamepadArmed = true;
           baseThrottle = 0;
@@ -359,9 +388,13 @@ class DashboardApplicationController {
           lastSendTime = performance.now();
           this.telemetryStore.sendCommand("arm");
           updateMotorSlidersUI(0, 0, 0, 0, 0);
+          if (lblGpArmStatus) {
+            lblGpArmStatus.textContent = "ARMED (SẴN SÀNG)";
+            lblGpArmStatus.style.color = "#4ade80";
+          }
         }
 
-        // RB (5) / LB (4): Tăng giảm ga giữ nền (+5% / -5%)
+        // RB (5) / LB (4): Tăng giảm ga nền (+5% / -5%)
         if (justPressed(5)) { isGamepadArmed = true; baseThrottle = Math.min(60, baseThrottle + 5); }
         if (justPressed(4)) { baseThrottle = Math.max(0, baseThrottle - 5); }
 
@@ -372,48 +405,74 @@ class DashboardApplicationController {
         if (justPressed(14)) { activeMotor = 4; baseThrottle = 0; this.telemetryStore.sendCommand("m4"); }
         if (justPressed(3))  { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
 
-        // 1. Đọc trục Throttle: Cò phải RT (button 7: 0..1) hoặc Cần trái đẩy lên (-axes[1]: 0..1)
-        const rtVal = gp.buttons[7] ? gp.buttons[7].value : 0;
+        // 1. ĐỌC TRỤC THROTTLE: Cần trái đẩy lên (-axes[1]) hoặc Cò phải RT (button 7)
+        const rtVal = gp.buttons[7] ? (typeof gp.buttons[7] === "object" ? gp.buttons[7].value : (gp.buttons[7] ? 1 : 0)) : 0;
         const lyVal = gp.axes && gp.axes.length > 1 ? Math.max(0, applyDeadzone(-gp.axes[1], 0.08)) : 0;
         const stickThr = Math.max(rtVal, lyVal);
         const totalThr = Math.min(60, Math.max(0, baseThrottle + stickThr * 60));
 
-        // 2. Đọc 3 trục điều hướng: Yaw (axes[0]), Roll (axes[2]), Pitch (-axes[3])
-        const yawNorm   = gp.axes && gp.axes.length > 0 ? applyDeadzone(gp.axes[0], 0.08) : 0;
-        const rollNorm  = gp.axes && gp.axes.length > 2 ? applyDeadzone(gp.axes[2], 0.08) : 0;
-        const pitchNorm = gp.axes && gp.axes.length > 3 ? applyDeadzone(-gp.axes[3], 0.08) : 0;
-
-        const maxTilt = Math.max(Math.abs(rollNorm), Math.abs(pitchNorm), Math.abs(yawNorm));
-        if (stickThr > 0.02 || maxTilt > 0.05) {
-          isGamepadArmed = true;
+        // 2. ĐỌC 3 TRỤC ĐIỀU HƯỚNG YAW, ROLL, PITCH (Tương thích Xbox & A124 Gamepad)
+        const yawNorm = gp.axes && gp.axes.length > 0 ? applyDeadzone(gp.axes[0], 0.08) : 0;
+        
+        // Right stick Roll / Pitch (hỗ trợ cả chuẩn 4-axes và generic 5/6-axes)
+        let rollRaw = 0;
+        let pitchRaw = 0;
+        if (gp.axes && gp.axes.length >= 4) {
+          rollRaw = gp.axes[2];
+          pitchRaw = -gp.axes[3];
+        } else if (gp.axes && gp.axes.length >= 3) {
+          rollRaw = gp.axes[2];
         }
+
+        const rollNorm  = applyDeadzone(rollRaw, 0.08);
+        const pitchNorm = applyDeadzone(pitchRaw, 0.08);
+
+        const targetRollDeg  = rollNorm * 25.0;  // Góc Roll mục tiêu (-25° .. +25°)
+        const targetPitchDeg = pitchNorm * 25.0; // Góc Pitch mục tiêu (-25° .. +25°)
+        const targetYawDeg   = yawNorm * 45.0;   // Tốc độ góc Yaw (-45° .. +45°)
+
+        if (stickThr > 0.02 || Math.abs(rollNorm) > 0.05 || Math.abs(pitchNorm) > 0.05) {
+          isGamepadArmed = true;
+          if (lblGpArmStatus) {
+            lblGpArmStatus.textContent = "ARMED (SẴN SÀNG)";
+            lblGpArmStatus.style.color = "#4ade80";
+          }
+        }
+
+        // Cập nhật giá trị lên UI Card
+        if (lblGpL) lblGpL.textContent = `Thr: ${totalThr.toFixed(0)}% | Y: ${targetYawDeg.toFixed(0)}°`;
+        if (lblGpR) lblGpR.textContent = `R: ${targetRollDeg.toFixed(0)}° | P: ${targetPitchDeg.toFixed(0)}°`;
 
         const now = performance.now();
         if (activeMotor === 0) {
-          // Chế độ điều khiển cả 4 động cơ + Trộn Quad-X (Throttle + Roll + Pitch + Yaw)
-          const rollMix  = rollNorm  * 20.0; // +-20%
-          const pitchMix = pitchNorm * 20.0; // +-20%
-          const yawMix   = yawNorm   * 15.0; // +-15%
+          // Tính toán phối trộn Quad-X
+          const rollMix  = rollNorm  * 20.0;
+          const pitchMix = pitchNorm * 20.0;
+          const yawMix   = yawNorm   * 15.0;
 
-          // Nếu chưa bóp ga (totalThr == 0) nhưng gạt cần Roll/Pitch/Yaw -> Tự cấp ga nền 20% theo độ gạt cần để test nghiêng ngay
-          const effectiveThr = totalThr > 1.0 ? totalThr : (maxTilt > 0 ? maxTilt * 20.0 : 0.0);
+          const effectiveThr = totalThr > 1.0 ? totalThr : (Math.max(Math.abs(rollNorm), Math.abs(pitchNorm)) > 0.1 ? 20.0 : 0.0);
 
           let m1 = 0, m2 = 0, m3 = 0, m4 = 0;
-          if (effectiveThr > 0.2 || maxTilt > 0) {
+          if (effectiveThr > 0.2) {
             m1 = Math.min(60, Math.max(0, effectiveThr - rollMix + pitchMix - yawMix)); // M1: FR (CCW)
             m2 = Math.min(60, Math.max(0, effectiveThr + rollMix - pitchMix - yawMix)); // M2: RL (CCW)
             m3 = Math.min(60, Math.max(0, effectiveThr + rollMix + pitchMix + yawMix)); // M3: FL (CW)
             m4 = Math.min(60, Math.max(0, effectiveThr - rollMix - pitchMix + yawMix)); // M4: RR (CW)
           }
 
-          const cmd = `x ${m1.toFixed(1)} ${m2.toFixed(1)} ${m3.toFixed(1)} ${m4.toFixed(1)}`;
-          const valueChanged = (cmd !== lastSentCmd) && (now - lastSendTime >= 40 || (m1 === 0 && m2 === 0 && m3 === 0 && m4 === 0));
-          const heartbeatDue = isGamepadArmed && (now - lastSendTime >= 500);
+          // Gói tin chuẩn RC cho bộ Cascaded PID PX4 trên ESP32:
+          // RC,throttle,roll,pitch,yaw,arm
+          const rcCmd = `RC,${effectiveThr.toFixed(1)},${targetRollDeg.toFixed(1)},${targetPitchDeg.toFixed(1)},${targetYawDeg.toFixed(1)},${isGamepadArmed ? 1 : 0}`;
+          const xCmd  = `x ${m1.toFixed(1)} ${m2.toFixed(1)} ${m3.toFixed(1)} ${m4.toFixed(1)}`;
+
+          const valueChanged = (rcCmd !== lastSentCmd) && (now - lastSendTime >= 35 || (effectiveThr === 0));
+          const heartbeatDue = isGamepadArmed && (now - lastSendTime >= 300);
 
           if (valueChanged || heartbeatDue) {
-            lastSentCmd = cmd;
+            lastSentCmd = rcCmd;
             lastSendTime = now;
-            this.telemetryStore.sendCommand(cmd);
+            // Gửi đồng thời gói RC chuẩn cho PID và gói mixer cho an toàn
+            this.telemetryStore.sendCommand(rcCmd);
             updateMotorSlidersUI(m1, m2, m3, m4, effectiveThr);
           }
         } else {
@@ -421,7 +480,7 @@ class DashboardApplicationController {
           const singleThr = Math.min(50, Math.round(totalThr * 10) / 10);
           const cmd = `m${activeMotor} ${singleThr}`;
           const valueChanged = (cmd !== lastSentCmd) && (now - lastSendTime >= 40 || singleThr === 0);
-          const heartbeatDue = isGamepadArmed && (now - lastSendTime >= 500);
+          const heartbeatDue = isGamepadArmed && (now - lastSendTime >= 300);
 
           if (valueChanged || heartbeatDue) {
             lastSentCmd = cmd;
@@ -431,6 +490,12 @@ class DashboardApplicationController {
         }
 
         prevButtons = btns;
+      } else {
+        if (lblGpState && lblGpState.textContent !== "Chưa cắm tay cầm") {
+          lblGpState.textContent = "Chưa cắm tay cầm";
+          lblGpState.style.background = "#334155";
+          lblGpState.style.color = "#94a3b8";
+        }
       }
       requestAnimationFrame(pollGamepad);
     };

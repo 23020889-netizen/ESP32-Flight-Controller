@@ -90,11 +90,11 @@ void printTelemetry() {
 }
 
 // ============================================================================
-// 4. UNIFIED COMMAND ENGINE (HỖ TRỢ SERIAL CLI + XBOX PC + WIFI UDP + WEBSOCKET 3D)
+// 4. UNIFIED COMMAND ENGINE (HỖ TRỢ SERIAL CLI + XBOX/A124 GAMEPAD + WIFI WEBSOCKET/UDP)
 // ============================================================================
 static int activeTestMotor = 0;   // 0 = ALL 4 MOTORS, 1..4 = Motor riêng lẻ
 static bool safetyLimit60Pct = false;
-static bool pidModeEnabled = false; // Mặc định FALSE: Tăng ga đồng tốc 4 motor & nhận trực tiếp Roll/Pitch/Yaw từ tay cầm Xbox
+static bool pidModeEnabled = true; // Mặc định TRUE: Chạy bộ điều khiển nối tiếp Cascaded PID PX4 tự cân bằng
 
 void executeCommand(String cmd, const char* sourceTag) {
     cmd.trim();
@@ -102,7 +102,40 @@ void executeCommand(String cmd, const char* sourceTag) {
 
     char logBuf[128];
 
-    // Hỗ trợ gói tin tay cầm dạng <Throttle,Roll,Pitch,Yaw,Arm> (1000..2000us)
+    // 1. HỖ TRỢ GÓI TIN TAY CẦM CHUẨN RC: "RC,thr,roll,pitch,yaw,arm" (hoặc "RC thr roll pitch yaw arm")
+    //    thr: 0.0..100.0% | roll: -30.0..30.0° | pitch: -30.0..30.0° | yaw: -180..180° | arm: 0 (DISARM) / 1 (ARM)
+    if (cmd.startsWith("RC,") || cmd.startsWith("rc,") || cmd.startsWith("RC ") || cmd.startsWith("rc ")) {
+        float t = 0, r = 0, p = 0, y = 0;
+        int arm = 0;
+        char sep = cmd.charAt(2);
+        const char* pData = cmd.c_str() + 3;
+        int parsed = 0;
+        if (sep == ',') {
+            parsed = sscanf(pData, "%f,%f,%f,%f,%d", &t, &r, &p, &y, &arm);
+        } else {
+            parsed = sscanf(pData, "%f %f %f %f %d", &t, &r, &p, &y, &arm);
+        }
+        if (parsed >= 4) {
+            if (parsed == 4) arm = (t > 2.0f) ? 1 : 0;
+            if (t > 1000.0f) t = (t - 1000.0f) / 10.0f; // Chuyển đổi nếu gửi dạng xung µs
+            if (arm == 0 || t < 1.0f) {
+                quadMotors.disarm();
+                px4Controller.setTargetThrottle(0.0f);
+            } else {
+                if (quadMotors.getState() != ESC_STATE_ARMED) {
+                    quadMotors.arm();
+                    px4Controller.reset();
+                    px4Controller.lockCurrentHeading(fusedData.yaw);
+                }
+                pidModeEnabled = true;
+                px4Controller.setTargetThrottle(t);
+                px4Controller.setTargetAttitude(r, p, fusedData.yaw + y * 0.1f);
+            }
+            return;
+        }
+    }
+
+    // 2. Hỗ trợ gói tin tay cầm dạng <Throttle,Roll,Pitch,Yaw,Arm> (1000..2000us)
     if (cmd.startsWith("<") && cmd.endsWith(">")) {
         String inner = cmd.substring(1, cmd.length() - 1);
         int t = 1000, r = 0, p = 0, y = 0, arm = 0;
@@ -113,40 +146,55 @@ void executeCommand(String cmd, const char* sourceTag) {
             } else {
                 if (quadMotors.getState() != ESC_STATE_ARMED) {
                     quadMotors.arm();
+                    px4Controller.reset();
+                    px4Controller.lockCurrentHeading(fusedData.yaw);
                 }
-                pidModeEnabled = false;
-                px4Controller.setTargetThrottle(0.0f); // Bypass PID khi chạy trực tiếp Quad-X Mixer từ tay cầm
-                int m1 = constrain(t - p - r - y, 1000, 2000);
-                int m2 = constrain(t + p + r - y, 1000, 2000);
-                int m3 = constrain(t + p - r + y, 1000, 2000);
-                int m4 = constrain(t - p + r + y, 1000, 2000);
-                quadMotors.setMotorThrottleUs(1, (uint16_t)m1);
-                quadMotors.setMotorThrottleUs(2, (uint16_t)m2);
-                quadMotors.setMotorThrottleUs(3, (uint16_t)m3);
-                quadMotors.setMotorThrottleUs(4, (uint16_t)m4);
+                float pct = constrain((float)(t - 1000) / 10.0f, 0.0f, 100.0f);
+                pidModeEnabled = true;
+                px4Controller.setTargetThrottle(pct);
+                px4Controller.setTargetAttitude((float)r * 0.1f, (float)p * 0.1f, fusedData.yaw);
             }
             return;
         }
     }
 
-    // Hỗ trợ gói tin nhanh 4 kênh từ script Xbox trên PC & Web 3D: "x <m1%> <m2%> <m3%> <m4%>"
+    // 3. Hỗ trợ gói tin 4 kênh Quad-X Mixer từ Web 3D & Python: "x <m1%> <m2%> <m3%> <m4%>"
     if (cmd.startsWith("x ") || cmd.startsWith("X ")) {
         float p1 = 0, p2 = 0, p3 = 0, p4 = 0;
         if (sscanf(cmd.c_str() + 2, "%f %f %f %f", &p1, &p2, &p3, &p4) == 4) {
+            if (p1 <= 0.1f && p2 <= 0.1f && p3 <= 0.1f && p4 <= 0.1f) {
+                quadMotors.setMotorThrottlePct(1, 0.0f);
+                quadMotors.setMotorThrottlePct(2, 0.0f);
+                quadMotors.setMotorThrottlePct(3, 0.0f);
+                quadMotors.setMotorThrottlePct(4, 0.0f);
+                px4Controller.setTargetThrottle(0.0f);
+                return;
+            }
             if (quadMotors.getState() != ESC_STATE_ARMED) {
                 quadMotors.arm();
+                px4Controller.reset();
+                px4Controller.lockCurrentHeading(fusedData.yaw);
             }
-            pidModeEnabled = false;
-            px4Controller.setTargetThrottle(0.0f);
             float maxCap = safetyLimit60Pct ? 60.0f : 100.0f;
             if (p1 > maxCap) p1 = maxCap;
             if (p2 > maxCap) p2 = maxCap;
             if (p3 > maxCap) p3 = maxCap;
             if (p4 > maxCap) p4 = maxCap;
-            quadMotors.setMotorThrottlePct(1, p1);
-            quadMotors.setMotorThrottlePct(2, p2);
-            quadMotors.setMotorThrottlePct(3, p3);
-            quadMotors.setMotorThrottlePct(4, p4);
+
+            // Chế độ Cascaded PID: tính toán ga trung bình và góc nghiêng mong muốn
+            if (pidModeEnabled) {
+                float avgThr = (p1 + p2 + p3 + p4) * 0.25f;
+                px4Controller.setTargetThrottle(avgThr);
+                float rollTarget  = (p2 + p3 - p1 - p4) * 0.5f;
+                float pitchTarget = (p1 + p3 - p2 - p4) * 0.5f;
+                px4Controller.setTargetAttitude(rollTarget, pitchTarget, fusedData.yaw);
+            } else {
+                // Chế độ điều khiển xuất xung trực tiếp theo mixer
+                quadMotors.setMotorThrottlePct(1, p1);
+                quadMotors.setMotorThrottlePct(2, p2);
+                quadMotors.setMotorThrottlePct(3, p3);
+                quadMotors.setMotorThrottlePct(4, p4);
+            }
             return;
         }
     }
@@ -398,14 +446,14 @@ void setup() {
     // 5. Khởi tạo Bộ điều khiển bay PX4 Multicopter (200Hz Loop)
     px4Controller.init(200.0f);
 
-    // 6. Khởi tạo Access Point WiFi 6, UDP Telemetry Broadcaster & WebSocket Server
-    //    SSID: "ESP32-UAV-FC" | Mật khẩu: "dronebridge" | UDP: 14550 | WS: 81
-    telemetry_wifi_init("ESP32-UAV-FC", "dronebridge", 14550, 81);
+    // 6. Khởi tạo Dual-Mode WiFi: Tự động kết nối mạng phòng Lab "VNU-IS TTDBCLKT" & SoftAP "ESP32-UAV-FC"
+    //    Station: "VNU-IS TTDBCLKT" / "Ttdbclkt9" | SoftAP: "ESP32-UAV-FC" / "dronebridge" | UDP: 14550 | WS: 81
+    telemetry_wifi_init("VNU-IS TTDBCLKT", "Ttdbclkt9", "ESP32-UAV-FC", "dronebridge", 14550, 81);
 
     lastPidUs = micros();
 
     Serial.println("[SETUP] He thong All-in-One FC & Telemetry da san sang hoat dong!");
-    Serial.println("[SETUP] Ket noi WiFi 'ESP32-UAV-FC' de truy cap Web 3D Monitor hoac VIO.\n");
+    Serial.println("[SETUP] Truy cap Web 3D Monitor qua IP Wi-Fi TTDB hoac SoftAP 'ESP32-UAV-FC'.\n");
     Serial.println("==================================================================\n");
 }
 
@@ -436,11 +484,10 @@ void loop() {
                              fusedData.gx,   fusedData.gy,    fusedData.gz,
                              dt, isArmed);
 
-        // Chỉ khi đang Armed, ĐANG BẬT CHẾ ĐỘ PID (pidModeEnabled == true), có cảm biến IMU VÀ ga >= 5%:
-        // PID mới tính toán mô-men tự cân bằng và ghi đè xung vào 4 động cơ.
-        // Ngược lại (mặc định khi kéo ga hoặc dùng tay cầm Xbox): cả 4 động cơ quay đồng tốc hoặc theo góc nghiêng tay cầm!
-        bool hasImu = (mpuData.ready || xsensData.has_orientation);
-        if (isArmed && pidModeEnabled && hasImu && px4Controller.getTargetThrottle() >= 5.0f) {
+        // Khi đang Armed và ga >= 2.0%:
+        // Cascaded PID tự động tính toán mô-men cân bằng và điều khiển 4 động cơ.
+        // Motor 3 tự động chuyển đổi sang dải xung 850..1850us, các motor khác nhận 1000..2000us qua setMotorThrottleUs!
+        if (isArmed && pidModeEnabled && px4Controller.getTargetThrottle() >= 2.0f) {
             const uint16_t* motor_us = px4Controller.getMotorOutputsUs();
             for (int i = 0; i < ESC_NUM_MOTORS; i++) {
                 quadMotors.setMotorThrottleUs(i + 1, motor_us[i]);

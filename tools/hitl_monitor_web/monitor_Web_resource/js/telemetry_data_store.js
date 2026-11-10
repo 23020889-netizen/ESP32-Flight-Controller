@@ -163,7 +163,7 @@ class TelemetryDataStore {
   }
 
   /**
-   * KẾT NỐI KHÔNG DÂY QUA SÓNG WIFI SOFTAP (WebSocket)
+   * KẾT NỐI KHÔNG DÂY QUA SÓNG WIFI TTDB / SOFTAP (WebSocket)
    */
   connectWebSocket(endpointUrl) {
     this.connectionMode = "ws";
@@ -175,9 +175,28 @@ class TelemetryDataStore {
       this.serialPort = null;
     }
 
+    const bLiveWs = document.getElementById("bLiveWs");
+
     try {
-      if (this.webSocketConnection) this.webSocketConnection.close();
+      if (this.webSocketConnection) {
+        try { this.webSocketConnection.close(); } catch (_e) {}
+      }
+
+      if (bLiveWs) {
+        bLiveWs.textContent = "⏳ Đang kết nối...";
+        bLiveWs.style.background = "linear-gradient(135deg, #d97706 0%, #f59e0b 100%)";
+      }
+
       this.webSocketConnection = new WebSocket(endpointUrl);
+
+      this.webSocketConnection.onopen = () => {
+        console.log("[WebSocket] Đã kết nối thành công tới:", endpointUrl);
+        if (bLiveWs) {
+          bLiveWs.textContent = "🟢 Đã Kết Nối WiFi";
+          bLiveWs.style.background = "linear-gradient(135deg, #15803d 0%, #22c55e 100%)";
+        }
+      };
+
       this.webSocketConnection.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
@@ -187,12 +206,30 @@ class TelemetryDataStore {
           }
         } catch (_ignoredError) {}
       };
+
+      this.webSocketConnection.onerror = (err) => {
+        console.warn("[WebSocket Error]", err);
+        if (bLiveWs && this.connectionMode === "ws") {
+          bLiveWs.textContent = "🔴 Lỗi Kết Nối";
+          bLiveWs.style.background = "linear-gradient(135deg, #b91c1c 0%, #ef4444 100%)";
+        }
+      };
+
       this.webSocketConnection.onclose = () => {
+        if (bLiveWs && this.connectionMode === "ws") {
+          bLiveWs.textContent = "🔄 Đang Thử Lại...";
+          bLiveWs.style.background = "linear-gradient(135deg, #475569 0%, #64748b 100%)";
+        }
         if (this.connectionMode === "ws") {
           setTimeout(() => this.connectionMode === "ws" && this.connectWebSocket(endpointUrl), 2000);
         }
       };
-    } catch (_connectionError) {}
+    } catch (_connectionError) {
+      if (bLiveWs) {
+        bLiveWs.textContent = "🔴 Lỗi Socket";
+        bLiveWs.style.background = "#ef4444";
+      }
+    }
   }
 
   /**

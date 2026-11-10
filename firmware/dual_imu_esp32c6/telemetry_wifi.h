@@ -22,15 +22,22 @@ struct TelemetryPacket {
 
 /**
  * @brief Khởi tạo hệ thống truyền thông không dây WiFi & Telemetry trên ESP32-C6
- * @param ssid Tên mạng WiFi phát ra từ ESP32-C6 (mặc định: "ESP32-UAV-FC")
- * @param password Mật khẩu WiFi (mặc định: "dronebridge", để trống "" nếu mạng mở)
+ * Hỗ trợ Dual-Mode (WIFI_AP_STA): Tự động kết nối vào mạng Wi-Fi phòng Lab "VNU-IS TTDBCLKT"
+ * và đồng thời duy trì SoftAP dự phòng "ESP32-UAV-FC" (192.168.4.1).
+ * 
+ * @param sta_ssid Tên mạng WiFi trạm Station cần kết nối (mặc định: "VNU-IS TTDBCLKT")
+ * @param sta_pass Mật khẩu WiFi trạm Station (mặc định: "Ttdbclkt9")
+ * @param ap_ssid Tên mạng SoftAP phát từ ESP32-C6 (mặc định: "ESP32-UAV-FC")
+ * @param ap_pass Mật khẩu SoftAP (mặc định: "dronebridge")
  * @param udpPort Cổng UDP bắn telemetry (mặc định: 14550)
  * @param wsPort Cổng WebSocket cho Web 3D Dashboard (mặc định: 81)
  */
-void telemetry_wifi_init(const char* ssid = "ESP32-UAV-FC", 
-                         const char* password = "dronebridge",
+void telemetry_wifi_init(const char* sta_ssid = "VNU-IS TTDBCLKT",
+                         const char* sta_pass = "Ttdbclkt9",
+                         const char* ap_ssid  = "ESP32-UAV-FC", 
+                         const char* ap_pass  = "dronebridge",
                          uint16_t udpPort = 14550,
-                         uint16_t wsPort = 81);
+                         uint16_t wsPort  = 81);
 
 /**
  * @brief Cập nhật và phát gói tin Telemetry ra mạng không dây (UDP & WebSocket)

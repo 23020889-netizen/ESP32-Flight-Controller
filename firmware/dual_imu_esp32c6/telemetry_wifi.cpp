@@ -148,39 +148,77 @@ static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
             cmd.trim();
             if (cmd.length() > 0) {
                 Serial.printf("[WIFI_WS] Received command from Web: '%s'\n", cmd.c_str());
-                if (g_cmdQueue.size() < 10) {
-                    g_cmdQueue.push_back(cmd);
+                if (g_cmdQueue.size() >= 5) {
+                    g_cmdQueue.pop_front(); // Loại bỏ lệnh cũ để ưu tiên lệnh mới nhất, triệt tiêu độ trễ điều khiển
                 }
+                g_cmdQueue.push_back(cmd);
             }
         }
     }
 }
 
 // ============================================================================
-// 3. KHỞI TẠO TELEMETRY WIFI
+// 3. KHỞI TẠO TELEMETRY WIFI (DUAL-MODE AP_STA: TTDB LAB + SOFTPAP FALLBACK)
 // ============================================================================
-void telemetry_wifi_init(const char* ssid, const char* password, uint16_t udpPort, uint16_t wsPort) {
+void telemetry_wifi_init(const char* sta_ssid, const char* sta_pass, const char* ap_ssid, const char* ap_pass, uint16_t udpPort, uint16_t wsPort) {
     g_udpPort = udpPort;
     g_wsPort = wsPort;
 
-    Serial.println("\n[WIFI] Dang cau hinh Access Point WiFi 6 tren ESP32-C6...");
-    WiFi.mode(WIFI_AP);
+    Serial.println("\n[WIFI] ========================================================");
+    Serial.println("[WIFI] DANG KHOI TAO DUAL-MODE WIFI (AP + STATION) ESP32-C6...");
+
+    // 1. Cấu hình chế độ Dual-Mode: Vừa phát SoftAP vừa kết nối vào trạm Station
+    WiFi.mode(WIFI_AP_STA);
+
+    // 2. Khởi tạo SoftAP dự phòng (192.168.4.1)
     WiFi.softAPConfig(AP_LOCAL_IP, AP_GATEWAY, AP_SUBNET);
-    
-    if (password && strlen(password) >= 8) {
-        WiFi.softAP(ssid, password);
+    if (ap_pass && strlen(ap_pass) >= 8) {
+        WiFi.softAP(ap_ssid, ap_pass);
     } else {
-        WiFi.softAP(ssid);
+        WiFi.softAP(ap_ssid);
+    }
+    Serial.printf("[WIFI_AP]  SoftAP khoi tao: '%s' | IP: 192.168.4.1\n", ap_ssid);
+
+    // 3. Kết nối vào mạng Wi-Fi phòng Lab "VNU-IS TTDBCLKT"
+    bool staConnected = false;
+    if (sta_ssid && strlen(sta_ssid) > 0) {
+        Serial.printf("[WIFI_STA] Dang ket noi vao mang phong Lab: '%s' ...", sta_ssid);
+        if (sta_pass && strlen(sta_pass) > 0) {
+            WiFi.begin(sta_ssid, sta_pass);
+        } else {
+            WiFi.begin(sta_ssid);
+        }
+
+        uint32_t startAttempt = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 6000) {
+            delay(250);
+            Serial.print(".");
+        }
+        Serial.println();
+
+        if (WiFi.status() == WL_CONNECTED) {
+            staConnected = true;
+            Serial.println("[WIFI_STA] >>> KET NOI THANH CONG VAO MANG PHONG LAB!");
+            Serial.printf("[WIFI_STA] >>> IP CUA DRONE TREN TTDB: %s\n", WiFi.localIP().toString().c_str());
+            Serial.printf("[WIFI_STA] >>> WEBSOCKET URL CHO WEB:   ws://%s:%u\n", WiFi.localIP().toString().c_str(), g_wsPort);
+        } else {
+            Serial.println("[WIFI_STA] [CANH BAO] Khong the ket noi mang Lab trong 6s. Su dung SoftAP!");
+        }
     }
 
-    // Khởi động UDP Socket cho VIO Python Pipeline
+    // 4. Khởi động UDP Socket cho Telemetry Broadcaster
     g_udp.begin(g_udpPort);
-    Serial.printf("[WIFI_UDP] Khoi dong UDP Telemetry Broadcaster tai Port %u\n", g_udpPort);
+    Serial.printf("[WIFI_UDP] Khoi dong UDP Telemetry tai Port %u\n", g_udpPort);
 
-    // Khởi động WebSocket Server cho Giao diện 3D HITL Testbed Monitor
+    // 5. Khởi động WebSocket Server cho Giao diện Web 3D & Tay cầm Gamepad
     g_wsServer.begin(g_wsPort);
-    Serial.printf("[WIFI_WS]  Khoi dong WebSocket Server tai ws://192.168.4.1:%u\n", g_wsPort);
-    Serial.printf("[WIFI]     SSID: '%s' | Password: '%s' | IP: 192.168.4.1\n\n", ssid, (password ? password : "OPEN"));
+    if (staConnected) {
+        Serial.printf("[WIFI_WS]  WebSocket Server san sang: ws://%s:%u va ws://192.168.4.1:%u\n",
+                      WiFi.localIP().toString().c_str(), g_wsPort, g_wsPort);
+    } else {
+        Serial.printf("[WIFI_WS]  WebSocket Server san sang: ws://192.168.4.1:%u\n", g_wsPort);
+    }
+    Serial.println("[WIFI] ========================================================\n");
 }
 
 // ============================================================================
@@ -223,8 +261,11 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
             udpBuf[len] = '\0';
             String cmd = String(udpBuf);
             cmd.trim();
-            if (cmd.length() > 0 && g_cmdQueue.size() < 10) {
+            if (cmd.length() > 0) {
                 Serial.printf("[WIFI_UDP] Received UDP command: '%s'\n", cmd.c_str());
+                if (g_cmdQueue.size() >= 5) {
+                    g_cmdQueue.pop_front();
+                }
                 g_cmdQueue.push_back(cmd);
             }
         }
@@ -245,9 +286,18 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
              packet.ax,   packet.ay,   packet.az,
              packet.gx,   packet.gy,   packet.gz);
 
+    // Bắn ra SoftAP subnet
     g_udp.beginPacket(AP_BROADCAST_IP, g_udpPort);
     g_udp.write((const uint8_t*)udpMsg, strlen(udpMsg));
     g_udp.endPacket();
+
+    // Nếu đã kết nối mạng Station TTDB, bắn thêm vào broadcast của Station
+    if (WiFi.status() == WL_CONNECTED) {
+        IPAddress staBcast = WiFi.broadcastIP();
+        g_udp.beginPacket(staBcast, g_udpPort);
+        g_udp.write((const uint8_t*)udpMsg, strlen(udpMsg));
+        g_udp.endPacket();
+    }
 
     // --- B. BẮN GÓI JSON CHO GIAO DIỆN WEB 3D HITL TESTBED MONITOR ---
     // Khớp tuyệt đối với cấu trúc payload mà telemetry_data_store.js đang lắng nghe

@@ -87,7 +87,12 @@ class ThreeDimensionalSceneManager {
     // Tăng tốc độ slerp lên 32 để mô hình 3D xoay mượt mà 60 FPS, không có độ trễ quán tính giả
     this.droneGroup.quaternion.slerp(this.targetQuaternion, Math.min(1, deltaSeconds * 32));
     this.propellerNodes.forEach((propeller, index) => {
-      propeller.rotateZ(this.spinDirections[index] * (sample.m[index] || 0) * deltaSeconds * 0.08);
+      const spinDelta = this.spinDirections[index] * (sample.m[index] || 0) * deltaSeconds * 0.08;
+      if (propeller.userData && propeller.userData.spinAxis === "z") {
+        propeller.rotateZ(spinDelta);
+      } else {
+        propeller.rotateY(spinDelta);
+      }
     });
     this.camera.position.set(
       this.cameraDistance * Math.sin(this.azimuthRadians) * Math.cos(this.elevationRadians),

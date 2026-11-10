@@ -41,6 +41,23 @@ class TelemetryLoopUpdater {
     const sPk = getElement("sPk");
     if (sPk) sPk.textContent = String(controller.telemetryStore.totalPacketCount);
 
+    // 1. Cập nhật góc MPU-6050
+    const mpuR = getElement("mpuR");
+    if (mpuR) mpuR.textContent = (latestSample.mpu_r !== undefined ? latestSample.mpu_r : latestSample.roll).toFixed(1) + "°";
+    const mpuP = getElement("mpuP");
+    if (mpuP) mpuP.textContent = (latestSample.mpu_p !== undefined ? latestSample.mpu_p : latestSample.pitch).toFixed(1) + "°";
+    const mpuY = getElement("mpuY");
+    if (mpuY) mpuY.textContent = (latestSample.mpu_y !== undefined ? latestSample.mpu_y : latestSample.yaw).toFixed(1) + "°";
+
+    // 2. Cập nhật góc Xsens MTi-3
+    const xsR = getElement("xsR");
+    if (xsR) xsR.textContent = (latestSample.xs_r !== undefined ? latestSample.xs_r : latestSample.roll).toFixed(1) + "°";
+    const xsP = getElement("xsP");
+    if (xsP) xsP.textContent = (latestSample.xs_p !== undefined ? latestSample.xs_p : latestSample.pitch).toFixed(1) + "°";
+    const xsY = getElement("xsY");
+    if (xsY) xsY.textContent = (latestSample.xs_y !== undefined ? latestSample.xs_y : latestSample.yaw).toFixed(1) + "°";
+
+    // 3. Cập nhật góc dung hợp EKF
     const eR = getElement("eR");
     if (eR) eR.textContent = latestSample.roll.toFixed(1) + "°";
     const eP = getElement("eP");

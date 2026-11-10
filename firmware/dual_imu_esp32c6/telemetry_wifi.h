@@ -7,11 +7,18 @@
  * @brief Cấu trúc dữ liệu Telemetry phát lên Giao diện Web 3D
  */
 struct TelemetryPacket {
-    float roll;             // Góc Roll (độ)
-    float pitch;            // Góc Pitch (độ)
-    float yaw;              // Góc Yaw (độ)
+    // 1. Góc dung hợp tối ưu PX4 EKF (Dung hợp MPU6050 + Xsens MTi-3)
+    float roll;             // Góc Roll EKF (độ)
+    float pitch;            // Góc Pitch EKF (độ)
+    float yaw;              // Góc Yaw EKF (độ)
     float ax, ay, az;       // Gia tốc 3 trục (m/s^2)
     float gx, gy, gz;       // Vận tốc góc 3 trục (deg/s)
+
+    // 2. Dữ liệu thô từ từng cảm biến độc lập (Cho Web Monitor so sánh)
+    float mpu_roll, mpu_pitch, mpu_yaw;    // Cảm biến MPU-6050 (I2C)
+    float xs_roll,  xs_pitch,  xs_yaw;     // Cảm biến Xsens MTi-3 AHRS (UART1)
+
+    // 3. Trạng thái bay và động cơ
     float z;                // Độ cao ước tính (mét)
     float vz;               // Vận tốc thẳng đứng (m/s)
     uint16_t m_us[4];       // Độ rộng xung 4 motor (µs)

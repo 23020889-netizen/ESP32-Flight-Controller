@@ -170,12 +170,31 @@
 
           <button id="btnReturnPid" style="width:100%;background:linear-gradient(135deg, #0284c7 0%, #2563eb 100%);color:#fff;border:none;border-radius:4px;padding:6px;font-size:11px;font-weight:bold;cursor:pointer">🔄 Trở Lại Chế Độ PID Tự Cân Bằng</button>
         </div>
+        <!-- BẢNG SO SÁNH DỮ LIỆU CẢM BIẾN DUAL-IMU & PX4 EKF -->
         <div class="gl pn">
-          <h2>GÓC ĐỊNH HƯỚNG (EULER)<em>REALTIME</em></h2>
-          <div class="eul mono">
-            <div style="--k:var(--c1)"><span>ROLL (NGHIÊNG)</span><b id="eR">0.0°</b></div>
-            <div style="--k:var(--c2)"><span>PITCH (CHÚC)</span><b id="eP">0.0°</b></div>
-            <div style="--k:var(--c3)"><span>YAW (XOAY)</span><b id="eY">0.0°</b></div>
+          <h2>SO SÁNH CẢM BIẾN DUAL-IMU &amp; PX4 EKF<em>MULTI-SENSOR</em></h2>
+          <div style="background:rgba(15,23,42,0.7);border-radius:6px;padding:8px;border:1px solid rgba(255,255,255,0.08);margin-bottom:8px">
+            <!-- 1. MPU-6050 -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px;font-weight:700;color:#38bdf8">🔵 MPU-6050 (I2C)</span>
+              <span class="mono" style="font-size:11px;color:#cbd5e1">
+                R:<b id="mpuR" style="color:#38bdf8">0.0°</b> P:<b id="mpuP" style="color:#38bdf8">0.0°</b> Y:<b id="mpuY" style="color:#38bdf8">0.0°</b>
+              </span>
+            </div>
+            <!-- 2. Xsens MTi-3 -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px;font-weight:700;color:#f59e0b">🟠 Xsens MTi-3 (AHRS)</span>
+              <span class="mono" style="font-size:11px;color:#cbd5e1">
+                R:<b id="xsR" style="color:#f59e0b">0.0°</b> P:<b id="xsP" style="color:#f59e0b">0.0°</b> Y:<b id="xsY" style="color:#f59e0b">0.0°</b>
+              </span>
+            </div>
+            <!-- 3. PX4 EKF Dung Hợp -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
+              <span style="font-size:11px;font-weight:700;color:#22c55e">🟢 PX4 EKF (Dung Hợp)</span>
+              <span class="mono" style="font-size:11px;color:#fff">
+                R:<b id="eR" style="color:#22c55e">0.0°</b> P:<b id="eP" style="color:#22c55e">0.0°</b> Y:<b id="eY" style="color:#22c55e">0.0°</b>
+              </span>
+            </div>
           </div>
         </div>
         <div class="gl pn">

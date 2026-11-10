@@ -25,7 +25,17 @@ static bool g_wsHandshakeDone[MAX_WS_CLIENTS] = {false};
 
 static std::deque<String> g_cmdQueue;
 static uint32_t g_lastBroadcastMs = 0;
-static const uint32_t BROADCAST_INTERVAL_MS = 25; // 40 Hz mượt mà cho 3D Monitor
+static const uint32_t BROADCAST_INTERVAL_MS = 40; // 25 Hz mượt mà cho 3D Monitor không nghẽn RAM
+
+// Thông tin Máy Tính Chủ (Host PC EKF2 & Gamepad Server)
+static IPAddress g_hostIp(0, 0, 0, 0);
+static uint16_t  g_hostPort = 14550;
+static bool      g_hostKnown = false;
+static HostFeedback g_hostFeedback = {0};
+
+// Rate limiter cho gói tin RAW IMU gửi lên PC
+static uint32_t g_lastRawSendUs = 0;
+static const uint32_t RAW_SEND_INTERVAL_US = 10000; // 100 Hz (10ms)
 
 // ============================================================================
 // 2. HELPER CHUẨN RFC6455 WEBSOCKET HANDSHAKE
@@ -33,7 +43,7 @@ static const uint32_t BROADCAST_INTERVAL_MS = 25; // 40 Hz mượt mà cho 3D Mo
 static bool perform_ws_handshake(WiFiClient& client, int clientIndex) {
     String req = "";
     uint32_t startMs = millis();
-    while (client.connected() && millis() - startMs < 500) {
+    while (client.connected() && millis() - startMs < 300) {
         if (client.available()) {
             char c = (char)client.read();
             req += c;
@@ -75,9 +85,9 @@ static bool perform_ws_handshake(WiFiClient& client, int clientIndex) {
     return true;
 }
 
-// Gửi 1 Frame dữ liệu Text Unmasked chuẩn RFC6455 từ Server -> Browser
+// Gửi 1 Frame dữ liệu Text Unmasked chuẩn RFC6455 từ Server -> Browser (Non-blocking)
 static void send_ws_text_frame(WiFiClient& client, const char* textPayload, size_t len) {
-    if (!client.connected()) return;
+    if (!client.connected() || client.availableForWrite() < (int)(len + 10)) return;
 
     uint8_t header[10];
     size_t headerLen = 0;
@@ -127,7 +137,6 @@ static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
         }
 
         if (payloadLen > 256) {
-            // Bỏ qua gói tin quá dài để tránh nghẽn RAM
             for (uint64_t i = 0; i < payloadLen; i++) if (client.available()) client.read();
             return;
         }
@@ -157,14 +166,17 @@ static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
 }
 
 // ============================================================================
-// 3. KHỞI TẠO TELEMETRY WIFI
+// 3. KHỞI TẠO TELEMETRY WIFI (CHẾ ĐỘ KÉP AP_STA)
 // ============================================================================
 void telemetry_wifi_init(const char* ssid, const char* password, uint16_t udpPort, uint16_t wsPort) {
     g_udpPort = udpPort;
     g_wsPort = wsPort;
 
-    Serial.println("\n[WIFI] Dang cau hinh Access Point WiFi 6 tren ESP32-C6...");
-    WiFi.mode(WIFI_AP);
+    Serial.println("\n[WIFI] ========================================================");
+    Serial.println("[WIFI] DANG CAU HINH HE THONG MANG KHONG DAY CHO UAV DISTRIBUTED COMPUTING");
+
+    // Bật chế độ kép AP_STA: Vừa phát SoftAP trực tiếp, vừa hỗ trợ bắt Router
+    WiFi.mode(WIFI_AP_STA);
     WiFi.softAPConfig(AP_LOCAL_IP, AP_GATEWAY, AP_SUBNET);
     
     if (password && strlen(password) >= 8) {
@@ -173,18 +185,58 @@ void telemetry_wifi_init(const char* ssid, const char* password, uint16_t udpPor
         WiFi.softAP(ssid);
     }
 
-    // Khởi động UDP Socket cho VIO Python Pipeline
+    // Thử kết nối Router phòng Lab nếu có sóng (Non-blocking hoặc nhanh)
+    WiFi.begin("VNU-IS TTDBCLKT", "Ttdbclkt9");
+
+    // Khởi động UDP Socket cho Raw Sensor Stream & PC Command Receiver
     g_udp.begin(g_udpPort);
-    Serial.printf("[WIFI_UDP] Khoi dong UDP Telemetry Broadcaster tai Port %u\n", g_udpPort);
+    Serial.printf("[WIFI_UDP] Khoi dong UDP Transceiver tai Port %u\n", g_udpPort);
 
     // Khởi động WebSocket Server cho Giao diện 3D HITL Testbed Monitor
     g_wsServer.begin(g_wsPort);
     Serial.printf("[WIFI_WS]  Khoi dong WebSocket Server tai ws://192.168.4.1:%u\n", g_wsPort);
-    Serial.printf("[WIFI]     SSID: '%s' | Password: '%s' | IP: 192.168.4.1\n\n", ssid, (password ? password : "OPEN"));
+    Serial.printf("[WIFI]     SoftAP: '%s' | Pass: '%s' | IP: 192.168.4.1\n", ssid, (password ? password : "OPEN"));
+    Serial.println("[WIFI] ========================================================\n");
 }
 
 // ============================================================================
-// 4. CHU TRÌNH PHÁT VÀ NHẬN DỮ LIỆU TELEMETRY
+// 4. BẮN DỮ LIỆU CẢM BIẾN THÔ (RAW IMU) LÊN MÁY TÍNH QUA UDP (100 HZ)
+// ============================================================================
+void telemetry_wifi_send_raw(const MpuData& mpu, const XsensData& xsens, const uint16_t m_us[4], bool is_armed) {
+    uint32_t nowUs = micros();
+    if (nowUs - g_lastRawSendUs < RAW_SEND_INTERVAL_US) {
+        return;
+    }
+    g_lastRawSendUs = nowUs;
+
+    // Gói tin RAW nhỏ gọn (~110 bytes), bắn UDP cực nhanh (< 0.1ms), không bị block bởi TCP
+    // Cấu trúc: RAW,m_ax,m_ay,m_az,m_gx,m_gy,m_gz,x_r,x_p,x_y,x_ax,x_ay,x_az,x_gx,x_gy,x_gz,m1,m2,m3,m4,arm
+    char rawBuf[256];
+    int len = snprintf(rawBuf, sizeof(rawBuf),
+        "RAW,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%u,%u,%u,%u,%d\n",
+        mpu.ax, mpu.ay, mpu.az, mpu.gx, mpu.gy, mpu.gz,
+        xsens.roll, xsens.pitch, xsens.yaw,
+        xsens.ax, xsens.ay, xsens.az, xsens.gx, xsens.gy, xsens.gz,
+        m_us[0], m_us[1], m_us[2], m_us[3],
+        is_armed ? 1 : 0);
+
+    if (len <= 0) return;
+
+    // Nếu đã biết IP của máy tính chủ -> Bắn trực tiếp Unicast (tốc độ cao nhất)
+    if (g_hostKnown) {
+        g_udp.beginPacket(g_hostIp, g_hostPort);
+        g_udp.write((const uint8_t*)rawBuf, len);
+        g_udp.endPacket();
+    } else {
+        // Chưa nhận gói từ máy tính -> Bắn Broadcast để máy tính tự động bắt gói
+        g_udp.beginPacket(AP_BROADCAST_IP, g_udpPort);
+        g_udp.write((const uint8_t*)rawBuf, len);
+        g_udp.endPacket();
+    }
+}
+
+// ============================================================================
+// 5. CHU TRÌNH PHÁT VÀ NHẬN DỮ LIỆU TELEMETRY
 // ============================================================================
 void telemetry_wifi_update(const TelemetryPacket& packet) {
     // 1. Quản lý kết nối mới từ WebSocket Server
@@ -201,7 +253,7 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
             }
         }
         if (!slotFound) {
-            newClient.stop(); // Hết khe kết nối
+            newClient.stop();
         }
     }
 
@@ -214,43 +266,95 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
         }
     }
 
-    // 3. Nhận lệnh điều khiển qua mạng UDP (từ VIO Pipeline hoặc GCS Script)
+    // 3. Nhận phản hồi EKF2 & RC từ Máy Tính Chủ qua UDP (Non-blocking)
     int udpSize = g_udp.parsePacket();
     if (udpSize > 0) {
-        char udpBuf[128];
+        // Tự động ghi nhớ IP và Port của Máy Tính Chủ
+        g_hostIp = g_udp.remoteIP();
+        g_hostPort = g_udp.remotePort();
+        g_hostKnown = true;
+
+        char udpBuf[256];
         int len = g_udp.read(udpBuf, sizeof(udpBuf) - 1);
         if (len > 0) {
             udpBuf[len] = '\0';
-            String cmd = String(udpBuf);
-            cmd.trim();
-            if (cmd.length() > 0 && g_cmdQueue.size() < 10) {
-                Serial.printf("[WIFI_UDP] Received UDP command: '%s'\n", cmd.c_str());
-                g_cmdQueue.push_back(cmd);
+            String msg = String(udpBuf);
+            msg.trim();
+
+            // A. Gói tin tổ hợp siêu tốc: CMD,ekf_r,ekf_p,ekf_y,ekf_gx,ekf_gy,ekf_gz,thr,r_sp,p_sp,y_sp,arm
+            if (msg.startsWith("CMD,") || msg.startsWith("cmd,")) {
+                float er = 0, ep = 0, ey = 0, egx = 0, egy = 0, egz = 0;
+                float thr = 0, rsp = 0, psp = 0, ysp = 0;
+                int arm = 0;
+                int count = sscanf(msg.c_str() + 4, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%d",
+                                   &er, &ep, &ey, &egx, &egy, &egz,
+                                   &thr, &rsp, &psp, &ysp, &arm);
+                if (count == 11) {
+                    g_hostFeedback.roll = er;
+                    g_hostFeedback.pitch = ep;
+                    g_hostFeedback.yaw = ey;
+                    g_hostFeedback.gx = egx;
+                    g_hostFeedback.gy = egy;
+                    g_hostFeedback.gz = egz;
+                    g_hostFeedback.throttle = thr;
+                    g_hostFeedback.roll_sp = rsp;
+                    g_hostFeedback.pitch_sp = psp;
+                    g_hostFeedback.yaw_sp = ysp;
+                    g_hostFeedback.arm = arm;
+                    g_hostFeedback.last_packet_ms = millis();
+                    g_hostFeedback.has_ekf = true;
+                    g_hostFeedback.has_rc = true;
+                }
+            }
+            // B. Gói tin EKF2 độc lập: EKF,roll,pitch,yaw,gx,gy,gz
+            else if (msg.startsWith("EKF,") || msg.startsWith("ekf,")) {
+                float er = 0, ep = 0, ey = 0, egx = 0, egy = 0, egz = 0;
+                int count = sscanf(msg.c_str() + 4, "%f,%f,%f,%f,%f,%f", &er, &ep, &ey, &egx, &egy, &egz);
+                if (count == 6) {
+                    g_hostFeedback.roll = er;
+                    g_hostFeedback.pitch = ep;
+                    g_hostFeedback.yaw = ey;
+                    g_hostFeedback.gx = egx;
+                    g_hostFeedback.gy = egy;
+                    g_hostFeedback.gz = egz;
+                    g_hostFeedback.last_packet_ms = millis();
+                    g_hostFeedback.has_ekf = true;
+                }
+            }
+            // C. Gói tin RC tay cầm độc lập: RC,throttle,roll_sp,pitch_sp,yaw_sp,arm
+            else if (msg.startsWith("RC,") || msg.startsWith("rc,")) {
+                float thr = 0, rsp = 0, psp = 0, ysp = 0;
+                int arm = 0;
+                int count = sscanf(msg.c_str() + 3, "%f,%f,%f,%f,%d", &thr, &rsp, &psp, &ysp, &arm);
+                if (count == 5) {
+                    g_hostFeedback.throttle = thr;
+                    g_hostFeedback.roll_sp = rsp;
+                    g_hostFeedback.pitch_sp = psp;
+                    g_hostFeedback.yaw_sp = ysp;
+                    g_hostFeedback.arm = arm;
+                    g_hostFeedback.last_packet_ms = millis();
+                    g_hostFeedback.has_rc = true;
+                }
+            }
+            // D. Gói handshake / ping từ PC
+            else if (msg.equalsIgnoreCase("CONNECT") || msg.equalsIgnoreCase("PING")) {
+                Serial.printf("[WIFI_UDP] May tinh chu da ket noi tu IP: %s:%u\n", g_hostIp.toString().c_str(), g_hostPort);
+            }
+            // E. Lệnh điều khiển dạng CLI văn bản (arm, disarm, stop, sp, pid, throttle...)
+            else if (msg.length() > 0 && g_cmdQueue.size() < 10) {
+                Serial.printf("[WIFI_UDP] Received CLI command: '%s'\n", msg.c_str());
+                g_cmdQueue.push_back(msg);
             }
         }
     }
 
-    // 4. Bắn dữ liệu Telemetry định kỳ (Rate Limiter: 40 Hz)
+    // 4. Bắn dữ liệu Telemetry JSON định kỳ cho Web 3D HITL Testbed Monitor (Rate Limiter: 25 Hz)
     uint32_t nowMs = millis();
     if (nowMs - g_lastBroadcastMs < BROADCAST_INTERVAL_MS) {
         return;
     }
     g_lastBroadcastMs = nowMs;
 
-    // --- A. BẮN GÓI UDP DẠNG TEXT CHUẨN [PX4_EKF] CHO PYTHON VIO PIPELINE ---
-    char udpMsg[256];
-    snprintf(udpMsg, sizeof(udpMsg),
-             "[PX4_EKF] R:%6.1f P:%6.1f Y:%6.1f | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f] (OPTIMAL)\n",
-             packet.roll, packet.pitch, packet.yaw,
-             packet.ax,   packet.ay,   packet.az,
-             packet.gx,   packet.gy,   packet.gz);
-
-    g_udp.beginPacket(AP_BROADCAST_IP, g_udpPort);
-    g_udp.write((const uint8_t*)udpMsg, strlen(udpMsg));
-    g_udp.endPacket();
-
-    // --- B. BẮN GÓI JSON CHO GIAO DIỆN WEB 3D HITL TESTBED MONITOR ---
-    // Khớp tuyệt đối với cấu trúc payload mà telemetry_data_store.js đang lắng nghe
     char jsonMsg[320];
     snprintf(jsonMsg, sizeof(jsonMsg),
              "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,"
@@ -273,8 +377,17 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
 }
 
 // ============================================================================
-// 5. QUẢN LÝ HÀNG ĐỢI LỆNH ĐIỀU KHIỂN
+// 6. QUẢN LÝ PHẢN HỒI TỪ MÁY TÍNH CHỦ
 // ============================================================================
+bool telemetry_wifi_get_host_feedback(HostFeedback& out) {
+    out = g_hostFeedback;
+    return (millis() - g_hostFeedback.last_packet_ms < 1500 && g_hostFeedback.last_packet_ms > 0);
+}
+
+bool telemetry_wifi_is_host_connected() {
+    return (g_hostKnown && (millis() - g_hostFeedback.last_packet_ms < 1500) && g_hostFeedback.last_packet_ms > 0);
+}
+
 bool telemetry_wifi_has_command() {
     return !g_cmdQueue.empty();
 }

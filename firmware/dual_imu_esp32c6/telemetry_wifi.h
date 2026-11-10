@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 /**
- * @brief Cấu trúc dữ liệu Telemetry tổng hợp cho máy tính mặt đất và giao diện Web 3D
+ * @brief Cấu trúc dữ liệu Telemetry phát lên Giao diện Web 3D
  */
 struct TelemetryPacket {
     float roll;             // Góc Roll (độ)
@@ -21,43 +21,40 @@ struct TelemetryPacket {
 };
 
 /**
- * @brief Khởi tạo hệ thống truyền thông không dây WiFi & Telemetry trên ESP32-C6
- * Hỗ trợ Dual-Mode (WIFI_AP_STA): Tự động kết nối vào mạng Wi-Fi phòng Lab "VNU-IS TTDBCLKT"
- * và đồng thời duy trì SoftAP dự phòng "ESP32-UAV-FC" (192.168.4.1).
- * 
- * @param sta_ssid Tên mạng WiFi trạm Station cần kết nối (mặc định: "VNU-IS TTDBCLKT")
- * @param sta_pass Mật khẩu WiFi trạm Station (mặc định: "Ttdbclkt9")
- * @param ap_ssid Tên mạng SoftAP phát từ ESP32-C6 (mặc định: "ESP32-UAV-FC")
- * @param ap_pass Mật khẩu SoftAP (mặc định: "dronebridge")
- * @param udpPort Cổng UDP bắn telemetry (mặc định: 14550)
- * @param wsPort Cổng WebSocket cho Web 3D Dashboard (mặc định: 81)
+ * @brief Khởi tạo mạng không dây WiFi trên ESP32-C6:
+ * - Tự động kết nối mạng phòng Lab: "VNU-IS TTDBCLKT" (Mật khẩu: "Ttdbclkt9")
+ * - Đồng thời phát SoftAP dự phòng: "ESP32-UAV-FC" (Mật khẩu: "dronebridge", IP 192.168.4.1)
+ * - Mở WebSocket Server tại Port 81 cho Web Browser kết nối trực tiếp.
  */
 void telemetry_wifi_init(const char* sta_ssid = "VNU-IS TTDBCLKT",
                          const char* sta_pass = "Ttdbclkt9",
-                         const char* ap_ssid  = "ESP32-UAV-FC", 
+                         const char* ap_ssid  = "ESP32-UAV-FC",
                          const char* ap_pass  = "dronebridge",
-                         uint16_t udpPort = 14550,
-                         uint16_t wsPort  = 81);
+                         uint16_t wsPort = 81);
 
 /**
- * @brief Cập nhật và phát gói tin Telemetry ra mạng không dây (UDP & WebSocket)
- * @param packet Dữ liệu Telemetry mới nhất từ EKF và ESC
+ * @brief Phát dữ liệu Telemetry JSON định kỳ lên Web (25 Hz) và kiểm tra các Client WebSocket
  */
 void telemetry_wifi_update(const TelemetryPacket& packet);
 
 /**
- * @brief Kiểm tra xem có lệnh điều khiển nào được gửi từ mạng không dây không (UDP / WebSocket)
+ * @brief Kiểm tra có lệnh điều khiển từ Web (qua WebSocket) hoặc UDP không
  */
 bool telemetry_wifi_has_command();
 
 /**
- * @brief Lấy chuỗi lệnh điều khiển từ hàng đợi mạng không dây
+ * @brief Lấy chuỗi lệnh từ hàng đợi
  */
 String telemetry_wifi_get_command();
 
 /**
- * @brief Gửi thông điệp log / phản hồi ra các client WebSocket và UDP
+ * @brief Gửi thông điệp log về Web Browser
  */
 void telemetry_wifi_broadcast_msg(const char* msg);
+
+/**
+ * @brief Lấy địa chỉ IP hiện tại của ESP32 (ưu tiên IP mạng TTDB nếu đã kết nối)
+ */
+String telemetry_wifi_get_ip();
 
 #endif // TELEMETRY_WIFI_H

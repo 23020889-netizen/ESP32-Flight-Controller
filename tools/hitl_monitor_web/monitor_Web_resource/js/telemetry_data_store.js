@@ -163,7 +163,7 @@ class TelemetryDataStore {
   }
 
   /**
-   * KẾT NỐI KHÔNG DÂY QUA SÓNG WIFI TTDB / SOFTAP (WebSocket)
+   * KẾT NỐI KHÔNG DÂY QUA SÓNG WIFI SOFTAP (WebSocket)
    */
   connectWebSocket(endpointUrl) {
     this.connectionMode = "ws";
@@ -175,28 +175,23 @@ class TelemetryDataStore {
       this.serialPort = null;
     }
 
-    const bLiveWs = document.getElementById("bLiveWs");
-
     try {
       if (this.webSocketConnection) {
-        try { this.webSocketConnection.close(); } catch (_e) {}
+        this.webSocketConnection.onopen = null;
+        this.webSocketConnection.onclose = null;
+        this.webSocketConnection.onerror = null;
+        this.webSocketConnection.onmessage = null;
+        this.webSocketConnection.close();
       }
-
-      if (bLiveWs) {
-        bLiveWs.textContent = "⏳ Đang kết nối...";
-        bLiveWs.style.background = "linear-gradient(135deg, #d97706 0%, #f59e0b 100%)";
-      }
-
       this.webSocketConnection = new WebSocket(endpointUrl);
-
       this.webSocketConnection.onopen = () => {
-        console.log("[WebSocket] Đã kết nối thành công tới:", endpointUrl);
+        console.log("[WebSocket] Đã kết nối thành công tới ESP32:", endpointUrl);
+        const bLiveWs = document.getElementById("bLiveWs");
         if (bLiveWs) {
-          bLiveWs.textContent = "🟢 Đã Kết Nối WiFi";
-          bLiveWs.style.background = "linear-gradient(135deg, #15803d 0%, #22c55e 100%)";
+          bLiveWs.style.background = "#16a34a";
+          bLiveWs.textContent = "✅ Đã Kết Nối WiFi";
         }
       };
-
       this.webSocketConnection.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
@@ -206,30 +201,20 @@ class TelemetryDataStore {
           }
         } catch (_ignoredError) {}
       };
-
-      this.webSocketConnection.onerror = (err) => {
-        console.warn("[WebSocket Error]", err);
-        if (bLiveWs && this.connectionMode === "ws") {
-          bLiveWs.textContent = "🔴 Lỗi Kết Nối";
-          bLiveWs.style.background = "linear-gradient(135deg, #b91c1c 0%, #ef4444 100%)";
-        }
-      };
-
       this.webSocketConnection.onclose = () => {
-        if (bLiveWs && this.connectionMode === "ws") {
-          bLiveWs.textContent = "🔄 Đang Thử Lại...";
-          bLiveWs.style.background = "linear-gradient(135deg, #475569 0%, #64748b 100%)";
+        const bLiveWs = document.getElementById("bLiveWs");
+        if (bLiveWs) {
+          bLiveWs.style.background = "#0284c7";
+          bLiveWs.textContent = "📡 Kết Nối WiFi";
         }
         if (this.connectionMode === "ws") {
           setTimeout(() => this.connectionMode === "ws" && this.connectWebSocket(endpointUrl), 2000);
         }
       };
-    } catch (_connectionError) {
-      if (bLiveWs) {
-        bLiveWs.textContent = "🔴 Lỗi Socket";
-        bLiveWs.style.background = "#ef4444";
-      }
-    }
+      this.webSocketConnection.onerror = (err) => {
+        console.warn("[WebSocket Lỗi]", err);
+      };
+    } catch (_connectionError) {}
   }
 
   /**

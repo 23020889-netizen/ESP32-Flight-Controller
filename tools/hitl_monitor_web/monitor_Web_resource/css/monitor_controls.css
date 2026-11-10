@@ -80,6 +80,22 @@
   color: var(--warn);
 }
 
+.chip-model {
+  padding: 3px 6px 3px 11px;
+}
+
+.chip-model select {
+  background: var(--gl-elevated);
+  color: var(--c1);
+  border: 1px solid var(--bd-strong);
+  border-radius: var(--r-pill);
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 24px;
+}
+
 /* ============================================================================
  * 2. BUTTONS, INPUTS & TACTICAL COCKPIT SWITCHES (APPLE HIG + A11Y)
  * ============================================================================ */

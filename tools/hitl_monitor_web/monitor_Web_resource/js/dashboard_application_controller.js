@@ -302,6 +302,25 @@ class DashboardApplicationController {
       };
     }
 
+    // Chuyển đổi Mẫu 3D Quadcopter (4 mẫu đều khắc chữ ISILAB trên thân)
+    const selDroneModel = getElement("selDroneModel");
+    if (selDroneModel) {
+      try {
+        const savedModel = localStorage.getItem("uav_3d_model");
+        if (savedModel) {
+          selDroneModel.value = savedModel;
+          this.sceneManager.setDroneModel(savedModel);
+        }
+      } catch (_) {}
+      selDroneModel.onchange = () => {
+        const chosen = selDroneModel.value || "glb_aero";
+        this.sceneManager.setDroneModel(chosen);
+        try {
+          localStorage.setItem("uav_3d_model", chosen);
+        } catch (_) {}
+      };
+    }
+
     // Chuyển đổi Giao diện Màu sắc (Apple visionOS Titanium Dark / Light Ngoài Trời / Tactical Cyan)
     const btnThemeToggle = getElement("btnThemeToggle");
     const themeOrder = [

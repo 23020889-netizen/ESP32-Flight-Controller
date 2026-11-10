@@ -33,11 +33,23 @@ class ThreeDimensionalSceneManager {
 
     this.droneGroup = new THREE.Group();
     this.scene.add(this.droneGroup);
-    DroneModelLoader.loadQuadcopterModel(this.droneGroup, (propellers) => {
-      this.propellerNodes = propellers;
-    });
+    this.setDroneModel("glb_aero");
     this.bindCameraOrbitEvents();
     this.handleContainerResize();
+  }
+
+  /**
+   * Switches the active 3D Quadcopter model at runtime.
+   * @param {string} modelType Identifier ("glb_aero", "mavic_recon", "fpv_apex", "lab_heavy").
+   */
+  setDroneModel(modelType) {
+    DroneModelLoader.loadQuadcopterModel(
+      this.droneGroup,
+      (propellers) => {
+        this.propellerNodes = propellers;
+      },
+      modelType
+    );
   }
 
   /**

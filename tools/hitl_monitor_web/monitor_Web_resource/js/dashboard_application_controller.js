@@ -313,7 +313,7 @@ class DashboardApplicationController {
         }
       } catch (_) {}
       selDroneModel.onchange = () => {
-        const chosen = selDroneModel.value || "glb_aero";
+        const chosen = selDroneModel.value || "glb_cesium";
         this.sceneManager.setDroneModel(chosen);
         try {
           localStorage.setItem("uav_3d_model", chosen);

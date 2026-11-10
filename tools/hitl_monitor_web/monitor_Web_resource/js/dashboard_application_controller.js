@@ -166,7 +166,7 @@ class DashboardApplicationController {
 
     // --- ĐIỀU KHIỂN TÙY BIẾN TEST TỪNG ĐỘNG CƠ (INDIVIDUAL MOTOR TEST) ---
     const setMotorTest = (motorId, val) => {
-      val = Math.max(0, Math.min(50, Number(val) || 0));
+      val = Math.max(0, Math.min(100, Number(val) || 0));
       const rng = getElement(`rngM${motorId}`);
       const lbl = getElement(`lblM${motorId}`);
       if (rng) rng.value = val;
@@ -365,7 +365,7 @@ class DashboardApplicationController {
         }
 
         // 3. RB (5) / LB (4): Tăng giảm ga giữ nền (+5% / -5%)
-        if (justPressed(5)) { isGamepadArmed = true; baseThrottle = Math.min(60, baseThrottle + 5); }
+        if (justPressed(5)) { isGamepadArmed = true; baseThrottle = Math.min(100, baseThrottle + 5); }
         if (justPressed(4)) { baseThrottle = Math.max(0, baseThrottle - 5); }
 
         // 4. D-Pad chọn motor test thủ công: Up(12)=M1, Right(15)=M2, Down(13)=M3, Left(14)=M4, Y(3)=ALL
@@ -383,7 +383,7 @@ class DashboardApplicationController {
         const stickLy = Math.max(0, -deadzone(rawLy));
         const stickThr = Math.max(rtVal, stickLy);
 
-        const maxCap = 60; // Trần ga an toàn 60%
+        const maxCap = 100; // Trần ga toàn dải 100% theo yêu cầu
         let totalThr = isGamepadArmed ? Math.min(maxCap, Math.max(0, Math.round((baseThrottle + stickThr * maxCap) * 10) / 10)) : 0;
 
         // Yaw: axes[0] (-45° .. +45°)
@@ -435,7 +435,7 @@ class DashboardApplicationController {
             this.telemetryStore.sendCommand(`RC,${totalThr.toFixed(1)},${rollDeg.toFixed(1)},${pitchDeg.toFixed(1)},${yawDeg.toFixed(1)},${armCode}`);
             setThrottle(totalThr);
           } else {
-            setMotorTest(activeMotor, Math.min(50, totalThr));
+            setMotorTest(activeMotor, Math.min(100, totalThr));
           }
         }
 

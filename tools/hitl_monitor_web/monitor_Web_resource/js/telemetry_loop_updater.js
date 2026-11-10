@@ -94,8 +94,8 @@ class TelemetryLoopUpdater {
       return;
     }
 
-    // 3. Chỉ vẽ đồ thị 4 kênh ở tần số 15-20 FPS để giải phóng 80% tải CPU Canvas
-    if (controller.frameCounter % 4 !== 0) {
+    // 3. Vẽ đồ thị 4 kênh ở tần số 30 FPS mượt mà
+    if (controller.frameCounter % 2 !== 0) {
       return;
     }
 

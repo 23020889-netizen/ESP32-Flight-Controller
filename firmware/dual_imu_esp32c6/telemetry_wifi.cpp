@@ -81,9 +81,9 @@ static bool perform_ws_handshake(WiFiClient& client, int clientIndex) {
     return true;
 }
 
-// Gửi 1 Frame Text Unmasked từ Server -> Browser (Non-blocking)
+// Gửi 1 Frame Text Unmasked từ Server -> Browser (Chuẩn RFC6455)
 static void send_ws_text_frame(WiFiClient& client, const char* textPayload, size_t len) {
-    if (!client.connected() || client.availableForWrite() < (int)(len + 10)) return;
+    if (!client.connected()) return;
 
     uint8_t header[10];
     size_t headerLen = 0;
@@ -271,12 +271,18 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
     }
     g_lastBroadcastMs = nowMs;
 
-    char jsonMsg[320];
+    // Đóng gói JSON chi tiết bao gồm cả EKF Fused, MPU-6050 và Xsens MTi-3
+    char jsonMsg[420];
     snprintf(jsonMsg, sizeof(jsonMsg),
-             "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,"
+             "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
+             "\"mpu_r\":%.1f,\"mpu_p\":%.1f,\"mpu_y\":%.1f,"
+             "\"xs_r\":%.1f,\"xs_p\":%.1f,\"xs_y\":%.1f,"
+             "\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,"
              "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"z\":%.2f,\"vz\":%.2f,"
              "\"m\":[%.1f,%.1f,%.1f,%.1f],\"us\":[%u,%u,%u,%u],\"state\":\"%s\"}",
              packet.roll, packet.pitch, packet.yaw,
+             packet.mpu_roll, packet.mpu_pitch, packet.mpu_yaw,
+             packet.xs_roll,  packet.xs_pitch,  packet.xs_yaw,
              packet.ax,   packet.ay,   packet.az,
              packet.gx,   packet.gy,   packet.gz,
              packet.z,    packet.vz,

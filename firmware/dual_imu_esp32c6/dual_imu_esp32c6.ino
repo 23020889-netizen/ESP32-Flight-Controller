@@ -489,6 +489,14 @@ void loop() {
     pkt.gx = px4Controller.getFilteredGx();
     pkt.gy = px4Controller.getFilteredGy();
     pkt.gz = px4Controller.getFilteredGz();
+
+    pkt.mpu_roll  = mpuData.roll;
+    pkt.mpu_pitch = mpuData.pitch;
+    pkt.mpu_yaw   = mpuData.yaw;
+
+    pkt.xs_roll   = xsensData.roll;
+    pkt.xs_pitch  = xsensData.pitch;
+    pkt.xs_yaw    = xsensData.yaw;
     pkt.z = 0.0f;
     pkt.vz = 0.0f;
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {

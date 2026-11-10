@@ -24,11 +24,16 @@
       <div class="chips">
         <div class="chip">FREQ <b class="mono" id="sFreq">0 Hz</b></div>
         <div class="chip">PKT <b class="mono" id="sPk">0</b></div>
-        <button id="bSerial" title="Kết nối trực tiếp qua cáp USB Serial COM32 (Khuyên dùng khi cắm cáp - Không cần đổi WiFi, Không lag!)" style="background:linear-gradient(135deg, #0284c7 0%, #2563eb 100%);color:#fff;border:1px solid #38bdf8;font-weight:700">⚡ Cáp USB (COM)</button>
-        <button id="bLiveWs" title="Kết nối trực tiếp ESP32-C6 qua sóng WiFi (Yêu cầu Laptop phải đang bắt mạng 'ESP32-UAV-FC')">📡 Sóng WiFi (AP)</button>
+        <div class="chip" style="display:flex;align-items:center;gap:4px">
+          <span>ESP IP:</span>
+          <input type="text" id="inpWsIp" value="10.11.162.210" style="width:110px;background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;font-weight:bold" placeholder="10.11.162.xxx">
+        </div>
+        <button id="bLiveWs" title="Kết nối trực tiếp ESP32-C6 qua mạng WiFi TTDB hoặc SoftAP" style="background:#0284c7;color:#fff;border:1px solid #38bdf8;font-weight:700">📡 Kết Nối WiFi</button>
+        <div class="chip" id="chipGamepad" style="color:#94a3b8">🎮 Tay Cầm: <b id="lblGamepadStatus" style="color:#f59e0b">Chưa cắm</b></div>
+        <button id="bSerial" title="Kết nối trực tiếp qua cáp USB Serial (Nếu cắm dây USB)" style="background:#334155;color:#fff;font-weight:600">⚡ Cáp USB (COM)</button>
         <button id="bDemo" class="act">Tự động (Demo)</button>
-        <button id="bCsv" title="Phát lại file IMU_Telemetry_Log_20261102_231104.csv">Phát Log CSV</button>
-        <button id="bPickCsv" title="Chọn file .csv bất kỳ từ máy tính">Chọn CSV...</button>
+        <button id="bCsv" title="Phát lại file IMU_Telemetry_Log">Phát Log CSV</button>
+        <button id="bPickCsv" title="Chọn file .csv">Chọn CSV...</button>
         <input type="file" id="fCsv" accept=".csv" hidden>
         <button id="bCam">Đặt lại camera</button>
       </div>
@@ -54,6 +59,8 @@
               <button class="btn-thr" data-thr="15" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">15%</button>
               <button class="btn-thr" data-thr="30" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">30%</button>
               <button class="btn-thr" data-thr="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">50%</button>
+              <button class="btn-thr" data-thr="75" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">75%</button>
+              <button class="btn-thr" data-thr="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;font-weight:bold;cursor:pointer">100%</button>
             </div>
           </div>
           <!-- Góc nghiêng mục tiêu (Setpoint) -->
@@ -71,6 +78,22 @@
               <button class="btn-sp" data-sp="5 0 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">R +5°</button>
               <button class="btn-sp" data-sp="0 -5 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">P -5°</button>
               <button class="btn-sp" data-sp="0 5 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">P +5°</button>
+            </div>
+          </div>
+
+          <!-- Giám sát cần Analog Tay cầm A124 / Xbox -->
+          <div style="margin-bottom:8px;background:rgba(15,23,42,0.8);padding:6px;border-radius:4px;border:1px solid rgba(245,158,11,0.3)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <span style="font-size:11px;color:#f59e0b;font-weight:700">🎮 TAY CẦM A124 / XBOX</span>
+              <b id="lblGamepadArm" style="color:#ef4444;font-size:11px;font-family:monospace">DISARM</b>
+            </div>
+            <div style="display:flex;gap:4px;font-family:monospace;font-size:11px">
+              <div style="flex:1;background:#1e293b;padding:3px;border-radius:3px">
+                <span style="color:#94a3b8">Cần Trái:</span> <b id="lblStickL" style="color:#38bdf8">T:0% | Y:0°</b>
+              </div>
+              <div style="flex:1;background:#1e293b;padding:3px;border-radius:3px">
+                <span style="color:#94a3b8">Cần Phải:</span> <b id="lblStickR" style="color:#34d399">P:0° | R:0°</b>
+              </div>
             </div>
           </div>
           <!-- Dòng nhập lệnh CLI -->
@@ -93,12 +116,12 @@
               <span style="font-size:11px;font-weight:700;color:#38bdf8">M1 FR (P7 - CCW)</span>
               <b id="lblM1" style="font-family:monospace;font-size:12px;color:#38bdf8">0%</b>
             </div>
-            <input type="range" id="rngM1" min="0" max="50" value="0" step="1" style="width:100%;accent-color:#38bdf8;cursor:pointer">
+            <input type="range" id="rngM1" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#38bdf8;cursor:pointer">
             <div style="display:flex;gap:3px;margin-top:2px">
               <button class="btn-mtest" data-motor="1" data-val="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">0%</button>
-              <button class="btn-mtest" data-motor="1" data-val="10" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">10%</button>
               <button class="btn-mtest" data-motor="1" data-val="15" style="flex:1;background:#0284c7;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">Spin 15%</button>
-              <button class="btn-mtest" data-motor="1" data-val="25" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">25%</button>
+              <button class="btn-mtest" data-motor="1" data-val="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">50%</button>
+              <button class="btn-mtest" data-motor="1" data-val="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">100%</button>
             </div>
           </div>
 
@@ -108,12 +131,12 @@
               <span style="font-size:11px;font-weight:700;color:#34d399">M2 RL (P6 - CCW)</span>
               <b id="lblM2" style="font-family:monospace;font-size:12px;color:#34d399">0%</b>
             </div>
-            <input type="range" id="rngM2" min="0" max="50" value="0" step="1" style="width:100%;accent-color:#34d399;cursor:pointer">
+            <input type="range" id="rngM2" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#34d399;cursor:pointer">
             <div style="display:flex;gap:3px;margin-top:2px">
               <button class="btn-mtest" data-motor="2" data-val="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">0%</button>
-              <button class="btn-mtest" data-motor="2" data-val="10" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">10%</button>
               <button class="btn-mtest" data-motor="2" data-val="15" style="flex:1;background:#059669;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">Spin 15%</button>
-              <button class="btn-mtest" data-motor="2" data-val="25" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">25%</button>
+              <button class="btn-mtest" data-motor="2" data-val="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">50%</button>
+              <button class="btn-mtest" data-motor="2" data-val="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">100%</button>
             </div>
           </div>
 
@@ -123,12 +146,12 @@
               <span style="font-size:11px;font-weight:700;color:#eab308">M3 FL (P5 - CW)</span>
               <b id="lblM3" style="font-family:monospace;font-size:12px;color:#eab308">0%</b>
             </div>
-            <input type="range" id="rngM3" min="0" max="50" value="0" step="1" style="width:100%;accent-color:#eab308;cursor:pointer">
+            <input type="range" id="rngM3" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#eab308;cursor:pointer">
             <div style="display:flex;gap:3px;margin-top:2px">
               <button class="btn-mtest" data-motor="3" data-val="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">0%</button>
-              <button class="btn-mtest" data-motor="3" data-val="10" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">10%</button>
               <button class="btn-mtest" data-motor="3" data-val="15" style="flex:1;background:#d97706;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">Spin 15%</button>
-              <button class="btn-mtest" data-motor="3" data-val="25" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">25%</button>
+              <button class="btn-mtest" data-motor="3" data-val="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">50%</button>
+              <button class="btn-mtest" data-motor="3" data-val="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">100%</button>
             </div>
           </div>
 
@@ -138,23 +161,42 @@
               <span style="font-size:11px;font-weight:700;color:#a855f7">M4 RR (P4 - CW)</span>
               <b id="lblM4" style="font-family:monospace;font-size:12px;color:#a855f7">0%</b>
             </div>
-            <input type="range" id="rngM4" min="0" max="50" value="0" step="1" style="width:100%;accent-color:#a855f7;cursor:pointer">
+            <input type="range" id="rngM4" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#a855f7;cursor:pointer">
             <div style="display:flex;gap:3px;margin-top:2px">
               <button class="btn-mtest" data-motor="4" data-val="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">0%</button>
-              <button class="btn-mtest" data-motor="4" data-val="10" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">10%</button>
               <button class="btn-mtest" data-motor="4" data-val="15" style="flex:1;background:#9333ea;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">Spin 15%</button>
-              <button class="btn-mtest" data-motor="4" data-val="25" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">25%</button>
+              <button class="btn-mtest" data-motor="4" data-val="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">50%</button>
+              <button class="btn-mtest" data-motor="4" data-val="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">100%</button>
             </div>
           </div>
 
           <button id="btnReturnPid" style="width:100%;background:linear-gradient(135deg, #0284c7 0%, #2563eb 100%);color:#fff;border:none;border-radius:4px;padding:6px;font-size:11px;font-weight:bold;cursor:pointer">🔄 Trở Lại Chế Độ PID Tự Cân Bằng</button>
         </div>
+        <!-- BẢNG SO SÁNH DỮ LIỆU CẢM BIẾN DUAL-IMU & PX4 EKF -->
         <div class="gl pn">
-          <h2>GÓC ĐỊNH HƯỚNG (EULER)<em>REALTIME</em></h2>
-          <div class="eul mono">
-            <div style="--k:var(--c1)"><span>ROLL (NGHIÊNG)</span><b id="eR">0.0°</b></div>
-            <div style="--k:var(--c2)"><span>PITCH (CHÚC)</span><b id="eP">0.0°</b></div>
-            <div style="--k:var(--c3)"><span>YAW (XOAY)</span><b id="eY">0.0°</b></div>
+          <h2>SO SÁNH CẢM BIẾN DUAL-IMU &amp; PX4 EKF<em>MULTI-SENSOR</em></h2>
+          <div style="background:rgba(15,23,42,0.7);border-radius:6px;padding:8px;border:1px solid rgba(255,255,255,0.08);margin-bottom:8px">
+            <!-- 1. MPU-6050 -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px;font-weight:700;color:#38bdf8">🔵 MPU-6050 (I2C)</span>
+              <span class="mono" style="font-size:11px;color:#cbd5e1">
+                R:<b id="mpuR" style="color:#38bdf8">0.0°</b> P:<b id="mpuP" style="color:#38bdf8">0.0°</b> Y:<b id="mpuY" style="color:#38bdf8">0.0°</b>
+              </span>
+            </div>
+            <!-- 2. Xsens MTi-3 -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px;font-weight:700;color:#f59e0b">🟠 Xsens MTi-3 (AHRS)</span>
+              <span class="mono" style="font-size:11px;color:#cbd5e1">
+                R:<b id="xsR" style="color:#f59e0b">0.0°</b> P:<b id="xsP" style="color:#f59e0b">0.0°</b> Y:<b id="xsY" style="color:#f59e0b">0.0°</b>
+              </span>
+            </div>
+            <!-- 3. PX4 EKF Dung Hợp -->
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
+              <span style="font-size:11px;font-weight:700;color:#22c55e">🟢 PX4 EKF (Dung Hợp)</span>
+              <span class="mono" style="font-size:11px;color:#fff">
+                R:<b id="eR" style="color:#22c55e">0.0°</b> P:<b id="eP" style="color:#22c55e">0.0°</b> Y:<b id="eY" style="color:#22c55e">0.0°</b>
+              </span>
+            </div>
           </div>
         </div>
         <div class="gl pn">

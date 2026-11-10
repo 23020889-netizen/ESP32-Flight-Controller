@@ -6,15 +6,19 @@
 #include <deque>
 
 // ============================================================================
-// 1. CẤU HÌNH HỆ THỐNG MẠNG & THÔNG SỐ
+// 1. CẤU HÌNH HỆ THỐNG MẠNG & THÔNG SỐ (STATIC IP 10.11.162.210 CHO ESP32)
 // ============================================================================
+static const IPAddress STA_STATIC_IP(10, 11, 162, 210);   // IP tĩnh cố định theo yêu cầu
+static const IPAddress STA_GATEWAY(10, 11, 162, 1);       // Gateway mạng phòng Lab
+static const IPAddress STA_SUBNET(255, 255, 255, 0);      // Subnet mask
+static const IPAddress STA_DNS(10, 11, 162, 1);          // DNS server
+
 static const IPAddress AP_LOCAL_IP(192, 168, 4, 1);
 static const IPAddress AP_GATEWAY(192, 168, 4, 1);
 static const IPAddress AP_SUBNET(255, 255, 255, 0);
-static const IPAddress AP_BROADCAST_IP(192, 168, 4, 255);
 
-static uint16_t g_udpPort = 14550;
 static uint16_t g_wsPort = 81;
+static uint16_t g_udpPort = 14550;
 
 static WiFiUDP g_udp;
 static WiFiServer g_wsServer(81);
@@ -25,7 +29,9 @@ static bool g_wsHandshakeDone[MAX_WS_CLIENTS] = {false};
 
 static std::deque<String> g_cmdQueue;
 static uint32_t g_lastBroadcastMs = 0;
-static const uint32_t BROADCAST_INTERVAL_MS = 25; // 40 Hz mượt mà cho 3D Monitor
+static const uint32_t BROADCAST_INTERVAL_MS = 20; // 50 Hz siêu mượt mà cho 3D Monitor và PID Telemetry
+
+static String g_activeIpStr = "192.168.4.1";
 
 // ============================================================================
 // 2. HELPER CHUẨN RFC6455 WEBSOCKET HANDSHAKE
@@ -33,7 +39,7 @@ static const uint32_t BROADCAST_INTERVAL_MS = 25; // 40 Hz mượt mà cho 3D Mo
 static bool perform_ws_handshake(WiFiClient& client, int clientIndex) {
     String req = "";
     uint32_t startMs = millis();
-    while (client.connected() && millis() - startMs < 500) {
+    while (client.connected() && millis() - startMs < 400) {
         if (client.available()) {
             char c = (char)client.read();
             req += c;
@@ -71,11 +77,11 @@ static bool perform_ws_handshake(WiFiClient& client, int clientIndex) {
     client.print("\r\n\r\n");
 
     g_wsHandshakeDone[clientIndex] = true;
-    Serial.printf("[WIFI_WS] Client #%d connected & handshaked via WebSocket!\n", clientIndex);
+    Serial.printf("[WIFI_WS] Client #%d ket noi thanh cong tu Web Browser!\n", clientIndex);
     return true;
 }
 
-// Gửi 1 Frame dữ liệu Text Unmasked chuẩn RFC6455 từ Server -> Browser
+// Gửi 1 Frame Text Unmasked từ Server -> Browser (Chuẩn RFC6455)
 static void send_ws_text_frame(WiFiClient& client, const char* textPayload, size_t len) {
     if (!client.connected()) return;
 
@@ -92,14 +98,14 @@ static void send_ws_text_frame(WiFiClient& client, const char* textPayload, size
         header[3] = (uint8_t)(len & 0xFF);
         headerLen = 4;
     } else {
-        return; // Không gửi gói quá lớn
+        return;
     }
 
     client.write(header, headerLen);
     client.write((const uint8_t*)textPayload, len);
 }
 
-// Đọc và giải mã Frame nhận được từ Browser (có chứa Mask Key)
+// Đọc Frame từ Web Browser
 static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
     while (client.available() >= 2) {
         uint8_t b1 = client.read();
@@ -109,7 +115,7 @@ static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
         bool isMasked = (b2 & 0x80) != 0;
         uint64_t payloadLen = b2 & 0x7F;
 
-        if (opcode == 0x08) { // Connection Close Frame
+        if (opcode == 0x08) { // Close frame
             client.stop();
             g_wsHandshakeDone[clientIndex] = false;
             return;
@@ -127,7 +133,6 @@ static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
         }
 
         if (payloadLen > 256) {
-            // Bỏ qua gói tin quá dài để tránh nghẽn RAM
             for (uint64_t i = 0; i < payloadLen; i++) if (client.available()) client.read();
             return;
         }
@@ -147,40 +152,69 @@ static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
             String cmd = String(buffer);
             cmd.trim();
             if (cmd.length() > 0) {
-                Serial.printf("[WIFI_WS] Received command from Web: '%s'\n", cmd.c_str());
-                if (g_cmdQueue.size() < 10) {
-                    g_cmdQueue.push_back(cmd);
+                // Giữ hàng đợi lệnh luôn mới nhất (xóa lệnh cũ nếu dồn quá 10)
+                while (g_cmdQueue.size() >= 10) {
+                    g_cmdQueue.pop_front();
                 }
+                g_cmdQueue.push_back(cmd);
             }
         }
     }
 }
 
 // ============================================================================
-// 3. KHỞI TẠO TELEMETRY WIFI
+// 3. KHỞI TẠO WIFI (KẾT NỐI MẠNG TTDB & SOFTAP DỰ PHÒNG)
 // ============================================================================
-void telemetry_wifi_init(const char* ssid, const char* password, uint16_t udpPort, uint16_t wsPort) {
-    g_udpPort = udpPort;
+void telemetry_wifi_init(const char* sta_ssid, const char* sta_pass,
+                         const char* ap_ssid, const char* ap_pass,
+                         uint16_t wsPort) {
     g_wsPort = wsPort;
 
-    Serial.println("\n[WIFI] Dang cau hinh Access Point WiFi 6 tren ESP32-C6...");
-    WiFi.mode(WIFI_AP);
+    Serial.println("\n==================================================================");
+    Serial.println("  KHOI TAO HE THONG MANG WIFI CHO ESP32-C6 FLIGHT CONTROLLER");
+    Serial.println("==================================================================");
+
+    // 1. Chế độ kép: Vừa phát SoftAP dự phòng vừa kết nối mạng phòng Lab
+    WiFi.mode(WIFI_AP_STA);
     WiFi.softAPConfig(AP_LOCAL_IP, AP_GATEWAY, AP_SUBNET);
-    
-    if (password && strlen(password) >= 8) {
-        WiFi.softAP(ssid, password);
+    WiFi.softAP(ap_ssid, ap_pass);
+
+    Serial.printf("[WIFI_AP] SoftAP du phong da san sang: SSID '%s' | IP: 192.168.4.1\n", ap_ssid);
+
+    // 2. Kết nối vào mạng TTDB với IP tĩnh 10.11.162.210
+    Serial.printf("[WIFI_STA] Dang cau hinh Static IP %s tren mang '%s'...", STA_STATIC_IP.toString().c_str(), sta_ssid);
+    if (!WiFi.config(STA_STATIC_IP, STA_GATEWAY, STA_SUBNET, STA_DNS)) {
+        Serial.println("\n[WIFI_STA] [CANH BAO] Cau hinh Static IP that bai! Se nhan DHCP tu router.");
+    }
+    WiFi.begin(sta_ssid, sta_pass);
+
+    uint32_t startMs = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startMs < 6000) {
+        delay(250);
+        Serial.print(".");
+    }
+    Serial.println();
+
+    if (WiFi.status() == WL_CONNECTED) {
+        g_activeIpStr = WiFi.localIP().toString();
+        Serial.println("------------------------------------------------------------------");
+        Serial.printf("  [WIFI_STA] >>> KET NOI THANH CONG MANG TTDB: '%s'!\n", sta_ssid);
+        Serial.printf("  [WIFI_STA] >>> DIA CHI IP ESP32 : %s\n", g_activeIpStr.c_str());
+        Serial.printf("  [WIFI_STA] >>> LINK WEB MONITOR : ws://%s:%u\n", g_activeIpStr.c_str(), wsPort);
+        Serial.println("------------------------------------------------------------------\n");
     } else {
-        WiFi.softAP(ssid);
+        g_activeIpStr = "192.168.4.1";
+        Serial.printf("[WIFI_STA] [CANH BAO] Khong tim thay song '%s' (hoac timeout).\n", sta_ssid);
+        Serial.printf("[WIFI_STA] Hay bat WiFi may tinh vao: '%s' | Link: ws://192.168.4.1:%u\n\n", ap_ssid, wsPort);
     }
 
-    // Khởi động UDP Socket cho VIO Python Pipeline
-    g_udp.begin(g_udpPort);
-    Serial.printf("[WIFI_UDP] Khoi dong UDP Telemetry Broadcaster tai Port %u\n", g_udpPort);
+    // 3. Khởi động WebSocket Server
+    g_wsServer.begin(wsPort);
+    Serial.printf("[WIFI_WS]  WebSocket Server da mo tai cong %u san sang nhan lenh tu Web!\n", wsPort);
 
-    // Khởi động WebSocket Server cho Giao diện 3D HITL Testbed Monitor
-    g_wsServer.begin(g_wsPort);
-    Serial.printf("[WIFI_WS]  Khoi dong WebSocket Server tai ws://192.168.4.1:%u\n", g_wsPort);
-    Serial.printf("[WIFI]     SSID: '%s' | Password: '%s' | IP: 192.168.4.1\n\n", ssid, (password ? password : "OPEN"));
+    // 4. Khởi động UDP Transceiver
+    g_udp.begin(g_udpPort);
+    Serial.printf("[WIFI_UDP] UDP Port %u da san sang.\n\n", g_udpPort);
 }
 
 // ============================================================================
@@ -201,11 +235,11 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
             }
         }
         if (!slotFound) {
-            newClient.stop(); // Hết khe kết nối
+            newClient.stop();
         }
     }
 
-    // 2. Nhận dữ liệu / Lệnh điều khiển từ các Client WebSocket
+    // 2. Nhận dữ liệu / Lệnh điều khiển từ Web Browser (Cần Analog / Nút Bấm / CLI)
     for (int i = 0; i < MAX_WS_CLIENTS; i++) {
         if (g_wsClients[i] && g_wsClients[i].connected()) {
             if (g_wsHandshakeDone[i]) {
@@ -214,49 +248,41 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
         }
     }
 
-    // 3. Nhận lệnh điều khiển qua mạng UDP (từ VIO Pipeline hoặc GCS Script)
+    // 3. Nhận lệnh điều khiển qua mạng UDP
     int udpSize = g_udp.parsePacket();
     if (udpSize > 0) {
-        char udpBuf[128];
+        char udpBuf[256];
         int len = g_udp.read(udpBuf, sizeof(udpBuf) - 1);
         if (len > 0) {
             udpBuf[len] = '\0';
-            String cmd = String(udpBuf);
-            cmd.trim();
-            if (cmd.length() > 0 && g_cmdQueue.size() < 10) {
-                Serial.printf("[WIFI_UDP] Received UDP command: '%s'\n", cmd.c_str());
-                g_cmdQueue.push_back(cmd);
+            String msg = String(udpBuf);
+            msg.trim();
+            if (msg.length() > 0) {
+                while (g_cmdQueue.size() >= 10) g_cmdQueue.pop_front();
+                g_cmdQueue.push_back(msg);
             }
         }
     }
 
-    // 4. Bắn dữ liệu Telemetry định kỳ (Rate Limiter: 40 Hz)
+    // 4. Bắn dữ liệu Telemetry JSON định kỳ lên Web (Rate Limiter: 25 Hz)
     uint32_t nowMs = millis();
     if (nowMs - g_lastBroadcastMs < BROADCAST_INTERVAL_MS) {
         return;
     }
     g_lastBroadcastMs = nowMs;
 
-    // --- A. BẮN GÓI UDP DẠNG TEXT CHUẨN [PX4_EKF] CHO PYTHON VIO PIPELINE ---
-    char udpMsg[256];
-    snprintf(udpMsg, sizeof(udpMsg),
-             "[PX4_EKF] R:%6.1f P:%6.1f Y:%6.1f | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f] (OPTIMAL)\n",
-             packet.roll, packet.pitch, packet.yaw,
-             packet.ax,   packet.ay,   packet.az,
-             packet.gx,   packet.gy,   packet.gz);
-
-    g_udp.beginPacket(AP_BROADCAST_IP, g_udpPort);
-    g_udp.write((const uint8_t*)udpMsg, strlen(udpMsg));
-    g_udp.endPacket();
-
-    // --- B. BẮN GÓI JSON CHO GIAO DIỆN WEB 3D HITL TESTBED MONITOR ---
-    // Khớp tuyệt đối với cấu trúc payload mà telemetry_data_store.js đang lắng nghe
-    char jsonMsg[320];
+    // Đóng gói JSON chi tiết bao gồm cả EKF Fused, MPU-6050 và Xsens MTi-3
+    char jsonMsg[420];
     snprintf(jsonMsg, sizeof(jsonMsg),
-             "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,"
+             "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
+             "\"mpu_r\":%.1f,\"mpu_p\":%.1f,\"mpu_y\":%.1f,"
+             "\"xs_r\":%.1f,\"xs_p\":%.1f,\"xs_y\":%.1f,"
+             "\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,"
              "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"z\":%.2f,\"vz\":%.2f,"
              "\"m\":[%.1f,%.1f,%.1f,%.1f],\"us\":[%u,%u,%u,%u],\"state\":\"%s\"}",
              packet.roll, packet.pitch, packet.yaw,
+             packet.mpu_roll, packet.mpu_pitch, packet.mpu_yaw,
+             packet.xs_roll,  packet.xs_pitch,  packet.xs_yaw,
              packet.ax,   packet.ay,   packet.az,
              packet.gx,   packet.gy,   packet.gz,
              packet.z,    packet.vz,
@@ -273,7 +299,7 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
 }
 
 // ============================================================================
-// 5. QUẢN LÝ HÀNG ĐỢI LỆNH ĐIỀU KHIỂN
+// 5. QUẢN LÝ HÀNG ĐỢI LỆNH
 // ============================================================================
 bool telemetry_wifi_has_command() {
     return !g_cmdQueue.empty();
@@ -296,4 +322,8 @@ void telemetry_wifi_broadcast_msg(const char* msg) {
             send_ws_text_frame(g_wsClients[i], text, len);
         }
     }
+}
+
+String telemetry_wifi_get_ip() {
+    return g_activeIpStr;
 }

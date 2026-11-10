@@ -57,6 +57,12 @@ class TelemetryDataStore {
       roll: Number(rawSample.roll) || 0,
       pitch: Number(rawSample.pitch) || 0,
       yaw: Number(rawSample.yaw) || 0,
+      mpu_r: rawSample.mpu_r !== undefined ? Number(rawSample.mpu_r) : (this.currentMpuR || 0),
+      mpu_p: rawSample.mpu_p !== undefined ? Number(rawSample.mpu_p) : (this.currentMpuP || 0),
+      mpu_y: rawSample.mpu_y !== undefined ? Number(rawSample.mpu_y) : (this.currentMpuY || 0),
+      xs_r: rawSample.xs_r !== undefined ? Number(rawSample.xs_r) : (this.currentXsR || 0),
+      xs_p: rawSample.xs_p !== undefined ? Number(rawSample.xs_p) : (this.currentXsP || 0),
+      xs_y: rawSample.xs_y !== undefined ? Number(rawSample.xs_y) : (this.currentXsY || 0),
       z: Number(rawSample.z) || 0,
       vz: Number(rawSample.vz) || 0,
       m: (rawSample.m || [0, 0, 0, 0]).map(Number)
@@ -127,9 +133,27 @@ class TelemetryDataStore {
   parseSerialLine(line) {
     if (!line) return;
 
-    // 1. Phân tích gói EKF tối ưu:
+    // 1. Phân tích gói MPU-6050:
+    if (line.includes("[MPU6050]")) {
+      const mR = line.match(/R:\s*([-\d.]+)/);
+      const mP = line.match(/P:\s*([-\d.]+)/);
+      const mY = line.match(/Y:\s*([-\d.]+)/);
+      if (mR) this.currentMpuR = parseFloat(mR[1]);
+      if (mP) this.currentMpuP = parseFloat(mP[1]);
+      if (mY) this.currentMpuY = parseFloat(mY[1]);
+    }
+    // 2. Phân tích gói Xsens MTi-3:
+    else if (line.includes("[Xsens  ]") || line.includes("[Xsens]")) {
+      const mR = line.match(/R:\s*([-\d.]+)/);
+      const mP = line.match(/P:\s*([-\d.]+)/);
+      const mY = line.match(/Y:\s*([-\d.]+)/);
+      if (mR) this.currentXsR = parseFloat(mR[1]);
+      if (mP) this.currentXsP = parseFloat(mP[1]);
+      if (mY) this.currentXsY = parseFloat(mY[1]);
+    }
+    // 3. Phân tích gói EKF dung hợp tối ưu:
     // [PX4_EKF] R:   1.2° P:  -0.5° Y:  82.4° | Acc:[  0.20, -0.16,  9.13] | Gyr:[  -0.1,   0.1,   0.0] (OPTIMAL)
-    if (line.includes("[PX4_EKF]")) {
+    else if (line.includes("[PX4_EKF]")) {
       const mR = line.match(/R:\s*([-\d.]+)/);
       const mP = line.match(/P:\s*([-\d.]+)/);
       const mY = line.match(/Y:\s*([-\d.]+)/);
@@ -139,7 +163,7 @@ class TelemetryDataStore {
         this.currentYaw = parseFloat(mY[1]);
       }
     }
-    // 2. Phân tích trạng thái động cơ (dòng cuối của mỗi chu kỳ Telemetry 20Hz):
+    // 4. Phân tích trạng thái động cơ (dòng cuối của mỗi chu kỳ Telemetry):
     // [ESC_QUAD] State:ARMED | M1(P7-CCW):1000us( 0.0%) | M2(P6-CCW):1000us( 0.0%) | M3(P5-CW): 850us( 0.0%) | M4(P4-CW):1000us( 0.0%) @ 50Hz
     else if (line.includes("[ESC_QUAD]")) {
       const pcts = [...line.matchAll(/\(\s*([-\d.]+)%\)/g)];
@@ -176,8 +200,22 @@ class TelemetryDataStore {
     }
 
     try {
-      if (this.webSocketConnection) this.webSocketConnection.close();
+      if (this.webSocketConnection) {
+        this.webSocketConnection.onopen = null;
+        this.webSocketConnection.onclose = null;
+        this.webSocketConnection.onerror = null;
+        this.webSocketConnection.onmessage = null;
+        this.webSocketConnection.close();
+      }
       this.webSocketConnection = new WebSocket(endpointUrl);
+      this.webSocketConnection.onopen = () => {
+        console.log("[WebSocket] Đã kết nối thành công tới ESP32:", endpointUrl);
+        const bLiveWs = document.getElementById("bLiveWs");
+        if (bLiveWs) {
+          bLiveWs.style.background = "#16a34a";
+          bLiveWs.textContent = "✅ Đã Kết Nối WiFi";
+        }
+      };
       this.webSocketConnection.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
@@ -188,9 +226,17 @@ class TelemetryDataStore {
         } catch (_ignoredError) {}
       };
       this.webSocketConnection.onclose = () => {
+        const bLiveWs = document.getElementById("bLiveWs");
+        if (bLiveWs) {
+          bLiveWs.style.background = "#0284c7";
+          bLiveWs.textContent = "📡 Kết Nối WiFi";
+        }
         if (this.connectionMode === "ws") {
           setTimeout(() => this.connectionMode === "ws" && this.connectWebSocket(endpointUrl), 2000);
         }
+      };
+      this.webSocketConnection.onerror = (err) => {
+        console.warn("[WebSocket Lỗi]", err);
       };
     } catch (_connectionError) {}
   }

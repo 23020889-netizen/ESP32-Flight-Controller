@@ -176,8 +176,22 @@ class TelemetryDataStore {
     }
 
     try {
-      if (this.webSocketConnection) this.webSocketConnection.close();
+      if (this.webSocketConnection) {
+        this.webSocketConnection.onopen = null;
+        this.webSocketConnection.onclose = null;
+        this.webSocketConnection.onerror = null;
+        this.webSocketConnection.onmessage = null;
+        this.webSocketConnection.close();
+      }
       this.webSocketConnection = new WebSocket(endpointUrl);
+      this.webSocketConnection.onopen = () => {
+        console.log("[WebSocket] Đã kết nối thành công tới ESP32:", endpointUrl);
+        const bLiveWs = document.getElementById("bLiveWs");
+        if (bLiveWs) {
+          bLiveWs.style.background = "#16a34a";
+          bLiveWs.textContent = "✅ Đã Kết Nối WiFi";
+        }
+      };
       this.webSocketConnection.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
@@ -188,9 +202,17 @@ class TelemetryDataStore {
         } catch (_ignoredError) {}
       };
       this.webSocketConnection.onclose = () => {
+        const bLiveWs = document.getElementById("bLiveWs");
+        if (bLiveWs) {
+          bLiveWs.style.background = "#0284c7";
+          bLiveWs.textContent = "📡 Kết Nối WiFi";
+        }
         if (this.connectionMode === "ws") {
           setTimeout(() => this.connectionMode === "ws" && this.connectWebSocket(endpointUrl), 2000);
         }
+      };
+      this.webSocketConnection.onerror = (err) => {
+        console.warn("[WebSocket Lỗi]", err);
       };
     } catch (_connectionError) {}
   }

@@ -24,16 +24,14 @@
       <div class="chips">
         <div class="chip">FREQ <b class="mono" id="sFreq">0 Hz</b></div>
         <div class="chip">PKT <b class="mono" id="sPk">0</b></div>
-        <div class="chip" style="display:flex;align-items:center;gap:4px">
-          <span>ESP IP:</span>
-          <input type="text" id="inpWsIp" value="10.11.162.210" style="width:110px;background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;font-weight:bold" placeholder="10.11.162.xxx">
+        <button id="bSerial" title="Kết nối trực tiếp qua cáp USB Serial COM32 (WebSerial API)" style="background:linear-gradient(135deg, #0284c7 0%, #2563eb 100%);color:#fff;border:1px solid #38bdf8;font-weight:700">⚡ Cáp USB (COM)</button>
+        <div style="display:flex;align-items:center;background:#0f172a;border:1px solid #38bdf8;border-radius:4px;overflow:hidden">
+          <input type="text" id="inpWsIp" placeholder="IP ESP32" value="10.11.162.210" style="width:115px;background:transparent;color:#38bdf8;border:none;padding:4px 6px;font-size:11px;font-family:monospace;font-weight:bold;outline:none" title="Nhập địa chỉ IP mạng TTDB của ESP32 (xem trên Serial Monitor)">
+          <button id="bLiveWs" style="background:linear-gradient(135deg, #059669 0%, #10b981 100%);color:#fff;border:none;padding:4px 8px;font-weight:700;cursor:pointer" title="Kết nối WebSocket qua mạng WiFi TTDB hoặc SoftAP (ws://IP:81)">📡 Kết Nối WiFi</button>
         </div>
-        <button id="bLiveWs" title="Kết nối trực tiếp ESP32-C6 qua mạng WiFi TTDB hoặc SoftAP" style="background:#0284c7;color:#fff;border:1px solid #38bdf8;font-weight:700">📡 Kết Nối WiFi</button>
-        <div class="chip" id="chipGamepad" style="color:#94a3b8">🎮 Tay Cầm: <b id="lblGamepadStatus" style="color:#f59e0b">Chưa cắm</b></div>
-        <button id="bSerial" title="Kết nối trực tiếp qua cáp USB Serial (Nếu cắm dây USB)" style="background:#334155;color:#fff;font-weight:600">⚡ Cáp USB (COM)</button>
         <button id="bDemo" class="act">Tự động (Demo)</button>
-        <button id="bCsv" title="Phát lại file IMU_Telemetry_Log">Phát Log CSV</button>
-        <button id="bPickCsv" title="Chọn file .csv">Chọn CSV...</button>
+        <button id="bCsv" title="Phát lại file IMU_Telemetry_Log_20261102_231104.csv">Phát Log CSV</button>
+        <button id="bPickCsv" title="Chọn file .csv bất kỳ từ máy tính">Chọn CSV...</button>
         <input type="file" id="fCsv" accept=".csv" hidden>
         <button id="bCam">Đặt lại camera</button>
       </div>
@@ -43,6 +41,21 @@
       <div class="dock-col" id="colLeft">
         <div class="gl pn">
           <h2>ĐIỀU KHIỂN BAY (FLIGHT CONTROLS)<em>ESP32-C6</em></h2>
+          <!-- CARD TRẠNG THÁI TAY CẦM A124 / XBOX -->
+          <div id="cardGamepad" style="margin-bottom:8px;background:rgba(15,23,42,0.8);padding:6px;border-radius:4px;border:1px solid #3b82f6">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+              <span style="font-size:11px;font-weight:700;color:#60a5fa">🎮 TAY CẦM A124 / XBOX</span>
+              <span id="lblGpState" style="font-size:10px;padding:1px 6px;border-radius:3px;background:#334155;color:#94a3b8;font-weight:bold">Chưa kết nối</span>
+            </div>
+            <div style="font-size:10px;color:#cbd5e1;font-family:monospace;display:flex;justify-content:space-between">
+              <span>Cần Trái: <b id="lblGpL" style="color:#38bdf8">Thr: 0% | Y: 0°</b></span>
+              <span>Cần Phải: <b id="lblGpR" style="color:#34d399">R: 0° | P: 0°</b></span>
+            </div>
+            <div style="font-size:9px;color:#94a3b8;margin-top:2px;display:flex;justify-content:space-between">
+              <span>[Nút A]: <b style="color:#4ade80">ARM</b> | [Nút B]: <b style="color:#f87171">DISARM</b></span>
+              <span id="lblGpArmStatus" style="font-weight:bold;color:#f87171">DISARMED</span>
+            </div>
+          </div>
           <div style="display:flex;gap:6px;margin-bottom:8px">
             <button id="btnArm" style="flex:1;background:linear-gradient(135deg, #15803d 0%, #16a34a 100%);color:#fff;border:1px solid #4ade80;border-radius:4px;padding:7px;font-weight:bold;cursor:pointer">ARM</button>
             <button id="btnDisarm" style="flex:1;background:linear-gradient(135deg, #b91c1c 0%, #dc2626 100%);color:#fff;border:1px solid #f87171;border-radius:4px;padding:7px;font-weight:bold;cursor:pointer">DISARM</button>
@@ -76,22 +89,6 @@
               <button class="btn-sp" data-sp="5 0 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">R +5°</button>
               <button class="btn-sp" data-sp="0 -5 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">P -5°</button>
               <button class="btn-sp" data-sp="0 5 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">P +5°</button>
-            </div>
-          </div>
-
-          <!-- Giám sát cần Analog Tay cầm A124 / Xbox -->
-          <div style="margin-bottom:8px;background:rgba(15,23,42,0.8);padding:6px;border-radius:4px;border:1px solid rgba(245,158,11,0.3)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-              <span style="font-size:11px;color:#f59e0b;font-weight:700">🎮 TAY CẦM A124 / XBOX</span>
-              <b id="lblGamepadArm" style="color:#ef4444;font-size:11px;font-family:monospace">DISARM</b>
-            </div>
-            <div style="display:flex;gap:4px;font-family:monospace;font-size:11px">
-              <div style="flex:1;background:#1e293b;padding:3px;border-radius:3px">
-                <span style="color:#94a3b8">Cần Trái:</span> <b id="lblStickL" style="color:#38bdf8">T:0% | Y:0°</b>
-              </div>
-              <div style="flex:1;background:#1e293b;padding:3px;border-radius:3px">
-                <span style="color:#94a3b8">Cần Phải:</span> <b id="lblStickR" style="color:#34d399">P:0° | R:0°</b>
-              </div>
             </div>
           </div>
           <!-- Dòng nhập lệnh CLI -->

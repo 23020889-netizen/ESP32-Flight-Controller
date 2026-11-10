@@ -272,10 +272,19 @@ void executeCommand(String cmd, const char* sourceTag) {
     } else if (cmd.startsWith("min") || cmd.startsWith("MIN")) {
         int mId = cmd.substring(3, 4).toInt();
         int newMin = cmd.substring(5).toInt();
-        if (mId >= 1 && mId <= 4 && newMin >= 750 && newMin <= 1200) {
-            quadMotors.getMotor(mId - 1).setPulseRange((uint16_t)newMin, (uint16_t)(newMin + 1000));
+        if (mId >= 1 && mId <= 4 && newMin >= 750 && newMin < quadMotors.getMotor(mId - 1).getMaxPulseUs()) {
+            uint16_t curMax = quadMotors.getMotor(mId - 1).getMaxPulseUs();
+            quadMotors.getMotor(mId - 1).setPulseRange((uint16_t)newMin, curMax);
             quadMotors.getMotor(mId - 1).writePulseUs((uint16_t)newMin);
-            Serial.printf("[%s] [CONFIG] Motor %d: Min = %d us, Max = %d us\n", sourceTag, mId, newMin, newMin + 1000);
+            Serial.printf("[%s] [CONFIG] Motor %d: Min = %d us, Max = %u us\n", sourceTag, mId, newMin, curMax);
+        }
+    } else if (cmd.startsWith("max") || cmd.startsWith("MAX")) {
+        int mId = cmd.substring(3, 4).toInt();
+        int newMax = cmd.substring(5).toInt();
+        if (mId >= 1 && mId <= 4 && newMax > quadMotors.getMotor(mId - 1).getMinPulseUs() && newMax <= 2250) {
+            uint16_t curMin = quadMotors.getMotor(mId - 1).getMinPulseUs();
+            quadMotors.getMotor(mId - 1).setPulseRange(curMin, (uint16_t)newMax);
+            Serial.printf("[%s] [CONFIG] Motor %d: Min = %u us, Max = %d us\n", sourceTag, mId, curMin, newMax);
         }
     } else if (cmd.equalsIgnoreCase("manual off") || cmd.equalsIgnoreCase("pid mode") || cmd.equalsIgnoreCase("auto")) {
         pidModeEnabled = true;

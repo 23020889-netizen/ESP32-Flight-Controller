@@ -23,13 +23,15 @@
 #define ESC_RESOLUTION_BITS      14       // Độ phân giải phần cứng 14-bit (16384 nấc, bước nhảy siêu mịn 0.15 µs)
 
 // CẤU HÌNH DẢI XUNG ESC THEO PHẦN CỨNG THỰC TẾ CỦA NGƯỜI DÙNG:
-// - Motor 1, 2, 4 (ESC Vàng 30A): Min/Disarm = 1000 µs, Max = 2000 µs
-// - Motor 3 (GPIO 5 - ESC Đen 40A): Min/Disarm = 850 µs, Max = 1850 µs (Bù lệch -150 µs để không kêu bíp và đồng tốc)
+// - Motor 1, 2, 4 (ESC Vàng 30A): Min/Disarm = 1000 µs, SpinMin = 1000 µs, Max = 2000 µs
+// - Motor 3 (GPIO 5 - ESC Đen 40A): Min/Disarm = 850 µs, SpinMin = 890 µs, Max = 1000 µs
+//   (Khi ở 0% ga xuất 850µs để nhận Arm; ngay khi ga > 0% nhảy qua vùng chết lên 890..1000µs để quay đồng tốc ngay từ 3-5% ga!)
 #define ESC_PULSE_DISARM_US      1000     // Xung khóa an toàn mặc định cho ESC Vàng (1000 µs)
 #define ESC_PULSE_MIN_US         1000     // Xung ga tối thiểu chuẩn (1000 µs = 0.0% Throttle)
 #define ESC_PULSE_MAX_US         2000     // Xung ga tối đa chuẩn (2000 µs = 100.0% Throttle)
-#define ESC_M3_PULSE_MIN_US      850      // Xung ga tối thiểu riêng cho Motor 3 - ESC Đen 40A (850 µs = 0.0% Throttle)
-#define ESC_M3_PULSE_MAX_US      1850     // Xung ga tối đa riêng cho Motor 3 - ESC Đen 40A (1850 µs = 100.0% Throttle)
+#define ESC_M3_PULSE_MIN_US      850      // Xung khóa / nhận Arm cho Motor 3 - ESC Đen 40A (850 µs = 0.0% Throttle)
+#define ESC_M3_PULSE_SPIN_US     890      // Ngưỡng bắt đầu quay của Motor 3 - ESC Đen 40A (bỏ qua vùng chết 850..890 µs)
+#define ESC_M3_PULSE_MAX_US      1000     // Xung ga tối đa riêng cho Motor 3 - ESC Đen 40A (1000 µs = 100.0% Throttle)
 #define ESC_PULSE_IDLE_US        1050     // Xung ga quay chậm không tải (Idle Spin ~ 5%)
 
 #define ESC_ARMING_TIME_MS       0        // Mở khóa ARM tức thì (vì init() đã giữ mốc 0% từ lúc khởi động)
@@ -60,14 +62,16 @@ class EscMotor {
 public:
     EscMotor();
 
-    // Khởi tạo kênh động cơ với ID, chân GPIO, chiều quay, tần số và dải xung Min/Max riêng
+    // Khởi tạo kênh động cơ với ID, chân GPIO, chiều quay, tần số và dải xung Min/SpinMin/Max riêng
     bool init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz,
-              uint16_t min_us = ESC_PULSE_MIN_US, uint16_t max_us = ESC_PULSE_MAX_US);
+              uint16_t min_us = ESC_PULSE_MIN_US, uint16_t max_us = ESC_PULSE_MAX_US,
+              uint16_t spin_min_us = 0);
 
     // Cấu hình lại dải xung Min/Max riêng cho ESC
-    void setPulseRange(uint16_t min_us, uint16_t max_us);
-    uint16_t getMinPulseUs() const { return _min_us; }
-    uint16_t getMaxPulseUs() const { return _max_us; }
+    void setPulseRange(uint16_t min_us, uint16_t max_us, uint16_t spin_min_us = 0);
+    uint16_t getMinPulseUs() const     { return _min_us; }
+    uint16_t getSpinMinPulseUs() const { return _spin_min_us; }
+    uint16_t getMaxPulseUs() const     { return _max_us; }
 
     // Cập nhật lại tần số xung PWM phần cứng
     bool setFrequency(uint32_t freq_hz);
@@ -105,6 +109,7 @@ private:
     uint32_t       _period_us;
     uint32_t       _max_duty;
     uint16_t       _min_us;
+    uint16_t       _spin_min_us;
     uint16_t       _max_us;
     uint16_t       _current_us;
     uint16_t       _target_us;

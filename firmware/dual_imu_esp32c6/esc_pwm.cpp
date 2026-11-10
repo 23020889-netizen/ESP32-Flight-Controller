@@ -10,7 +10,7 @@ QuadEscController quadMotors;
 EscMotor::EscMotor()
     : _id(0), _pin(0), _direction(MOTOR_DIR_CCW),
       _freq_hz(ESC_DEFAULT_FREQ_HZ), _period_us(20000), _max_duty(16383),
-      _min_us(ESC_PULSE_MIN_US), _max_us(ESC_PULSE_MAX_US),
+      _min_us(ESC_PULSE_MIN_US), _spin_min_us(ESC_PULSE_MIN_US), _max_us(ESC_PULSE_MAX_US),
       _current_us(ESC_PULSE_MIN_US), _target_us(ESC_PULSE_MIN_US),
       _throttle_pct(0.0f), _attached(false) {
 }
@@ -23,7 +23,7 @@ uint32_t EscMotor::usToDuty(uint16_t pulse_us) const {
 }
 
 bool EscMotor::init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz,
-                    uint16_t min_us, uint16_t max_us) {
+                    uint16_t min_us, uint16_t max_us, uint16_t spin_min_us) {
     _id          = id;
     _pin         = pin;
     _direction   = dir;
@@ -31,6 +31,7 @@ bool EscMotor::init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_h
     _period_us   = 1000000UL / freq_hz;
     _max_duty    = (1UL << ESC_RESOLUTION_BITS) - 1UL;
     _min_us      = min_us;
+    _spin_min_us = (spin_min_us >= min_us && spin_min_us < max_us) ? spin_min_us : min_us;
     _max_us      = max_us;
     _current_us  = _min_us;
     _target_us   = _min_us;
@@ -49,15 +50,16 @@ bool EscMotor::init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_h
     // Phát ngay mức xung khóa/0% riêng của từng loại ESC (M1,2,4=1000us | M3=850us)
     ledcWrite(_pin, usToDuty(_min_us));
 
-    Serial.printf("[ESC_MOTOR_%d] Khoi tao thanh cong: GPIO %d | Huong: %s | Dai xung: %u..%u us | Freq: %u Hz\n",
-                  _id, _pin, getDirectionStr(), _min_us, _max_us, _freq_hz);
+    Serial.printf("[ESC_MOTOR_%d] Khoi tao thanh cong: GPIO %d | Huong: %s | Arm:%u us | Spin:%u..%u us | Freq: %u Hz\n",
+                  _id, _pin, getDirectionStr(), _min_us, _spin_min_us, _max_us, _freq_hz);
     return true;
 }
 
-void EscMotor::setPulseRange(uint16_t min_us, uint16_t max_us) {
+void EscMotor::setPulseRange(uint16_t min_us, uint16_t max_us, uint16_t spin_min_us) {
     if (min_us >= 750 && max_us > min_us && max_us <= 2250) {
-        _min_us = min_us;
-        _max_us = max_us;
+        _min_us      = min_us;
+        _max_us      = max_us;
+        _spin_min_us = (spin_min_us >= min_us && spin_min_us < max_us) ? spin_min_us : min_us;
     }
 }
 
@@ -86,11 +88,11 @@ void EscMotor::writePulseUs(uint16_t pulse_us) {
     _current_us = pulse_us;
     _target_us  = pulse_us;
 
-    if (_current_us <= _min_us) {
+    if (_current_us <= _spin_min_us) {
         _throttle_pct = 0.0f;
     } else {
-        _throttle_pct = ((float)(_current_us - _min_us) * 100.0f) /
-                        (float)(_max_us - _min_us);
+        _throttle_pct = ((float)(_current_us - _spin_min_us) * 100.0f) /
+                        (float)(_max_us - _spin_min_us);
     }
     ledcWrite(_pin, usToDuty(_current_us));
 }
@@ -102,15 +104,25 @@ void EscMotor::setTargetPulseUs(uint16_t pulse_us) {
 }
 
 void EscMotor::setTargetThrottlePct(float pct) {
-    if (pct < 0.0f)   pct = 0.0f;
+    if (pct <= 0.2f) {
+        setTargetPulseUs(_min_us);
+        return;
+    }
     if (pct > 100.0f) pct = 100.0f;
 
-    uint16_t pulse_us = _min_us + (uint16_t)((pct * (float)(_max_us - _min_us)) / 100.0f);
+    uint16_t pulse_us = _spin_min_us + (uint16_t)((pct * (float)(_max_us - _spin_min_us)) / 100.0f);
     setTargetPulseUs(pulse_us);
 }
 
 void EscMotor::updateRamp(float dt) {
     if (_current_us != _target_us) {
+        // Nhảy trực tiếp qua vùng chết (_min_us <-> _spin_min_us) để động cơ phản hồi tức thì
+        if (_current_us < _spin_min_us && _target_us >= _spin_min_us) {
+            _current_us = _spin_min_us;
+        } else if (_current_us > _min_us && _target_us <= _min_us) {
+            _current_us = _min_us;
+        }
+
         float max_step = (float)ESC_SLEW_RATE_US_PER_SEC * dt;
         if (max_step < 1.0f) max_step = 1.0f;
 
@@ -125,11 +137,11 @@ void EscMotor::updateRamp(float dt) {
         ledcWrite(_pin, usToDuty(_current_us));
     }
 
-    if (_current_us <= _min_us) {
+    if (_current_us <= _spin_min_us) {
         _throttle_pct = 0.0f;
     } else {
-        _throttle_pct = ((float)(_current_us - _min_us) * 100.0f) /
-                        (float)(_max_us - _min_us);
+        _throttle_pct = ((float)(_current_us - _spin_min_us) * 100.0f) /
+                        (float)(_max_us - _spin_min_us);
     }
 }
 
@@ -157,14 +169,14 @@ bool QuadEscController::init(uint32_t freq_hz) {
     Serial.println("[ESC_QUAD] KHOI TAO HE THONG 4 DONG CO QUADCOPTER (CHUAN PX4):");
 
     // Khởi tạo 4 động cơ theo đúng cấu hình phần cứng hỗn hợp của người dùng:
-    // Motor 1: GPIO 7, CCW - ESC Vàng 30A (1000..2000 us)
-    // Motor 2: GPIO 6, CCW - ESC Vàng 30A (1000..2000 us)
-    // Motor 3: GPIO 5, CW  - ESC Đen  40A ( 850..1850 us)
-    // Motor 4: GPIO 4, CW  - ESC Vàng 30A (1000..2000 us)
-    success &= _motors[0].init(1, MOTOR1_PIN, MOTOR_DIR_CCW, freq_hz, ESC_PULSE_MIN_US,    ESC_PULSE_MAX_US);
-    success &= _motors[1].init(2, MOTOR2_PIN, MOTOR_DIR_CCW, freq_hz, ESC_PULSE_MIN_US,    ESC_PULSE_MAX_US);
-    success &= _motors[2].init(3, MOTOR3_PIN, MOTOR_DIR_CW,  freq_hz, ESC_M3_PULSE_MIN_US, ESC_M3_PULSE_MAX_US);
-    success &= _motors[3].init(4, MOTOR4_PIN, MOTOR_DIR_CW,  freq_hz, ESC_PULSE_MIN_US,    ESC_PULSE_MAX_US);
+    // Motor 1: GPIO 7, CCW - ESC Vàng 30A (Arm:1000, Spin:1000..2000 us)
+    // Motor 2: GPIO 6, CCW - ESC Vàng 30A (Arm:1000, Spin:1000..2000 us)
+    // Motor 3: GPIO 5, CW  - ESC Đen  40A (Arm: 850, Spin: 890..1000 us - nhảy qua vùng chết 850..890us)
+    // Motor 4: GPIO 4, CW  - ESC Vàng 30A (Arm:1000, Spin:1000..2000 us)
+    success &= _motors[0].init(1, MOTOR1_PIN, MOTOR_DIR_CCW, freq_hz, ESC_PULSE_MIN_US,    ESC_PULSE_MAX_US,    ESC_PULSE_MIN_US);
+    success &= _motors[1].init(2, MOTOR2_PIN, MOTOR_DIR_CCW, freq_hz, ESC_PULSE_MIN_US,    ESC_PULSE_MAX_US,    ESC_PULSE_MIN_US);
+    success &= _motors[2].init(3, MOTOR3_PIN, MOTOR_DIR_CW,  freq_hz, ESC_M3_PULSE_MIN_US, ESC_M3_PULSE_MAX_US, ESC_M3_PULSE_SPIN_US);
+    success &= _motors[3].init(4, MOTOR4_PIN, MOTOR_DIR_CW,  freq_hz, ESC_PULSE_MIN_US,    ESC_PULSE_MAX_US,    ESC_PULSE_MIN_US);
 
     _state            = ESC_STATE_DISARMED;
     _watchdog_enabled = false;
@@ -282,13 +294,16 @@ bool QuadEscController::setMotorThrottleUs(uint8_t motor_id, uint16_t pulse_us) 
     }
 
     EscMotor& m = _motors[motor_id - 1];
-    // Tự động dịch dải chuẩn (1000..2000us từ PID) sang dải riêng của ESC (VD: M3 850..1850us)
-    if (m.getMinPulseUs() != ESC_PULSE_MIN_US && pulse_us >= ESC_PULSE_MIN_US) {
-        int32_t offset = (int32_t)m.getMinPulseUs() - (int32_t)ESC_PULSE_MIN_US;
-        int32_t mapped = (int32_t)pulse_us + offset;
-        if (mapped < (int32_t)m.getMinPulseUs()) mapped = m.getMinPulseUs();
-        if (mapped > (int32_t)m.getMaxPulseUs()) mapped = m.getMaxPulseUs();
-        pulse_us = (uint16_t)mapped;
+    // Nội suy tuyến tính (Linear Map) từ dải chuẩn (1000..2000us) sang dải quay thực tế (SpinMin..Max)
+    if ((m.getMinPulseUs() != ESC_PULSE_MIN_US || m.getMaxPulseUs() != ESC_PULSE_MAX_US) &&
+        pulse_us >= ESC_PULSE_MIN_US && pulse_us <= ESC_PULSE_MAX_US) {
+        if (pulse_us <= ESC_PULSE_MIN_US + 2) {
+            pulse_us = m.getMinPulseUs();
+        } else {
+            uint32_t std_span = ESC_PULSE_MAX_US - ESC_PULSE_MIN_US; // 1000 us
+            uint32_t m_span   = m.getMaxPulseUs() - m.getSpinMinPulseUs();
+            pulse_us = m.getSpinMinPulseUs() + (uint16_t)(((uint32_t)(pulse_us - ESC_PULSE_MIN_US) * m_span) / std_span);
+        }
     }
 
     m.setTargetPulseUs(pulse_us);

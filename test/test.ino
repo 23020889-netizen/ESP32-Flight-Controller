@@ -40,10 +40,13 @@ const char* MOTOR_NAMES[NUM_MOTORS] = {
     "Motor 4 (GPIO 4 - ESC Vang 30A)"
 };
 
-// Mốc Min (0% ga - đứng yên & không kêu) và Max (100% ga) riêng cho từng ESC:
-// Motor 3 (ESC Đen 40A) nhận vùng Arm từ 800 - 885 us -> Đặt mặc định 850 us
-uint16_t motorMinUs[NUM_MOTORS] = { 1000, 1000,  850, 1000 };
-uint16_t motorMaxUs[NUM_MOTORS] = { 2000, 2000, 1850, 2000 };
+// Mốc Arm/0% (đứng yên & không kêu), mốc bắt đầu quay (Spin Start) và Max (100% ga) cho từng ESC:
+// - Motor 1, 2, 4 (ESC Vàng 30A): Arm/0% = 1000 us, SpinMin = 1000 us, Max = 2000 us
+// - Motor 3 (ESC Đen 40A):        Arm/0% =  850 us, SpinMin =  890 us, Max = 1000 us
+//   (Khi ở 0% xuất 850us để nhận Arm; ngay khi lên ga > 0% nhảy qua vùng chết lên 890..1000us để quay ngay cùng lúc với M1,2,4!)
+uint16_t motorMinUs[NUM_MOTORS]     = { 1000, 1000,  850, 1000 };
+uint16_t motorSpinMinUs[NUM_MOTORS] = { 1000, 1000,  890, 1000 };
+uint16_t motorMaxUs[NUM_MOTORS]     = { 2000, 2000, 1000, 2000 };
 
 // ============================================================================
 // 2. BIẾN TRẠNG THÁI HỆ THỐNG
@@ -61,6 +64,7 @@ static SelectionMode activeTarget = SELECT_ALL;
 static bool isCalibrating    = false;
 static bool isArmed          = false;
 static bool safetyLimit60Pct = true;
+static bool webStreamEnabled = false; // Mặc định TẮT stream liên tục để Serial Monitor sạch sẽ khi Calib & Dò xung
 static uint32_t lastTelemetryMs = 0;
 
 // ============================================================================
@@ -102,21 +106,26 @@ void setAllMotorsToMax() {
     }
 }
 
-// Tính % ga của từng động cơ dựa trên mốc Min/Max riêng của nó
+// Tính % ga của từng động cơ dựa trên mốc SpinMin..Max riêng của nó
 float getMotorThrottlePct(uint8_t idx) {
-    if (currentPulseUs[idx] <= motorMinUs[idx]) return 0.0f;
-    uint16_t span = motorMaxUs[idx] - motorMinUs[idx];
+    if (currentPulseUs[idx] <= motorSpinMinUs[idx]) return 0.0f;
+    uint16_t span = motorMaxUs[idx] - motorSpinMinUs[idx];
     if (span == 0) return 0.0f;
-    return ((float)(currentPulseUs[idx] - motorMinUs[idx]) * 100.0f) / (float)span;
+    return ((float)(currentPulseUs[idx] - motorSpinMinUs[idx]) * 100.0f) / (float)span;
 }
 
-// Đặt % ga (0..100%) cho 1 động cơ theo đúng dải Min..Max riêng của động cơ đó
+// Đặt % ga (0..100%) cho 1 động cơ:
+// - Nếu pct <= 0.2%: xuất motorMinUs (850us cho M3) để khóa/nhận Arm và đứng yên tuyệt đối
+// - Nếu pct >  0.2%: nội suy từ motorSpinMinUs (890us cho M3) đến motorMaxUs (1000us cho M3) để quay ngay lập tức
 void writeMotorPct(uint8_t idx, float pct) {
     if (idx >= NUM_MOTORS) return;
-    if (pct < 0.0f)   pct = 0.0f;
+    if (pct <= 0.2f) {
+        writeMotorUs(idx, motorMinUs[idx]);
+        return;
+    }
     if (pct > 100.0f) pct = 100.0f;
-    uint16_t span = motorMaxUs[idx] - motorMinUs[idx];
-    uint16_t us = motorMinUs[idx] + (uint16_t)((pct * (float)span) / 100.0f);
+    uint16_t span = motorMaxUs[idx] - motorSpinMinUs[idx];
+    uint16_t us = motorSpinMinUs[idx] + (uint16_t)((pct * (float)span) / 100.0f);
     writeMotorUs(idx, us);
 }
 
@@ -299,11 +308,12 @@ void processCommand(String cmd) {
         }
     }
 
-    // 3. Lệnh gói nhanh 4 kênh từ script Xbox trên PC: "x <m1%> <m2%> <m3%> <m4%>"
+    // 3. Lệnh gói nhanh 4 kênh từ script Xbox trên PC / Web 3D: "x <m1%> <m2%> <m3%> <m4%>"
     if (cmd.startsWith("x ") || cmd.startsWith("X ")) {
         float p1 = 0, p2 = 0, p3 = 0, p4 = 0;
         if (sscanf(cmd.c_str() + 2, "%f %f %f %f", &p1, &p2, &p3, &p4) == 4) {
             isArmed = true;
+            webStreamEnabled = true; // Tự động bật stream 20Hz cho Web 3D Monitor
             float maxCap = safetyLimit60Pct ? 60.0f : 100.0f;
             if (p1 > maxCap) p1 = maxCap;
             if (p2 > maxCap) p2 = maxCap;
@@ -317,12 +327,13 @@ void processCommand(String cmd) {
         return;
     }
 
-    // 3. Lệnh đặt % ga từ Web / Xbox Script: "throttle <pct>" hoặc "set <pct>"
+    // 4. Lệnh đặt % ga từ Web / Xbox Script: "throttle <pct>" hoặc "set <pct>"
     if (cmd.startsWith("throttle ") || cmd.startsWith("THROTTLE ") ||
         cmd.startsWith("set ") || cmd.startsWith("SET ")) {
         int idx = cmd.indexOf(' ');
         float pct = cmd.substring(idx + 1).toFloat();
         isArmed = true;
+        webStreamEnabled = true; // Tự động bật stream 20Hz cho Web 3D Monitor
         writeSelectedTargetPct(pct, true);
         return;
     }
@@ -370,19 +381,44 @@ void processCommand(String cmd) {
         return;
     }
 
-    // 7. Tinh chỉnh nhanh mốc Min của từng motor (VD: "min3 860")
+    // 7. Tinh chỉnh nhanh mốc Min / Max của từng motor (VD: "min3 850", "max3 1000")
     if (cmd.startsWith("min") || cmd.startsWith("MIN")) {
         int mId = cmd.substring(3, 4).toInt();
         int newMin = cmd.substring(5).toInt();
-        if (mId >= 1 && mId <= 4 && newMin >= 750 && newMin <= 1200) {
+        if (mId >= 1 && mId <= 4 && newMin >= 750 && newMin < motorMaxUs[mId - 1]) {
             motorMinUs[mId - 1] = (uint16_t)newMin;
-            motorMaxUs[mId - 1] = (uint16_t)(newMin + 1000);
             writeMotorUs(mId - 1, motorMinUs[mId - 1]);
             Serial.printf("[CONFIG] Da cap nhat Motor %d: Min = %u us, Max = %u us\n",
                           mId, motorMinUs[mId - 1], motorMaxUs[mId - 1]);
             printStatus();
         } else {
-            Serial.println("[LOI] Cu phap: min<1..4> <750..1200> (Vi du: min3 850)");
+            Serial.println("[LOI] Cu phap: min<1..4> <us> (Nho hon Max hien tai)");
+        }
+        return;
+    }
+    if (cmd.startsWith("max") || cmd.startsWith("MAX")) {
+        int mId = cmd.substring(3, 4).toInt();
+        int newMax = cmd.substring(5).toInt();
+        if (mId >= 1 && mId <= 4 && newMax > motorMinUs[mId - 1] && newMax <= 2250) {
+            motorMaxUs[mId - 1] = (uint16_t)newMax;
+            Serial.printf("[CONFIG] Da cap nhat Motor %d: Min = %u us, SpinMin = %u us, Max = %u us\n",
+                          mId, motorMinUs[mId - 1], motorSpinMinUs[mId - 1], motorMaxUs[mId - 1]);
+            printStatus();
+        } else {
+            Serial.println("[LOI] Cu phap: max<1..4> <us> (Lon hon Min hien tai, VD: max3 1000)");
+        }
+        return;
+    }
+    if (cmd.startsWith("spin") || cmd.startsWith("SPIN")) {
+        int mId = cmd.substring(4, 5).toInt();
+        int newSpin = cmd.substring(6).toInt();
+        if (mId >= 1 && mId <= 4 && newSpin >= motorMinUs[mId - 1] && newSpin < motorMaxUs[mId - 1]) {
+            motorSpinMinUs[mId - 1] = (uint16_t)newSpin;
+            Serial.printf("[CONFIG] Da cap nhat Motor %d: Min(Arm) = %u us, SpinMin(Bat dau quay) = %u us, Max = %u us\n",
+                          mId, motorMinUs[mId - 1], motorSpinMinUs[mId - 1], motorMaxUs[mId - 1]);
+            printStatus();
+        } else {
+            Serial.println("[LOI] Cu phap: spin<1..4> <us> (VD: spin3 890)");
         }
         return;
     }
@@ -467,6 +503,11 @@ void processCommand(String cmd) {
     }
 
     // 11. Trạng thái & Trợ giúp
+    if (cmd.equalsIgnoreCase("web")) {
+        webStreamEnabled = !webStreamEnabled;
+        Serial.printf("[WEB] Stream 20Hz cho Web 3D: %s\n", webStreamEnabled ? "BAT" : "TAT");
+        return;
+    }
     if (cmd.equalsIgnoreCase("status") || cmd.equalsIgnoreCase("st")) {
         printStatus();
         return;
@@ -533,17 +574,19 @@ void loop() {
         processCommand(cmd);
     }
 
-    // Phát gói Telemetry chuẩn 20Hz (50ms) để đồng bộ trực tiếp với Web 3D Monitor (WebSerial)
-    uint32_t nowMs = millis();
-    if (nowMs - lastTelemetryMs >= 50) {
-        lastTelemetryMs = nowMs;
-        Serial.println("[PX4_EKF] R:   0.0° P:   0.0° Y:   0.0° | Acc:[  0.00,  0.00,  9.81] | Gyr:[   0.0,   0.0,   0.0] (OPTIMAL)");
-        Serial.printf("[ESC_QUAD] State:%-8s | M1(P7-CCW):%4uus(%4.1f%%) | M2(P6-CCW):%4uus(%4.1f%%) | M3(P5-CW):%4uus(%4.1f%%) | M4(P4-CW):%4uus(%4.1f%%) @ %dHz\n",
-                      isArmed ? "ARMED" : "DISARMED",
-                      currentPulseUs[0], getMotorThrottlePct(0),
-                      currentPulseUs[1], getMotorThrottlePct(1),
-                      currentPulseUs[2], getMotorThrottlePct(2),
-                      currentPulseUs[3], getMotorThrottlePct(3),
-                      ESC_FREQ_HZ);
+    // Chỉ phát liên tục 20Hz khi bật chế độ 'web' (mặc định tắt để màn hình Serial Monitor đứng yên dễ Calib/Scan)
+    if (webStreamEnabled) {
+        uint32_t nowMs = millis();
+        if (nowMs - lastTelemetryMs >= 50) {
+            lastTelemetryMs = nowMs;
+            Serial.println("[PX4_EKF] R:   0.0° P:   0.0° Y:   0.0° | Acc:[  0.00,  0.00,  9.81] | Gyr:[   0.0,   0.0,   0.0] (OPTIMAL)");
+            Serial.printf("[ESC_QUAD] State:%-8s | M1(P7-CCW):%4uus(%4.1f%%) | M2(P6-CCW):%4uus(%4.1f%%) | M3(P5-CW):%4uus(%4.1f%%) | M4(P4-CW):%4uus(%4.1f%%) @ %dHz\n",
+                          isArmed ? "ARMED" : "DISARMED",
+                          currentPulseUs[0], getMotorThrottlePct(0),
+                          currentPulseUs[1], getMotorThrottlePct(1),
+                          currentPulseUs[2], getMotorThrottlePct(2),
+                          currentPulseUs[3], getMotorThrottlePct(3),
+                          ESC_FREQ_HZ);
+        }
     }
 }

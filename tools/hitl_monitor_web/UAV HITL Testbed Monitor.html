@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="vi" data-theme="titanium">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>UAV HITL Testbed Monitor</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+  <title>UAV HITL Testbed Monitor — Apple visionOS Titanium Edition</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
   <link rel="stylesheet" href="monitor_Web_resource/css/monitor_styles.css">
   <link rel="stylesheet" href="monitor_Web_resource/css/monitor_controls.css">
   <link rel="stylesheet" href="monitor_Web_resource/css/monitor_workspace.css">
@@ -12,233 +12,277 @@
   <link rel="stylesheet" href="monitor_Web_resource/css/monitor_widgets.css">
 </head>
 <body>
-  <div class="ui">
-    <div class="gl hdr">
-      <div class="logo">U</div>
-      <div><h1>UAV HITL Testbed Monitor</h1></div>
-      <div class="nav-toggles" title="Tùy chọn hiển thị không gian 3D">
+  <div class="ui" id="appShell" data-mobile-tab="all">
+    <!-- LỚP 2 HUD: THANH ĐIỀU HƯỚNG & TRẠNG THÁI BUỒNG LÁI (TOP COCKPIT BAR) -->
+    <header class="gl hdr" role="banner">
+      <div class="brand-wrap">
+        <div class="logo" aria-hidden="true">U</div>
+        <div>
+          <h1>UAV HITL Testbed Monitor</h1>
+          <small class="hdr-sub">visionOS Titanium Flight Deck</small>
+        </div>
+      </div>
+
+      <div class="nav-toggles" role="group" aria-label="Tùy chọn hiển thị không gian 3D">
         <label><input type="checkbox" id="kAx" checked> Trục X, Y, Z</label>
         <label><input type="checkbox" id="kBox" checked> Khung lập phương</label>
         <label><input type="checkbox" id="kGrid" checked> Bề mặt lưới</label>
       </div>
+
       <div class="chips">
-        <div class="chip">FREQ <b class="mono" id="sFreq">0 Hz</b></div>
-        <div class="chip">PKT <b class="mono" id="sPk">0</b></div>
-        <div class="chip" style="display:flex;align-items:center;gap:4px">
-          <span>ESP IP:</span>
-          <input type="text" id="inpWsIp" value="10.11.162.210" style="width:110px;background:#0f172a;color:#38bdf8;border:1px solid #38bdf8;border-radius:3px;padding:2px 4px;font-family:monospace;font-size:11px;font-weight:bold" placeholder="10.11.162.xxx">
+        <div class="chip" title="Tần số cập nhật dữ liệu">FREQ <b class="mono" id="sFreq">0 Hz</b></div>
+        <div class="chip" title="Tổng số gói tin Telemetry">PKT <b class="mono" id="sPk">0</b></div>
+        <div class="chip chip-ip">
+          <label for="inpWsIp">ESP IP:</label>
+          <input type="text" id="inpWsIp" value="10.11.162.210" placeholder="10.11.162.xxx" aria-label="Địa chỉ IP của ESP32-C6">
         </div>
-        <button id="bLiveWs" title="Kết nối trực tiếp ESP32-C6 qua mạng WiFi TTDB hoặc SoftAP" style="background:#0284c7;color:#fff;border:1px solid #38bdf8;font-weight:700">📡 Kết Nối WiFi</button>
-        <div class="chip" id="chipGamepad" style="color:#94a3b8">🎮 Tay Cầm: <b id="lblGamepadStatus" style="color:#f59e0b">Chưa cắm</b></div>
-        <button id="bSerial" title="Kết nối trực tiếp qua cáp USB Serial (Nếu cắm dây USB)" style="background:#334155;color:#fff;font-weight:600">⚡ Cáp USB (COM)</button>
+        <button id="bLiveWs" class="btn-wifi" title="Kết nối trực tiếp ESP32-C6 qua mạng WiFi TTDB hoặc SoftAP">📡 Kết Nối WiFi</button>
+        <div class="chip chip-gamepad" id="chipGamepad">🎮 Tay Cầm: <b id="lblGamepadStatus">Chưa cắm</b></div>
+        <button id="bSerial" class="btn-usb" title="Kết nối trực tiếp qua cáp USB Serial (COM32)">⚡ Cáp USB (COM)</button>
         <button id="bDemo" class="act">Tự động (Demo)</button>
         <button id="bCsv" title="Phát lại file IMU_Telemetry_Log">Phát Log CSV</button>
-        <button id="bPickCsv" title="Chọn file .csv">Chọn CSV...</button>
-        <input type="file" id="fCsv" accept=".csv" hidden>
-        <button id="bCam">Đặt lại camera</button>
+        <button id="bPickCsv" title="Chọn file .csv từ máy tính">Chọn CSV...</button>
+        <input type="file" id="fCsv" accept=".csv" hidden aria-label="Chọn tệp nhật ký CSV">
+        <button id="bCam" title="Đặt lại góc nhìn Camera 3D">Đặt lại camera</button>
+        <button id="btnThemeToggle" class="btn-theme" title="Chuyển đổi giao diện: Titanium Dark / Light Ngoài Trời / Tactical Cyan" aria-label="Đổi giao diện màu sắc">🌗 Giao diện</button>
       </div>
-    </div>
+    </header>
 
-    <div class="flex-workspace">
-      <div class="dock-col" id="colLeft">
+    <!-- THANH CHUYỂN CHẾ ĐỘ XEM NHANH TRÊN IPHONE / MOBILE (CHUẨN APPLE HIG SEGMENTED CONTROL) -->
+    <nav class="mobile-view-tabs" aria-label="Chuyển đổi khu vực hiển thị trên di động">
+      <button type="button" data-view="all" class="act">Tất Cả</button>
+      <button type="button" data-view="3d">🚁 3D</button>
+      <button type="button" data-view="controls">🎮 Điều Khiển</button>
+      <button type="button" data-view="telemetry">📈 Đồ Thị</button>
+    </nav>
+
+    <!-- KHÔNG GIAN LÀM VIỆC 3 CỘT (COCKPIT WORKSPACE) -->
+    <main class="flex-workspace">
+      <!-- CỘT TRÁI: ĐIỀU KHIỂN BAY, TEST 4 ĐỘNG CƠ & CẢM BIẾN -->
+      <section class="dock-col" id="colLeft" aria-label="Bảng điều khiển bay và động cơ">
         <div class="gl pn">
           <h2>ĐIỀU KHIỂN BAY (FLIGHT CONTROLS)<em>ESP32-C6</em></h2>
-          <div style="display:flex;gap:6px;margin-bottom:8px">
-            <button id="btnArm" style="flex:1;background:linear-gradient(135deg, #15803d 0%, #16a34a 100%);color:#fff;border:1px solid #4ade80;border-radius:4px;padding:7px;font-weight:bold;cursor:pointer">ARM</button>
-            <button id="btnDisarm" style="flex:1;background:linear-gradient(135deg, #b91c1c 0%, #dc2626 100%);color:#fff;border:1px solid #f87171;border-radius:4px;padding:7px;font-weight:bold;cursor:pointer">DISARM</button>
+          <div class="arm-grid">
+            <button id="btnArm" class="btn-arm" aria-label="Mở khóa an toàn ARM 4 động cơ">ARM</button>
+            <button id="btnDisarm" class="btn-disarm" aria-label="Khóa khẩn cấp DISARM 4 động cơ">DISARM</button>
           </div>
+
           <!-- Điều khiển mức ga Throttle -->
-          <div style="margin-bottom:8px;background:rgba(15,23,42,0.6);padding:6px;border-radius:4px;border:1px solid rgba(255,255,255,0.06)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-              <span style="font-size:11px;color:var(--mu);font-weight:600">MỨC GA (THROTTLE)</span>
-              <b id="lblThrottle" style="color:#38bdf8;font-family:monospace;font-size:13px">0.0%</b>
+          <div class="sub-card">
+            <div class="sub-card-header">
+              <label for="rngThrottle" class="sub-card-title">MỨC GA (THROTTLE)</label>
+              <b id="lblThrottle" class="mono sub-card-value">0.0%</b>
             </div>
-            <input type="range" id="rngThrottle" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#38bdf8;cursor:pointer">
-            <div style="display:flex;gap:4px;margin-top:4px">
-              <button class="btn-thr" data-thr="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">0%</button>
-              <button class="btn-thr" data-thr="15" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">15%</button>
-              <button class="btn-thr" data-thr="30" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">30%</button>
-              <button class="btn-thr" data-thr="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">50%</button>
-              <button class="btn-thr" data-thr="75" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;cursor:pointer">75%</button>
-              <button class="btn-thr" data-thr="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:3px 0;font-size:11px;font-weight:bold;cursor:pointer">100%</button>
+            <input type="range" id="rngThrottle" min="0" max="100" value="0" step="1" aria-label="Thanh trượt mức ga tổng thể">
+            <div class="preset-grid-6">
+              <button type="button" class="btn-thr" data-thr="0">0%</button>
+              <button type="button" class="btn-thr" data-thr="15">15%</button>
+              <button type="button" class="btn-thr" data-thr="30">30%</button>
+              <button type="button" class="btn-thr" data-thr="50">50%</button>
+              <button type="button" class="btn-thr" data-thr="75">75%</button>
+              <button type="button" class="btn-thr" data-thr="100">100%</button>
             </div>
           </div>
+
           <!-- Góc nghiêng mục tiêu (Setpoint) -->
-          <div style="margin-bottom:8px;background:rgba(15,23,42,0.6);padding:6px;border-radius:4px;border:1px solid rgba(255,255,255,0.06)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-              <span style="font-size:11px;color:var(--mu);font-weight:600">PX4 SETPOINT (GÓC ĐẶT)</span>
+          <div class="sub-card">
+            <div class="sub-card-header">
+              <span class="sub-card-title">PX4 SETPOINT (GÓC ĐẶT)</span>
             </div>
-            <div style="display:flex;gap:4px;margin-bottom:4px">
-              <button id="btnLevel" style="flex:1;background:#0284c7;color:#fff;border:none;border-radius:3px;padding:4px 0;font-size:11px;font-weight:bold;cursor:pointer">⚖️ Cân Bằng (0°)</button>
-              <button id="btnInvPitch" style="background:#d97706;color:#fff;border:none;border-radius:3px;padding:4px 6px;font-size:11px;font-weight:600;cursor:pointer" title="Đảo chiều trục Pitch">Đảo Pitch</button>
-              <button id="btnPidView" style="background:#475569;color:#fff;border:none;border-radius:3px;padding:4px 8px;font-size:11px;cursor:pointer">PID</button>
+            <div class="setpoint-actions">
+              <button type="button" id="btnLevel" class="btn-level">⚖️ Cân Bằng (0°)</button>
+              <button type="button" id="btnInvPitch" class="btn-inv-pitch" title="Đảo chiều trục Pitch">Đảo Pitch</button>
+              <button type="button" id="btnPidView" class="btn-pid-view" title="In thông số PID ra Serial">PID</button>
             </div>
-            <div style="display:flex;gap:4px">
-              <button class="btn-sp" data-sp="-5 0 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">R -5°</button>
-              <button class="btn-sp" data-sp="5 0 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">R +5°</button>
-              <button class="btn-sp" data-sp="0 -5 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">P -5°</button>
-              <button class="btn-sp" data-sp="0 5 0" style="flex:1;background:#1e293b;color:#94a3b8;border:1px solid rgba(255,255,255,0.1);border-radius:3px;font-size:10px;padding:2px 0;cursor:pointer">P +5°</button>
+            <div class="preset-grid-4">
+              <button type="button" class="btn-sp" data-sp="-5 0 0">R -5°</button>
+              <button type="button" class="btn-sp" data-sp="5 0 0">R +5°</button>
+              <button type="button" class="btn-sp" data-sp="0 -5 0">P -5°</button>
+              <button type="button" class="btn-sp" data-sp="0 5 0">P +5°</button>
             </div>
           </div>
 
           <!-- Giám sát cần Analog Tay cầm A124 / Xbox -->
-          <div style="margin-bottom:8px;background:rgba(15,23,42,0.8);padding:6px;border-radius:4px;border:1px solid rgba(245,158,11,0.3)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-              <span style="font-size:11px;color:#f59e0b;font-weight:700">🎮 TAY CẦM A124 / XBOX</span>
-              <b id="lblGamepadArm" style="color:#ef4444;font-size:11px;font-family:monospace">DISARM</b>
+          <div class="gamepad-card">
+            <div class="sub-card-header">
+              <span class="gamepad-title">🎮 TAY CẦM A124 / XBOX</span>
+              <b id="lblGamepadArm" class="mono gamepad-arm-badge">DISARM</b>
             </div>
-            <div style="display:flex;gap:4px;font-family:monospace;font-size:11px">
-              <div style="flex:1;background:#1e293b;padding:3px;border-radius:3px">
-                <span style="color:#94a3b8">Cần Trái:</span> <b id="lblStickL" style="color:#38bdf8">T:0% | Y:0°</b>
+            <div class="stick-grid mono">
+              <div class="stick-box">
+                <span>Cần Trái:</span> <b id="lblStickL" style="color:var(--c1)">T:0% | Y:0°</b>
               </div>
-              <div style="flex:1;background:#1e293b;padding:3px;border-radius:3px">
-                <span style="color:#94a3b8">Cần Phải:</span> <b id="lblStickR" style="color:#34d399">P:0° | R:0°</b>
+              <div class="stick-box">
+                <span>Cần Phải:</span> <b id="lblStickR" style="color:var(--c2)">P:0° | R:0°</b>
               </div>
             </div>
           </div>
+
           <!-- Dòng nhập lệnh CLI -->
-          <div style="display:flex;gap:4px">
-            <input type="text" id="cmdInput" placeholder="m1 15 / throttle 20 / sp 0 0 0" style="flex:1;background:rgba(0,0,0,0.5);border:1px solid rgba(56,189,248,0.5);border-radius:4px;color:#fff;padding:4px 8px;font-family:monospace;font-size:12px;outline:none">
-            <button id="btnSendCmd" style="background:#0284c7;color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-weight:600">Gửi</button>
+          <div class="cli-bar">
+            <input type="text" id="cmdInput" placeholder="m1 15 / throttle 20 / spin3 892" aria-label="Nhập lệnh điều khiển CLI">
+            <button type="button" id="btnSendCmd">Gửi</button>
           </div>
         </div>
 
         <!-- BẢNG TÙY BIẾN TEST TỪNG ĐỘNG CƠ RIÊNG LẺ (INDIVIDUAL MOTOR TEST) -->
         <div class="gl pn">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <h2 style="margin:0">TEST ĐỘNG CƠ (MOTOR TEST)<em>MANUAL</em></h2>
-            <button id="btnStopMotors" style="background:#dc2626;color:#fff;border:none;border-radius:3px;padding:2px 8px;font-size:10px;font-weight:bold;cursor:pointer" title="Dừng tất cả động cơ về Idle">🛑 Dừng Hết</button>
+          <div class="pn-head-actions">
+            <h2>TEST ĐỘNG CƠ (MOTOR TEST)<em>MANUAL</em></h2>
+            <button type="button" id="btnStopMotors" class="btn-stop-motors" title="Dừng tất cả động cơ về 0%">🛑 Dừng Hết</button>
           </div>
 
           <!-- M1: GPIO 7 (Trước Phải - CCW) -->
-          <div style="margin-bottom:6px;background:rgba(15,23,42,0.6);padding:6px;border-radius:4px;border:1px solid rgba(56,189,248,0.25)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-              <span style="font-size:11px;font-weight:700;color:#38bdf8">M1 FR (P7 - CCW)</span>
-              <b id="lblM1" style="font-family:monospace;font-size:12px;color:#38bdf8">0%</b>
+          <div class="motor-card m1">
+            <div class="sub-card-header">
+              <label for="rngM1" class="motor-name">M1 FR (P7 - CCW)</label>
+              <b id="lblM1" class="mono motor-pct">0%</b>
             </div>
-            <input type="range" id="rngM1" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#38bdf8;cursor:pointer">
-            <div style="display:flex;gap:3px;margin-top:2px">
-              <button class="btn-mtest" data-motor="1" data-val="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">0%</button>
-              <button class="btn-mtest" data-motor="1" data-val="15" style="flex:1;background:#0284c7;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">Spin 15%</button>
-              <button class="btn-mtest" data-motor="1" data-val="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">50%</button>
-              <button class="btn-mtest" data-motor="1" data-val="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">100%</button>
+            <input type="range" id="rngM1" min="0" max="100" value="0" step="1" aria-label="Thanh trượt công suất Motor 1">
+            <div class="preset-grid-4">
+              <button type="button" class="btn-mtest" data-motor="1" data-val="0">0%</button>
+              <button type="button" class="btn-mtest" data-motor="1" data-val="15">Spin 15%</button>
+              <button type="button" class="btn-mtest" data-motor="1" data-val="50">50%</button>
+              <button type="button" class="btn-mtest" data-motor="1" data-val="100">100%</button>
             </div>
           </div>
 
           <!-- M2: GPIO 6 (Sau Trái - CCW) -->
-          <div style="margin-bottom:6px;background:rgba(15,23,42,0.6);padding:6px;border-radius:4px;border:1px solid rgba(52,211,153,0.3)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-              <span style="font-size:11px;font-weight:700;color:#34d399">M2 RL (P6 - CCW)</span>
-              <b id="lblM2" style="font-family:monospace;font-size:12px;color:#34d399">0%</b>
+          <div class="motor-card m2">
+            <div class="sub-card-header">
+              <label for="rngM2" class="motor-name">M2 RL (P6 - CCW)</label>
+              <b id="lblM2" class="mono motor-pct">0%</b>
             </div>
-            <input type="range" id="rngM2" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#34d399;cursor:pointer">
-            <div style="display:flex;gap:3px;margin-top:2px">
-              <button class="btn-mtest" data-motor="2" data-val="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">0%</button>
-              <button class="btn-mtest" data-motor="2" data-val="15" style="flex:1;background:#059669;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">Spin 15%</button>
-              <button class="btn-mtest" data-motor="2" data-val="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">50%</button>
-              <button class="btn-mtest" data-motor="2" data-val="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">100%</button>
+            <input type="range" id="rngM2" min="0" max="100" value="0" step="1" aria-label="Thanh trượt công suất Motor 2">
+            <div class="preset-grid-4">
+              <button type="button" class="btn-mtest" data-motor="2" data-val="0">0%</button>
+              <button type="button" class="btn-mtest" data-motor="2" data-val="15">Spin 15%</button>
+              <button type="button" class="btn-mtest" data-motor="2" data-val="50">50%</button>
+              <button type="button" class="btn-mtest" data-motor="2" data-val="100">100%</button>
             </div>
           </div>
 
           <!-- M3: GPIO 5 (Trước Trái - CW) -->
-          <div style="margin-bottom:6px;background:rgba(15,23,42,0.6);padding:6px;border-radius:4px;border:1px solid rgba(234,179,8,0.25)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-              <span style="font-size:11px;font-weight:700;color:#eab308">M3 FL (P5 - CW)</span>
-              <b id="lblM3" style="font-family:monospace;font-size:12px;color:#eab308">0%</b>
+          <div class="motor-card m3">
+            <div class="sub-card-header">
+              <label for="rngM3" class="motor-name">M3 FL (P5 - CW)</label>
+              <b id="lblM3" class="mono motor-pct">0%</b>
             </div>
-            <input type="range" id="rngM3" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#eab308;cursor:pointer">
-            <div style="display:flex;gap:3px;margin-top:2px">
-              <button class="btn-mtest" data-motor="3" data-val="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">0%</button>
-              <button class="btn-mtest" data-motor="3" data-val="15" style="flex:1;background:#d97706;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">Spin 15%</button>
-              <button class="btn-mtest" data-motor="3" data-val="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">50%</button>
-              <button class="btn-mtest" data-motor="3" data-val="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">100%</button>
+            <input type="range" id="rngM3" min="0" max="100" value="0" step="1" aria-label="Thanh trượt công suất Motor 3">
+            <div class="preset-grid-4">
+              <button type="button" class="btn-mtest" data-motor="3" data-val="0">0%</button>
+              <button type="button" class="btn-mtest" data-motor="3" data-val="15">Spin 15%</button>
+              <button type="button" class="btn-mtest" data-motor="3" data-val="50">50%</button>
+              <button type="button" class="btn-mtest" data-motor="3" data-val="100">100%</button>
             </div>
           </div>
 
           <!-- M4: GPIO 4 (Sau Phải - CW) -->
-          <div style="margin-bottom:6px;background:rgba(15,23,42,0.6);padding:6px;border-radius:4px;border:1px solid rgba(168,85,247,0.25)">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-              <span style="font-size:11px;font-weight:700;color:#a855f7">M4 RR (P4 - CW)</span>
-              <b id="lblM4" style="font-family:monospace;font-size:12px;color:#a855f7">0%</b>
+          <div class="motor-card m4">
+            <div class="sub-card-header">
+              <label for="rngM4" class="motor-name">M4 RR (P4 - CW)</label>
+              <b id="lblM4" class="mono motor-pct">0%</b>
             </div>
-            <input type="range" id="rngM4" min="0" max="100" value="0" step="1" style="width:100%;accent-color:#a855f7;cursor:pointer">
-            <div style="display:flex;gap:3px;margin-top:2px">
-              <button class="btn-mtest" data-motor="4" data-val="0" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">0%</button>
-              <button class="btn-mtest" data-motor="4" data-val="15" style="flex:1;background:#9333ea;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">Spin 15%</button>
-              <button class="btn-mtest" data-motor="4" data-val="50" style="flex:1;background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;cursor:pointer">50%</button>
-              <button class="btn-mtest" data-motor="4" data-val="100" style="flex:1;background:#e11d48;color:#fff;border:none;border-radius:3px;padding:2px 0;font-size:10px;font-weight:bold;cursor:pointer">100%</button>
+            <input type="range" id="rngM4" min="0" max="100" value="0" step="1" aria-label="Thanh trượt công suất Motor 4">
+            <div class="preset-grid-4">
+              <button type="button" class="btn-mtest" data-motor="4" data-val="0">0%</button>
+              <button type="button" class="btn-mtest" data-motor="4" data-val="15">Spin 15%</button>
+              <button type="button" class="btn-mtest" data-motor="4" data-val="50">50%</button>
+              <button type="button" class="btn-mtest" data-motor="4" data-val="100">100%</button>
             </div>
           </div>
 
-          <button id="btnReturnPid" style="width:100%;background:linear-gradient(135deg, #0284c7 0%, #2563eb 100%);color:#fff;border:none;border-radius:4px;padding:6px;font-size:11px;font-weight:bold;cursor:pointer">🔄 Trở Lại Chế Độ PID Tự Cân Bằng</button>
+          <button type="button" id="btnReturnPid" class="btn-return-pid">🔄 Trở Lại Chế Độ PID Tự Cân Bằng</button>
         </div>
+
         <!-- BẢNG SO SÁNH DỮ LIỆU CẢM BIẾN DUAL-IMU & PX4 EKF -->
         <div class="gl pn">
           <h2>SO SÁNH CẢM BIẾN DUAL-IMU &amp; PX4 EKF<em>MULTI-SENSOR</em></h2>
-          <div style="background:rgba(15,23,42,0.7);border-radius:6px;padding:8px;border:1px solid rgba(255,255,255,0.08);margin-bottom:8px">
-            <!-- 1. MPU-6050 -->
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
-              <span style="font-size:11px;font-weight:700;color:#38bdf8">🔵 MPU-6050 (I2C)</span>
-              <span class="mono" style="font-size:11px;color:#cbd5e1">
-                R:<b id="mpuR" style="color:#38bdf8">0.0°</b> P:<b id="mpuP" style="color:#38bdf8">0.0°</b> Y:<b id="mpuY" style="color:#38bdf8">0.0°</b>
+          <div class="sensor-list">
+            <div class="sensor-row">
+              <span class="sensor-label" style="color:var(--c1)">🔵 MPU-6050 (I2C)</span>
+              <span class="mono sensor-vals">
+                R:<b id="mpuR" style="color:var(--c1)">0.0°</b> P:<b id="mpuP" style="color:var(--c1)">0.0°</b> Y:<b id="mpuY" style="color:var(--c1)">0.0°</b>
               </span>
             </div>
-            <!-- 2. Xsens MTi-3 -->
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.06)">
-              <span style="font-size:11px;font-weight:700;color:#f59e0b">🟠 Xsens MTi-3 (AHRS)</span>
-              <span class="mono" style="font-size:11px;color:#cbd5e1">
-                R:<b id="xsR" style="color:#f59e0b">0.0°</b> P:<b id="xsP" style="color:#f59e0b">0.0°</b> Y:<b id="xsY" style="color:#f59e0b">0.0°</b>
+            <div class="sensor-row">
+              <span class="sensor-label" style="color:var(--warn)">🟠 Xsens MTi-3 (AHRS)</span>
+              <span class="mono sensor-vals">
+                R:<b id="xsR" style="color:var(--warn)">0.0°</b> P:<b id="xsP" style="color:var(--warn)">0.0°</b> Y:<b id="xsY" style="color:var(--warn)">0.0°</b>
               </span>
             </div>
-            <!-- 3. PX4 EKF Dung Hợp -->
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0">
-              <span style="font-size:11px;font-weight:700;color:#22c55e">🟢 PX4 EKF (Dung Hợp)</span>
-              <span class="mono" style="font-size:11px;color:#fff">
-                R:<b id="eR" style="color:#22c55e">0.0°</b> P:<b id="eP" style="color:#22c55e">0.0°</b> Y:<b id="eY" style="color:#22c55e">0.0°</b>
+            <div class="sensor-row">
+              <span class="sensor-label" style="color:var(--c2)">🟢 PX4 EKF (Dung Hợp)</span>
+              <span class="mono sensor-vals">
+                R:<b id="eR" style="color:var(--c2)">0.0°</b> P:<b id="eP" style="color:var(--c2)">0.0°</b> Y:<b id="eY" style="color:var(--c2)">0.0°</b>
               </span>
             </div>
           </div>
         </div>
+
         <div class="gl pn">
           <h2>ĐỊA BÀN ẢO &amp; ĐỘ CAO<em>PFD</em></h2>
           <div class="hz">
-            <canvas id="hz" width="124" height="124" style="width:124px;height:124px"></canvas>
-            <div class="zv mono"><div><span>ĐỘ CAO Z (m)</span><b id="vz">0.00</b></div><div><span>VẬN TỐC Vz (m/s)</span><b id="vvz">0.00</b></div></div>
+            <canvas id="hz" width="124" height="124" style="width:124px;height:124px" aria-label="Địa bàn chân trời ảo PFD"></canvas>
+            <div class="zv mono">
+              <div><span>ĐỘ CAO Z (m)</span><b id="vz">0.00</b></div>
+              <div><span>VẬN TỐC Vz (m/s)</span><b id="vvz">0.00</b></div>
+            </div>
           </div>
         </div>
-        <div class="gl pn"><h2>ĐỘNG CƠ (MOTOR ACTUATORS)<em>MAX 1000 rad/s</em></h2><div id="mot" class="mono"></div></div>
-      </div>
 
-      <div class="flex-splitter" id="splitLeft" title="Kéo để thay đổi kích thước cột trái"></div>
-
-      <div class="gl viewport-pane" id="colCenter">
-        <div class="vp-hdr">KHÔNG GIAN 3D QUADCOPTER · KÉO CHUỘT ĐỂ XOAY / LĂN CHUỘT ĐỂ ZOOM</div>
-        <div id="gl"></div>
-        <div class="gl bot">
-          <span style="color:var(--mu)">Timebase:</span>
-          <button data-s="2">2s</button><button data-s="5" class="act">5s</button><button data-s="10">10s</button>
-          <span class="sep"></span>
-          <button id="bPause">Tạm dừng</button><button id="bClear">Xóa</button>
+        <div class="gl pn">
+          <h2>ĐỘNG CƠ (MOTOR ACTUATORS)<em>MAX 1000 rad/s</em></h2>
+          <div id="mot" class="mono"></div>
         </div>
-      </div>
+      </section>
 
-      <div class="flex-splitter" id="splitRight" title="Kéo để thay đổi kích thước cột phải"></div>
+      <div class="flex-splitter" id="splitLeft" title="Kéo để thay đổi kích thước cột trái" role="separator" aria-orientation="vertical"></div>
 
-      <div class="dock-col" id="colRight">
+      <!-- LỚP 1 HUD: KHÔNG GIAN 3D TRUNG TÂM -->
+      <section class="gl viewport-pane" id="colCenter" aria-label="Không gian mô phỏng 3D Quadcopter">
+        <div class="vp-hdr">
+          <span class="vp-badge">KHÔNG GIAN 3D QUADCOPTER · KÉO ĐỂ XOAY / LĂN ĐỂ ZOOM</span>
+        </div>
+        <div id="gl"></div>
+        <div class="gl bot" role="toolbar" aria-label="Điều khiển thời gian đồ thị">
+          <span style="color:var(--mu);font-weight:600;font-size:11.5px">Timebase:</span>
+          <button type="button" data-s="2">2s</button>
+          <button type="button" data-s="5" class="act">5s</button>
+          <button type="button" data-s="10">10s</button>
+          <span class="sep" aria-hidden="true"></span>
+          <button type="button" id="bPause">Tạm dừng</button>
+          <button type="button" id="bClear">Xóa</button>
+        </div>
+      </section>
+
+      <div class="flex-splitter" id="splitRight" title="Kéo để thay đổi kích thước cột phải" role="separator" aria-orientation="vertical"></div>
+
+      <!-- CỘT PHẢI: ĐỒ THỊ DAO ĐỘNG THỜI GIAN THỰC -->
+      <section class="dock-col" id="colRight" aria-label="Đồ thị Telemetry thời gian thực">
         <div class="gl pn"><h2>GÓC ROLL (NGHIÊNG)<em>°</em></h2><div class="chw"><canvas id="c1"></canvas></div></div>
         <div class="gl pn"><h2>GÓC PITCH (CHÚC)<em>°</em></h2><div class="chw"><canvas id="c2"></canvas></div></div>
         <div class="gl pn"><h2>GÓC YAW (XOAY)<em>°</em></h2><div class="chw"><canvas id="c3"></canvas></div></div>
         <div class="gl pn">
           <h2>TỐC ĐỘ 4 MOTOR<em>rad/s</em></h2>
           <div class="chw"><canvas id="c4"></canvas></div>
-          <div class="lg"><span><i style="--k:var(--c1)"></i>M1</span><span><i style="--k:var(--c2)"></i>M2</span><span><i style="--k:var(--c3)"></i>M3</span><span><i style="--k:var(--c4)"></i>M4</span></div>
+          <div class="lg">
+            <span><i style="--k:var(--c1)"></i>M1</span>
+            <span><i style="--k:var(--c2)"></i>M2</span>
+            <span><i style="--k:var(--c3)"></i>M3</span>
+            <span><i style="--k:var(--c4)"></i>M4</span>
+          </div>
         </div>
         <div class="gl pn">
           <h2>CHỈ SỐ TÍN HIỆU (PEAK-TO-PEAK)<em>Vpp</em></h2>
-          <div class="mono" style="display:flex;justify-content:space-between"><span>Roll <b id="vr" style="color:var(--c1)">0</b>°</span><span>Pitch <b id="vp" style="color:var(--c2)">0</b>°</span><span>Yaw <b id="vy" style="color:var(--c3)">0</b>°</span></div>
+          <div class="vpp-grid mono">
+            <div class="vpp-item">Roll <b id="vr" style="color:var(--c1)">0°</b></div>
+            <div class="vpp-item">Pitch <b id="vp" style="color:var(--c2)">0°</b></div>
+            <div class="vpp-item">Yaw <b id="vy" style="color:var(--c3)">0°</b></div>
+          </div>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>

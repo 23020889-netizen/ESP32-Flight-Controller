@@ -1,21 +1,34 @@
+/* ============================================================================
+ * 1. HEADER TOGGLES, TELEMETRY CHIPS & THEME SWITCHER
+ * ============================================================================ */
 .nav-toggles label {
-  display: flex;
-  gap: 5px;
+  display: inline-flex;
+  gap: 6px;
   align-items: center;
   font-size: 12px;
-  color: var(--tx);
+  font-weight: 500;
+  color: var(--tx-sec);
   cursor: pointer;
   user-select: none;
+  min-height: 26px;
+  transition: color 0.15s ease;
+}
+
+.nav-toggles label:hover {
+  color: var(--tx);
 }
 
 .nav-toggles input[type="checkbox"] {
-  accent-color: var(--c1);
+  accent-color: var(--primary);
+  width: 15px;
+  height: 15px;
   cursor: pointer;
+  margin: 0;
 }
 
 .chips {
   display: flex;
-  gap: 7px;
+  gap: 6px;
   margin-left: auto;
   flex-wrap: wrap;
   align-items: center;
@@ -23,74 +36,322 @@
 
 .chip {
   border: 1px solid var(--bd);
-  border-radius: 999px;
-  padding: 4px 11px;
+  border-radius: var(--r-pill);
+  padding: 5px 11px;
+  min-height: 32px;
   font-size: 12px;
-  display: flex;
+  font-weight: 500;
+  display: inline-flex;
   gap: 6px;
   align-items: center;
   color: var(--mu);
+  background: var(--gl-inset);
+  white-space: nowrap;
 }
 
 .chip b {
   color: var(--tx);
+  font-weight: 700;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--mu);
-  box-shadow: 0 0 8px currentColor;
+.chip-ip {
+  padding: 3px 6px 3px 11px;
 }
 
-.on .dot,
-.dot.live {
-  background: var(--c2);
-  color: var(--c2);
+.chip-ip input[type="text"] {
+  width: 118px;
+  background: var(--gl-elevated);
+  color: var(--c1);
+  border: 1px solid var(--bd-strong);
+  border-radius: var(--r-pill);
+  padding: 3px 9px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  min-height: 24px;
 }
 
-.dot.lost {
-  background: var(--c5);
-  color: var(--c5);
+.chip-gamepad {
+  color: var(--tx-sec);
 }
 
-.dot.demo {
-  background: var(--c3);
-  color: var(--c3);
+.chip-gamepad b {
+  color: var(--warn);
 }
 
+/* ============================================================================
+ * 2. BUTTONS, INPUTS & TACTICAL COCKPIT SWITCHES (APPLE HIG + A11Y)
+ * ============================================================================ */
 button,
-input {
+input,
+select {
   font: inherit;
   color: var(--tx);
 }
 
 button {
-  background: transparent;
+  background: var(--gl-elevated);
   border: 1px solid var(--bd);
-  border-radius: 8px;
-  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  padding: 6px 11px;
+  min-height: 32px;
+  font-size: 12px;
+  font-weight: 600;
   cursor: pointer;
-  transition: 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
 }
 
 button:hover {
-  border-color: var(--c1);
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+button:active {
+  transform: scale(0.97);
 }
 
 button.act {
-  background: rgba(34, 211, 238, 0.16);
-  border-color: var(--c1);
-  color: var(--c1);
-  box-shadow: 0 0 12px rgba(34, 211, 238, 0.25);
+  background: var(--primary);
+  border-color: var(--primary-hover);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(10, 132, 255, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-input[type="text"] {
-  background: rgba(0, 0, 0, 0.2);
+.btn-wifi {
+  background: linear-gradient(135deg, var(--primary) 0%, #0284c7 100%);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.22);
+  font-weight: 700;
+  box-shadow: 0 3px 10px rgba(10, 132, 255, 0.28);
+}
+
+.btn-wifi:hover {
+  background: linear-gradient(135deg, var(--primary-hover) 0%, #0ea5e9 100%);
+  color: #ffffff;
+}
+
+.btn-usb {
+  background: var(--gl-elevated);
+  color: var(--tx);
+  border-color: var(--bd);
+  font-weight: 600;
+}
+
+.btn-theme {
+  border-radius: var(--r-pill);
+  padding: 5px 11px;
+  background: var(--gl-elevated);
   border: 1px solid var(--bd);
-  border-radius: 8px;
-  padding: 4px 9px;
-  width: 175px;
+  font-weight: 600;
 }
 
+/* Công tắc khóa/mở khóa động cơ (ARM / DISARM — Quy tắc nhận diện 1 giây) */
+.arm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.btn-arm {
+  min-height: 40px;
+  background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+  color: #ffffff;
+  border: 1px solid #4ade80;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  box-shadow: 0 4px 14px rgba(22, 163, 74, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.btn-arm:hover {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+  border-color: #86efac;
+  color: #ffffff;
+}
+
+.btn-disarm {
+  min-height: 40px;
+  background: linear-gradient(135deg, #e11d48 0%, #b91c1c 100%);
+  color: #ffffff;
+  border: 1px solid #fda4af;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  box-shadow: 0 4px 14px rgba(225, 29, 72, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.btn-disarm:hover {
+  background: linear-gradient(135deg, #f43f5e 0%, #dc2626 100%);
+  border-color: #fecdd3;
+  color: #ffffff;
+}
+
+/* Lưới nút chọn nhanh % Ga & Góc Setpoint */
+.preset-grid-6 {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.preset-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.setpoint-actions {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.btn-level {
+  flex: 1;
+  background: var(--primary);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.2);
+  font-weight: 700;
+  font-size: 11.5px;
+}
+
+.btn-inv-pitch {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--warn);
+  border-color: rgba(245, 158, 11, 0.45);
+  font-weight: 700;
+  font-size: 11.5px;
+}
+
+.btn-pid-view {
+  background: var(--gl-elevated);
+  color: var(--tx-sec);
+  font-size: 11.5px;
+}
+
+.btn-thr,
+.btn-sp,
+.btn-mtest {
+  min-height: 28px;
+  padding: 3px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--r-xs);
+  background: var(--gl-elevated);
+  color: var(--tx-sec);
+  border: 1px solid var(--bd);
+}
+
+.btn-thr[data-thr="100"],
+.btn-mtest[data-val="100"] {
+  background: rgba(255, 69, 58, 0.18);
+  color: var(--c5);
+  border-color: rgba(255, 69, 58, 0.45);
+  font-weight: 700;
+}
+
+.btn-mtest[data-val="15"] {
+  background: var(--primary-soft);
+  color: var(--c1);
+  border-color: var(--bd-strong);
+  font-weight: 700;
+}
+
+.btn-stop-motors {
+  background: linear-gradient(135deg, #e11d48 0%, #be123c 100%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--r-xs);
+  padding: 4px 10px;
+  min-height: 28px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.btn-return-pid {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 2px;
+  background: linear-gradient(135deg, var(--primary) 0%, #2563eb 100%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(10, 132, 255, 0.25);
+}
+
+/* ============================================================================
+ * 3. RANGE SLIDERS & CLI INPUT BAR
+ * ============================================================================ */
+input[type="range"] {
+  width: 100%;
+  height: 6px;
+  margin: 6px 0 4px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  accent-color: var(--primary);
+}
+
+.cli-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.cli-bar input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  background: var(--gl-inset);
+  border: 1px solid var(--bd-strong);
+  border-radius: var(--r-sm);
+  color: var(--tx);
+  padding: 5px 10px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12.5px;
+}
+
+.cli-bar button {
+  min-height: 34px;
+  padding: 5px 14px;
+  background: var(--primary);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.2);
+  font-weight: 700;
+}
+
+/* Đảm bảo vùng chạm >= 44px và input >= 16px trên thiết bị cảm ứng (iPhone/iPad) */
+@media (pointer: coarse), (max-width: 900px) {
+  button,
+  .btn-thr,
+  .btn-sp,
+  .btn-mtest {
+    min-height: 40px;
+  }
+
+  .btn-arm,
+  .btn-disarm {
+    min-height: 44px;
+  }
+
+  input[type="text"] {
+    font-size: 16px !important;
+  }
+
+  input[type="range"] {
+    height: 10px;
+    margin: 10px 0 8px;
+  }
+}

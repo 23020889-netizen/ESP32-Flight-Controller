@@ -1,90 +1,239 @@
-:root {
+/* ============================================================================
+ * 1. CENTRALIZED DESIGN TOKENS — APPLE VISIONOS TITANIUM & MULTI-THEME HUD
+ * ============================================================================ */
+:root,
+[data-theme="titanium"] {
+  /* Apple visionOS Titanium Dark (Mặc định) */
+  --bg1: #1a1d26;
+  --bg2: #0a0b0f;
+  --bg-glow: rgba(10, 132, 255, 0.14);
+  --gl: rgba(24, 27, 36, 0.74);
+  --gl-elevated: rgba(34, 39, 52, 0.72);
+  --gl-inset: rgba(10, 12, 18, 0.62);
+  --bd: rgba(255, 255, 255, 0.13);
+  --bd-strong: rgba(10, 132, 255, 0.48);
+  --glass-highlight: rgba(255, 255, 255, 0.16);
+  --glass-shadow: 0 12px 32px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+
+  /* Text Hierarchy (WCAG AAA / Apple HIG Label Colors) */
+  --tx: #f5f7fa;
+  --tx-sec: #c7d0df;
+  --mu: #8e9bae;
+
+  /* Apple HIG System Accents & 4-Motor Channels */
+  --primary: #0a84ff;
+  --primary-hover: #409cff;
+  --primary-soft: rgba(10, 132, 255, 0.18);
+  --c1: #32ade6; /* M1 / Roll  — iOS Cyan Blue */
+  --c2: #30d158; /* M2 / Pitch — iOS Emerald Green */
+  --c3: #ffd60a; /* M3 / Yaw   — iOS Vivid Amber */
+  --c4: #bf5af2; /* M4         — iOS Purple */
+  --c5: #ff453a; /* Danger     — iOS Coral Red */
+  --warn: #ff9f0a;
+  --success: #30d158;
+  --grid: rgba(255, 255, 255, 0.08);
+  --focus-ring: 0 0 0 3px rgba(10, 132, 255, 0.55);
+
+  /* Spacing & Radius Tokens (Apple HIG Continuous Corner System) */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-pill: 999px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+
+  color-scheme: dark;
+}
+
+/* Chế độ Sáng Ngoài Trời (Apple visionOS Pearl Light — Outdoor Sunlight Readable) */
+[data-theme="light"] {
+  --bg1: #eef2f8;
+  --bg2: #d9e2ef;
+  --bg-glow: rgba(0, 122, 255, 0.1);
+  --gl: rgba(255, 255, 255, 0.84);
+  --gl-elevated: rgba(244, 247, 252, 0.92);
+  --gl-inset: rgba(226, 232, 240, 0.75);
+  --bd: rgba(15, 23, 42, 0.14);
+  --bd-strong: rgba(0, 122, 255, 0.45);
+  --glass-highlight: rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 8px 24px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+
+  --tx: #0f172a;
+  --tx-sec: #1e293b;
+  --mu: #475569;
+
+  --primary: #007aff;
+  --primary-hover: #0062cc;
+  --primary-soft: rgba(0, 122, 255, 0.14);
+  --c1: #0284c7;
+  --c2: #16a34a;
+  --c3: #d97706;
+  --c4: #9333ea;
+  --c5: #dc2626;
+  --warn: #d97706;
+  --success: #16a34a;
+  --grid: rgba(15, 23, 42, 0.09);
+  --focus-ring: 0 0 0 3px rgba(0, 122, 255, 0.45);
+
+  color-scheme: light;
+}
+
+/* Chế độ Tactical Avionics Cyan */
+[data-theme="tactical"] {
   --bg1: #0d2347;
   --bg2: #030812;
-  --gl: rgba(9, 20, 42, 0.72);
-  --bd: rgba(80, 170, 255, 0.24);
+  --bg-glow: rgba(34, 211, 238, 0.15);
+  --gl: rgba(9, 20, 42, 0.76);
+  --gl-elevated: rgba(14, 29, 58, 0.78);
+  --gl-inset: rgba(4, 11, 26, 0.72);
+  --bd: rgba(80, 170, 255, 0.25);
+  --bd-strong: rgba(34, 211, 238, 0.55);
+  --glass-highlight: rgba(125, 211, 252, 0.15);
   --tx: #e6f0ff;
+  --tx-sec: #bfd4f2;
   --mu: #8aa0c0;
+  --primary: #0284c7;
+  --primary-hover: #0ea5e9;
+  --primary-soft: rgba(34, 211, 238, 0.16);
   --c1: #22d3ee;
   --c2: #34d399;
   --c3: #fbbf24;
   --c4: #c084fc;
   --c5: #f87171;
   --grid: rgba(80, 170, 255, 0.12);
-  color-scheme: dark;
-  box-sizing: border-box;
 }
 
-* {
+/* ============================================================================
+ * 2. RESET, ACCESSIBILITY & DYNAMIC VIEWPORT FOUNDATION
+ * ============================================================================ */
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
 html,
 body {
   height: 100%;
+  width: 100%;
   margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 body {
-  background: radial-gradient(ellipse at 50% 35%, var(--bg1), var(--bg2) 75%);
+  background:
+    radial-gradient(circle at 50% 0%, var(--bg-glow), transparent 60%),
+    radial-gradient(ellipse at 50% 35%, var(--bg1), var(--bg2) 80%);
   color: var(--tx);
-  font: 13px/1.4 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: clamp(12.5px, 0.82vw, 13.5px) / 1.45 "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   overflow: hidden;
+  transition: background 0.25s ease, color 0.2s ease;
 }
 
 .mono {
-  font-family: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
 }
 
+/* Focus Ring rõ nét cho Bàn phím (Tab) & Tay cầm (Gamepad D-pad) theo chuẩn A11y */
+:focus-visible {
+  outline: 2px solid var(--primary) !important;
+  outline-offset: 2px;
+  box-shadow: var(--focus-ring) !important;
+}
+
+/* Tôn trọng tùy chọn Reduce Motion của hệ điều hành (Apple HIG) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ============================================================================
+ * 3. APPLICATION SHELL & TOP COCKPIT HEADER (LAYER 2 HUD)
+ * ============================================================================ */
 .ui {
   position: fixed;
   inset: 0;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
+  padding:
+    max(8px, env(safe-area-inset-top))
+    max(10px, env(safe-area-inset-right))
+    max(8px, env(safe-area-inset-bottom))
+    max(10px, env(safe-area-inset-left));
 }
 
 .gl {
   background: var(--gl);
   border: 1px solid var(--bd);
-  border-radius: 12px;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  box-shadow: 0 0 24px rgba(34, 211, 238, 0.08), inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  border-radius: var(--r-lg);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: var(--glass-shadow);
 }
 
 .hdr {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 8px 10px;
   padding: 8px 14px;
   flex-shrink: 0;
+  z-index: 20;
+}
+
+.brand-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: 4px;
 }
 
 .logo {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--c1), #3b82f6);
+  border-radius: 11px;
+  background: linear-gradient(135deg, var(--primary), var(--c1));
   display: grid;
   place-items: center;
-  box-shadow: 0 0 18px rgba(34, 211, 238, 0.5);
-  color: #031018;
-  font-weight: 700;
+  box-shadow: 0 4px 14px rgba(10, 132, 255, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 16px;
+  letter-spacing: -0.5px;
+  flex-shrink: 0;
 }
 
 .hdr h1 {
   margin: 0;
-  font-size: 16px;
-  letter-spacing: 0.2px;
+  font-size: clamp(14px, 1.05vw, 16px);
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--tx);
+  line-height: 1.2;
 }
 
-.hdr small {
+.hdr-sub {
   display: block;
   font-size: 10px;
-  letter-spacing: 1.3px;
+  font-weight: 600;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
   color: var(--c1);
   margin-top: 1px;
 }
@@ -93,8 +242,8 @@ body {
   display: flex;
   gap: 10px;
   align-items: center;
-  padding: 4px 12px;
+  padding: 5px 12px;
   border: 1px solid var(--bd);
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.22);
+  border-radius: var(--r-pill);
+  background: var(--gl-inset);
 }

@@ -302,6 +302,50 @@ class DashboardApplicationController {
       };
     }
 
+    // Chuyển đổi Giao diện Màu sắc (Apple visionOS Titanium Dark / Light Ngoài Trời / Tactical Cyan)
+    const btnThemeToggle = getElement("btnThemeToggle");
+    const themeOrder = [
+      { id: "titanium", label: "🍎 Titanium" },
+      { id: "light", label: "☀️ Sáng" },
+      { id: "tactical", label: "🌌 Tactical" }
+    ];
+    const applyTheme = (themeId) => {
+      const found = themeOrder.find((t) => t.id === themeId) || themeOrder[0];
+      document.documentElement.setAttribute("data-theme", found.id);
+      if (btnThemeToggle) btnThemeToggle.textContent = found.label;
+      try {
+        localStorage.setItem("uav_ui_theme", found.id);
+      } catch (_) {}
+    };
+    try {
+      const savedTheme = localStorage.getItem("uav_ui_theme");
+      if (savedTheme) applyTheme(savedTheme);
+      else applyTheme("titanium");
+    } catch (_) {
+      applyTheme("titanium");
+    }
+    if (btnThemeToggle) {
+      btnThemeToggle.onclick = () => {
+        const current = document.documentElement.getAttribute("data-theme") || "titanium";
+        const idx = themeOrder.findIndex((t) => t.id === current);
+        const next = themeOrder[(idx + 1) % themeOrder.length];
+        applyTheme(next.id);
+      };
+    }
+
+    // Chuyển đổi Tab Hiển thị nhanh trên Mobile / iPhone (Segmented View Control)
+    const appShell = getElement("appShell");
+    const mobileTabs = document.querySelectorAll(".mobile-view-tabs button[data-view]");
+    if (appShell && mobileTabs.length > 0) {
+      mobileTabs.forEach((btn) => {
+        btn.onclick = () => {
+          mobileTabs.forEach((item) => item.classList.toggle("act", item === btn));
+          appShell.setAttribute("data-mobile-tab", btn.dataset.view || "all");
+          window.dispatchEvent(new Event("resize"));
+        };
+      });
+    }
+
     // 5. HỖ TRỢ TAY CẦM XBOX CẮM VÀO MÁY TÍNH (HTML5 GAMEPAD API)
     this.startXboxGamepadLoop(setThrottle, setMotorTest);
   }

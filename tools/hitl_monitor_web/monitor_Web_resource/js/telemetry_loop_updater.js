@@ -57,10 +57,20 @@ class TelemetryLoopUpdater {
     if (hz) ArtificialHorizonRenderer.renderHorizon(hz, latestSample.roll, latestSample.pitch);
 
     latestSample.m.forEach((speed, index) => {
+      const pct = Math.max(0, Math.min(100, speed / 10));
       const mb = getElement("mb" + index);
-      if (mb) mb.style.width = Math.max(0, Math.min(100, speed / 10)) + "%";
+      if (mb) mb.style.width = pct + "%";
       const mv = getElement("mv" + index);
       if (mv) mv.textContent = String(Math.round(speed));
+
+      const rng = getElement("rngM" + (index + 1));
+      const lbl = getElement("lblM" + (index + 1));
+      if (rng && document.activeElement !== rng) {
+        rng.value = Math.round(pct);
+      }
+      if (lbl) {
+        lbl.textContent = pct.toFixed(1) + "%";
+      }
     });
 
     if (controller.isPaused) {

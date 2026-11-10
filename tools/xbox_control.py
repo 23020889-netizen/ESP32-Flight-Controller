@@ -176,7 +176,7 @@ def main():
 
     is_armed = False
     safety_60_pct = True
-    mixer_mode = False
+    mixer_mode = True   # Mặc định BẬT trộn cả 4 kênh (Throttle + Roll + Pitch + Yaw)
     selected_target = "all"
     base_throttle = 0.0
     prev_buttons = 0
@@ -287,17 +287,24 @@ def main():
 
                 now = time.time()
                 if mixer_mode:
-                    roll  = normalize_thumb(gp.sThumbRX) * 15.0
-                    pitch = normalize_thumb(gp.sThumbRY) * 15.0
-                    yaw   = normalize_thumb(gp.sThumbLX) * 10.0
+                    rx_norm = normalize_thumb(gp.sThumbRX)
+                    ry_norm = normalize_thumb(gp.sThumbRY)
+                    lx_norm = normalize_thumb(gp.sThumbLX)
 
-                    if total_thr < 2.0:
+                    roll  = rx_norm * 20.0
+                    pitch = ry_norm * 20.0
+                    yaw   = lx_norm * 15.0
+
+                    max_tilt = max(abs(rx_norm), abs(ry_norm), abs(lx_norm))
+                    effective_thr = total_thr if total_thr > 1.0 else (max_tilt * 20.0 if max_tilt > 0.0 else 0.0)
+
+                    if effective_thr < 0.5 and max_tilt == 0.0:
                         m1 = m2 = m3 = m4 = 0.0
                     else:
-                        m1 = max(0.0, min(max_cap, total_thr - roll + pitch - yaw))
-                        m2 = max(0.0, min(max_cap, total_thr + roll - pitch - yaw))
-                        m3 = max(0.0, min(max_cap, total_thr + roll + pitch + yaw))
-                        m4 = max(0.0, min(max_cap, total_thr - roll - pitch + yaw))
+                        m1 = max(0.0, min(max_cap, effective_thr - roll + pitch - yaw))
+                        m2 = max(0.0, min(max_cap, effective_thr + roll - pitch - yaw))
+                        m3 = max(0.0, min(max_cap, effective_thr + roll + pitch + yaw))
+                        m4 = max(0.0, min(max_cap, effective_thr - roll - pitch + yaw))
 
                     cmd = f"x {m1:.1f} {m2:.1f} {m3:.1f} {m4:.1f}"
                 else:

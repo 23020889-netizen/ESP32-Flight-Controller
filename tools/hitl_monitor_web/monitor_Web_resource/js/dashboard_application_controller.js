@@ -304,9 +304,29 @@ class DashboardApplicationController {
     let prevButtons = [];
     let isGamepadArmed = false;
     let baseThrottle = 0;
-    let activeMotor = 0; // 0 = All (Throttle), 1..4 = Motor 1..4
-    let lastSentThrottle = -1;
+    let activeMotor = 0; // 0 = All 4 Motors (Quad-X Mixer), 1..4 = Single Motor 1..4
+    let lastSentCmd = "";
     let lastSendTime = 0;
+
+    const applyDeadzone = (val, dz = 0.08) => {
+      if (!val || Math.abs(val) < dz) return 0;
+      return (val - Math.sign(val) * dz) / (1 - dz);
+    };
+
+    const updateMotorSlidersUI = (m1, m2, m3, m4, thr) => {
+      const rngThr = document.getElementById("rngThrottle");
+      const lblThr = document.getElementById("lblThrottle");
+      if (rngThr) rngThr.value = thr;
+      if (lblThr) lblThr.textContent = thr.toFixed(1) + "%";
+
+      const vals = [m1, m2, m3, m4];
+      for (let i = 0; i < 4; i++) {
+        const r = document.getElementById(`rngM${i + 1}`);
+        const l = document.getElementById(`lblM${i + 1}`);
+        if (r) r.value = Math.round(vals[i]);
+        if (l) l.textContent = vals[i].toFixed(1) + "%";
+      }
+    };
 
     const pollGamepad = () => {
       const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -326,18 +346,19 @@ class DashboardApplicationController {
         if (justPressed(1) || justPressed(8)) {
           isGamepadArmed = false;
           baseThrottle = 0;
-          lastSentThrottle = 0;
+          lastSentCmd = "disarm";
           lastSendTime = performance.now();
           this.telemetryStore.sendCommand("disarm");
-          setThrottle(0);
+          updateMotorSlidersUI(0, 0, 0, 0, 0);
         }
         // Nút A (0): ARM
         else if (justPressed(0)) {
           isGamepadArmed = true;
           baseThrottle = 0;
-          lastSentThrottle = 0;
+          lastSentCmd = "arm";
           lastSendTime = performance.now();
           this.telemetryStore.sendCommand("arm");
+          updateMotorSlidersUI(0, 0, 0, 0, 0);
         }
 
         // RB (5) / LB (4): Tăng giảm ga giữ nền (+5% / -5%)
@@ -351,23 +372,61 @@ class DashboardApplicationController {
         if (justPressed(14)) { activeMotor = 4; baseThrottle = 0; this.telemetryStore.sendCommand("m4"); }
         if (justPressed(3))  { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
 
-        // Cò phải RT (button 7 value: 0..1) hoặc Cần trái đẩy lên (axes[1]: -1..0)
+        // 1. Đọc trục Throttle: Cò phải RT (button 7: 0..1) hoặc Cần trái đẩy lên (-axes[1]: 0..1)
         const rtVal = gp.buttons[7] ? gp.buttons[7].value : 0;
-        const lyVal = gp.axes && gp.axes.length > 1 && gp.axes[1] < -0.08 ? -gp.axes[1] : 0;
+        const lyVal = gp.axes && gp.axes.length > 1 ? Math.max(0, applyDeadzone(-gp.axes[1], 0.08)) : 0;
         const stickThr = Math.max(rtVal, lyVal);
-        const totalThr = Math.min(60, Math.max(0, Math.round((baseThrottle + stickThr * 60) * 10) / 10));
+        const totalThr = Math.min(60, Math.max(0, baseThrottle + stickThr * 60));
+
+        // 2. Đọc 3 trục điều hướng: Yaw (axes[0]), Roll (axes[2]), Pitch (-axes[3])
+        const yawNorm   = gp.axes && gp.axes.length > 0 ? applyDeadzone(gp.axes[0], 0.08) : 0;
+        const rollNorm  = gp.axes && gp.axes.length > 2 ? applyDeadzone(gp.axes[2], 0.08) : 0;
+        const pitchNorm = gp.axes && gp.axes.length > 3 ? applyDeadzone(-gp.axes[3], 0.08) : 0;
+
+        const maxTilt = Math.max(Math.abs(rollNorm), Math.abs(pitchNorm), Math.abs(yawNorm));
+        if (stickThr > 0.02 || maxTilt > 0.05) {
+          isGamepadArmed = true;
+        }
 
         const now = performance.now();
-        const valueChanged = Math.abs(totalThr - lastSentThrottle) >= 0.5 && (now - lastSendTime >= 40 || totalThr === 0);
-        const heartbeatDue = (isGamepadArmed || totalThr > 0) && (now - lastSendTime >= 500);
+        if (activeMotor === 0) {
+          // Chế độ điều khiển cả 4 động cơ + Trộn Quad-X (Throttle + Roll + Pitch + Yaw)
+          const rollMix  = rollNorm  * 20.0; // +-20%
+          const pitchMix = pitchNorm * 20.0; // +-20%
+          const yawMix   = yawNorm   * 15.0; // +-15%
 
-        if (valueChanged || heartbeatDue) {
-          lastSentThrottle = totalThr;
-          lastSendTime = now;
-          if (activeMotor === 0) {
-            setThrottle(totalThr);
-          } else {
-            setMotorTest(activeMotor, Math.min(50, totalThr));
+          // Nếu chưa bóp ga (totalThr == 0) nhưng gạt cần Roll/Pitch/Yaw -> Tự cấp ga nền 20% theo độ gạt cần để test nghiêng ngay
+          const effectiveThr = totalThr > 1.0 ? totalThr : (maxTilt > 0 ? maxTilt * 20.0 : 0.0);
+
+          let m1 = 0, m2 = 0, m3 = 0, m4 = 0;
+          if (effectiveThr > 0.2 || maxTilt > 0) {
+            m1 = Math.min(60, Math.max(0, effectiveThr - rollMix + pitchMix - yawMix)); // M1: FR (CCW)
+            m2 = Math.min(60, Math.max(0, effectiveThr + rollMix - pitchMix - yawMix)); // M2: RL (CCW)
+            m3 = Math.min(60, Math.max(0, effectiveThr + rollMix + pitchMix + yawMix)); // M3: FL (CW)
+            m4 = Math.min(60, Math.max(0, effectiveThr - rollMix - pitchMix + yawMix)); // M4: RR (CW)
+          }
+
+          const cmd = `x ${m1.toFixed(1)} ${m2.toFixed(1)} ${m3.toFixed(1)} ${m4.toFixed(1)}`;
+          const valueChanged = (cmd !== lastSentCmd) && (now - lastSendTime >= 40 || (m1 === 0 && m2 === 0 && m3 === 0 && m4 === 0));
+          const heartbeatDue = isGamepadArmed && (now - lastSendTime >= 500);
+
+          if (valueChanged || heartbeatDue) {
+            lastSentCmd = cmd;
+            lastSendTime = now;
+            this.telemetryStore.sendCommand(cmd);
+            updateMotorSlidersUI(m1, m2, m3, m4, effectiveThr);
+          }
+        } else {
+          // Chế độ test riêng lẻ 1 động cơ (khi bấm D-Pad)
+          const singleThr = Math.min(50, Math.round(totalThr * 10) / 10);
+          const cmd = `m${activeMotor} ${singleThr}`;
+          const valueChanged = (cmd !== lastSentCmd) && (now - lastSendTime >= 40 || singleThr === 0);
+          const heartbeatDue = isGamepadArmed && (now - lastSendTime >= 500);
+
+          if (valueChanged || heartbeatDue) {
+            lastSentCmd = cmd;
+            lastSendTime = now;
+            setMotorTest(activeMotor, singleThr);
           }
         }
 

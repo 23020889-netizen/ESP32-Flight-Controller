@@ -92,8 +92,9 @@ void printTelemetry() {
 // ============================================================================
 // 4. UNIFIED COMMAND ENGINE (HỖ TRỢ SERIAL CLI + XBOX PC + WIFI UDP + WEBSOCKET 3D)
 // ============================================================================
-static int activeTestMotor = 0; // 0 = ALL 4 MOTORS, 1..4 = Motor riêng lẻ
+static int activeTestMotor = 0;   // 0 = ALL 4 MOTORS, 1..4 = Motor riêng lẻ
 static bool safetyLimit60Pct = false;
+static bool pidModeEnabled = false; // Mặc định FALSE: Tăng ga đồng tốc 4 motor & nhận trực tiếp Roll/Pitch/Yaw từ tay cầm Xbox
 
 void executeCommand(String cmd, const char* sourceTag) {
     cmd.trim();
@@ -113,6 +114,7 @@ void executeCommand(String cmd, const char* sourceTag) {
                 if (quadMotors.getState() != ESC_STATE_ARMED) {
                     quadMotors.arm();
                 }
+                pidModeEnabled = false;
                 px4Controller.setTargetThrottle(0.0f); // Bypass PID khi chạy trực tiếp Quad-X Mixer từ tay cầm
                 int m1 = constrain(t - p - r - y, 1000, 2000);
                 int m2 = constrain(t + p + r - y, 1000, 2000);
@@ -134,6 +136,7 @@ void executeCommand(String cmd, const char* sourceTag) {
             if (quadMotors.getState() != ESC_STATE_ARMED) {
                 quadMotors.arm();
             }
+            pidModeEnabled = false;
             px4Controller.setTargetThrottle(0.0f);
             float maxCap = safetyLimit60Pct ? 60.0f : 100.0f;
             if (p1 > maxCap) p1 = maxCap;
@@ -275,8 +278,16 @@ void executeCommand(String cmd, const char* sourceTag) {
             Serial.printf("[%s] [CONFIG] Motor %d: Min = %d us, Max = %d us\n", sourceTag, mId, newMin, newMin + 1000);
         }
     } else if (cmd.equalsIgnoreCase("manual off") || cmd.equalsIgnoreCase("pid mode") || cmd.equalsIgnoreCase("auto")) {
+        pidModeEnabled = true;
+        activeTestMotor = 0;
+        px4Controller.reset();
+        px4Controller.setTargetAttitude(fusedData.roll, fusedData.pitch, fusedData.yaw);
+        Serial.printf("[%s] [PID MODE] Da BAT che do PID Tu Can Bang (Khoa moc goc hien tai R=%.1f, P=%.1f, Y=%.1f).\n",
+                      sourceTag, fusedData.roll, fusedData.pitch, fusedData.yaw);
+    } else if (cmd.equalsIgnoreCase("manual") || cmd.equalsIgnoreCase("manual on") || cmd.equalsIgnoreCase("direct")) {
+        pidModeEnabled = false;
         px4Controller.setTargetThrottle(0.0f);
-        Serial.printf("[%s] [MANUAL] Da tat che do Manual -> San sang che do PID.\n", sourceTag);
+        Serial.printf("[%s] [DIRECT MODE] Da chuyen sang che do Dong Toc 4 Motor & Tay cam Xbox truc tiep.\n", sourceTag);
     } else if (cmd.startsWith("m1 ") || cmd.startsWith("M1 ") || cmd.startsWith("m0 ") || cmd.startsWith("M0 ") ||
                cmd.startsWith("m2 ") || cmd.startsWith("M2 ") ||
                cmd.startsWith("m3 ") || cmd.startsWith("M3 ") ||
@@ -425,10 +436,11 @@ void loop() {
                              fusedData.gx,   fusedData.gy,    fusedData.gz,
                              dt, isArmed);
 
-        // Chỉ khi đang Armed, có cảm biến IMU hoạt động VÀ có mức ga bay (targetThrottle >= 5%):
-        // PID mới tính toán mô-men cân bằng và truyền xung vào 4 động cơ
+        // Chỉ khi đang Armed, ĐANG BẬT CHẾ ĐỘ PID (pidModeEnabled == true), có cảm biến IMU VÀ ga >= 5%:
+        // PID mới tính toán mô-men tự cân bằng và ghi đè xung vào 4 động cơ.
+        // Ngược lại (mặc định khi kéo ga hoặc dùng tay cầm Xbox): cả 4 động cơ quay đồng tốc hoặc theo góc nghiêng tay cầm!
         bool hasImu = (mpuData.ready || xsensData.has_orientation);
-        if (isArmed && hasImu && px4Controller.getTargetThrottle() >= 5.0f) {
+        if (isArmed && pidModeEnabled && hasImu && px4Controller.getTargetThrottle() >= 5.0f) {
             const uint16_t* motor_us = px4Controller.getMotorOutputsUs();
             for (int i = 0; i < ESC_NUM_MOTORS; i++) {
                 quadMotors.setMotorThrottleUs(i + 1, motor_us[i]);

@@ -155,11 +155,16 @@ void executeCommand(String cmd, const char* sourceTag) {
                 }
             } else {
                 if (quadMotors.getState() != ESC_STATE_ARMED) {
+                    if (thr > 3.0f) {
+                        Serial.printf("[RC] Tu choi ARM: Can ga phai o muc 0%%! (Hien tai: %.1f%%)\n", thr);
+                        return;
+                    }
                     quadMotors.arm();
                     px4Controller.reset();
                     // Khóa hướng Yaw hiện tại đúng 1 lần khi chuyển sang ARMED
                     setpointState.yaw_sp = attitudeState.yaw;
                     setpointState.heading_locked = true;
+                    setpointState.throttle_pct = 0.0f;
                     Serial.printf("[RC] >>> ARMED! Latch Heading = %.1f°\n", setpointState.yaw_sp);
                 }
                 float maxCap = safetyLimit60Pct ? 60.0f : 100.0f;

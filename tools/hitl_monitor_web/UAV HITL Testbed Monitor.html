@@ -114,19 +114,22 @@
             </div>
           </div>
 
-          <!-- Giám sát cần Analog Tay cầm A124 / Xbox -->
+          <!-- Giám sát cần Analog Tay cầm Xbox & RadioMaster -->
           <div class="gamepad-card">
             <div class="sub-card-header">
-              <span class="gamepad-title">🎮 TAY CẦM A124 / XBOX</span>
+              <span class="gamepad-title" id="lblGamepadTitle">🎮 TAY CẦM ĐIỀU KHIỂN</span>
               <b id="lblGamepadArm" class="mono gamepad-arm-badge">DISARM</b>
             </div>
             <div class="stick-grid mono">
               <div class="stick-box">
-                <span>Cần Trái:</span> <b id="lblStickL" style="color:var(--c1)">T:0% | Y:0°</b>
+                <span>Gamepad (L):</span> <b id="lblStickL" style="color:var(--c1)">T:0% | Y:0°</b>
               </div>
               <div class="stick-box">
-                <span>Cần Phải:</span> <b id="lblStickR" style="color:var(--c2)">P:0° | R:0°</b>
+                <span>Gamepad (R):</span> <b id="lblStickR" style="color:var(--c2)">P:0° | R:0°</b>
               </div>
+            </div>
+            <div class="stick-confirm-box mono">
+              <span>ESP32 Xác Nhận:</span> <b id="lblEspConfirmed" style="color:var(--c3)">Seq: #0 | SP_T: 0.0% | OFFLINE</b>
             </div>
           </div>
 

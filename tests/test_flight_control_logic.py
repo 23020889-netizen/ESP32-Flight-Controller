@@ -298,6 +298,34 @@ class TestFlightControlRebuild(unittest.TestCase):
         self.assertFalse(parse_rc_command("RC,nan,0,0,0,1")[0]) # NaN
         self.assertFalse(parse_rc_command("INVALID_COMMAND")[0])
 
+    def test_rc_zero_throttle_arming_safety_gate(self):
+        """Verify safety gate: Reject ARM when throttle > 3.0%"""
+        def simulate_arm_transition(current_state: str, thr: float, arm: int):
+            if arm == 0:
+                return "DISARMED", 0.0, True
+            if current_state != "ARMED":
+                if thr > 3.0:
+                    return current_state, 0.0, False  # Rejected
+                return "ARMED", 0.0, True  # Armed safely, throttle starts at 0
+            return "ARMED", thr, True
+
+        # Case 1: Arm with raised throttle (e.g. 50%) -> MUST BE REJECTED
+        state, thr_sp, ok = simulate_arm_transition("DISARMED", 50.0, 1)
+        self.assertFalse(ok)
+        self.assertEqual(state, "DISARMED")
+
+        # Case 2: Arm with zero throttle (0.0%) -> MUST BE ACCEPTED
+        state, thr_sp, ok = simulate_arm_transition("DISARMED", 0.0, 1)
+        self.assertTrue(ok)
+        self.assertEqual(state, "ARMED")
+        self.assertEqual(thr_sp, 0.0)
+
+        # Case 3: Throttle increase after already ARMED -> MUST BE ACCEPTED
+        state, thr_sp, ok = simulate_arm_transition("ARMED", 25.0, 1)
+        self.assertTrue(ok)
+        self.assertEqual(state, "ARMED")
+        self.assertEqual(thr_sp, 25.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,17 @@ struct TelemetryPacket {
     float m_pct[4];         // Tỷ lệ ga 4 motor (0 - 100%)
     const char* state_str;  // Trạng thái ESC: DISARMED, ARMED, FAILSAFE
     uint32_t frequency_hz;  // Tần số xung PWM (Hz)
+
+    // 4. Setpoint và Bộ điều khiển (Chuẩn hóa theo Guide)
+    float sp_roll;          // Góc Roll mục tiêu (độ)
+    float sp_pitch;         // Góc Pitch mục tiêu (độ)
+    float sp_yaw;           // Góc Yaw mục tiêu (độ)
+    float sp_throttle;      // Mức ga mục tiêu (0 - 100%)
+    float tau[3];           // Mô-men điều khiển [Roll, Pitch, Yaw]
+    float u_norm[4];        // Lệnh chuẩn hóa 4 động cơ từ Allocator [0.0 .. 1.0]
+    bool  yaw_valid;        // Trạng thái hợp lệ của cảm biến góc Yaw
+    uint32_t rc_sequence;   // Bộ đếm gói RC hợp lệ đã được ESP chấp nhận
+    bool pwm_outputs_ready; // Cả bốn PWM pin đã attach thành công
 };
 
 /**

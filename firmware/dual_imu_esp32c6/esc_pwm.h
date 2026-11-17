@@ -4,87 +4,62 @@
 #include <Arduino.h>
 
 // ============================================================================
-// 1. PX4 AUTOPILOT STANDARD ESC PWM SPECIFICATIONS
+// 1. PX4 AUTOPILOT STANDARD ESC PWM SPECIFICATIONS (UNIFORM 4 MOTORS)
 // ============================================================================
 #define ESC_NUM_MOTORS           4
 
-// CẤU HÌNH CHÂN GPIO & ĐỘNG CƠ THEO YÊU CẦU:
-// Motor 1: GPIO 7 (CCW - Ngược chiều kim đồng hồ)
-// Motor 2: GPIO 6 (CCW - Ngược chiều kim đồng hồ)
-// Motor 3: GPIO 5 (CW  - Thuận chiều kim đồng hồ)
-// Motor 4: GPIO 4 (CW  - Thuận chiều kim đồng hồ)
-#define MOTOR1_PIN               7
-#define MOTOR2_PIN               6
-#define MOTOR3_PIN               5
-#define MOTOR4_PIN               4
+// CẤU HÌNH CHÂN GPIO ĐỘNG CƠ (Quad-X):
+#define MOTOR1_PIN               7  // Front-Right (CCW)
+#define MOTOR2_PIN               6  // Rear-Left   (CCW)
+#define MOTOR3_PIN               5  // Front-Left  (CW)
+#define MOTOR4_PIN               4  // Rear-Right  (CW)
 
-#define ESC_DEFAULT_FREQ_HZ      50       // 50 Hz: Tương thích 100% mọi dòng ESC Vàng 30A (có thể chuyển sang 400Hz qua lệnh 'freq 400')
-#define ESC_PX4_FREQ_HZ          400      // 400 Hz: Chuẩn PX4 Multirotor (Chu kỳ 2500 µs)
-#define ESC_RESOLUTION_BITS      14       // Độ phân giải phần cứng 14-bit (16384 nấc, bước nhảy siêu mịn 0.15 µs)
+#define ESC_DEFAULT_FREQ_HZ      50       // 50 Hz tiêu chuẩn
+#define ESC_PX4_FREQ_HZ          400      // 400 Hz chuẩn PX4 Multirotor
+#define ESC_RESOLUTION_BITS      14       // Độ phân giải 14-bit (16384 nấc)
 
-// CẤU HÌNH DẢI XUNG ESC THEO PHẦN CỨNG THỰC TẾ CỦA NGƯỜI DÙNG:
-// - Motor 1, 2, 4 (ESC Vàng 30A): Min/Disarm = 1000 µs, Max = 2000 µs
-// - Motor 3 (GPIO 5 - ESC Đen 40A): Min/Disarm = 850 µs, Max = 1850 µs (Bù lệch -150 µs để không kêu bíp và đồng tốc)
-#define ESC_PULSE_DISARM_US      1000     // Xung khóa an toàn mặc định cho ESC Vàng (1000 µs)
-#define ESC_PULSE_MIN_US         1000     // Xung ga tối thiểu chuẩn (1000 µs = 0.0% Throttle)
-#define ESC_PULSE_MAX_US         2000     // Xung ga tối đa chuẩn (2000 µs = 100.0% Throttle)
-#define ESC_M3_PULSE_MIN_US      850      // Xung ga tối thiểu riêng cho Motor 3 - ESC Đen 40A (850 µs = 0.0% Throttle)
-#define ESC_M3_PULSE_MAX_US      1850     // Xung ga tối đa riêng cho Motor 3 - ESC Đen 40A (1850 µs = 100.0% Throttle)
-#define ESC_PULSE_IDLE_US        1050     // Xung ga quay chậm không tải (Idle Spin ~ 5%)
+// Cả 4 ESC dùng chung dải xung chuẩn 1000..2000 µs (Section 1 & 7 Rebuild Guide):
+#define ESC_PULSE_DISARM_US      1000     // Xung ngắt an toàn (0% ga)
+#define ESC_PULSE_MIN_US         1000     // Xung tối thiểu (0.0% Throttle)
+#define ESC_PULSE_MAX_US         2000     // Xung tối đa (100.0% Throttle)
+#define ESC_PULSE_IDLE_US        1050     // Xung quay chậm không tải (Idle Spin ~ 5%)
 
-#define ESC_ARMING_TIME_MS       0        // Mở khóa ARM tức thì (vì init() đã giữ mốc 0% từ lúc khởi động)
-#define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: Tự động ngắt ga về 0% nếu mất lệnh điều khiển quá 3s
-#define ESC_SLEW_RATE_US_PER_SEC 2500     // Tốc độ tăng giảm ga an toàn (Soft Ramp): 2500 µs/s
+#define ESC_ARMING_TIME_MS       0        // Mở khóa ARM tức thì
+#define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: ngắt ga nếu mất lệnh > 3s
+#define ESC_SLEW_RATE_US_PER_SEC 2500     // Soft Ramp: 2500 µs/s
 
 // ============================================================================
 // 2. ENUMS
 // ============================================================================
 enum MotorDirection {
-    MOTOR_DIR_CCW = 0, // Ngược chiều kim đồng hồ (Counter-Clockwise)
-    MOTOR_DIR_CW  = 1  // Thuận chiều kim đồng hồ (Clockwise)
+    MOTOR_DIR_CCW = 0,
+    MOTOR_DIR_CW  = 1
 };
 
 enum EscState {
     ESC_STATE_UNINITIALIZED = 0,
-    ESC_STATE_DISARMED,       // Động cơ bị khóa an toàn (xung 900µs, không nhận lệnh ga)
-    ESC_STATE_ARMING,         // Đang gửi chuỗi xung 1000µs chờ ESC phát tiếng bíp sẵn sàng
-    ESC_STATE_ARMED,          // Đã mở khóa, cho phép điều khiển ga 0% - 100%
-    ESC_STATE_CALIBRATION,    // Chế độ hiệu chuẩn hành trình ga Max/Min
-    ESC_STATE_FAILSAFE        // Trạng thái ngắt khẩn cấp khi mất kết nối/lỗi an toàn
+    ESC_STATE_DISARMED,
+    ESC_STATE_ARMING,
+    ESC_STATE_ARMED,
+    ESC_STATE_CALIBRATION,
+    ESC_STATE_FAILSAFE
 };
 
 // ============================================================================
-// 3. OOP CLASS: EscMotor (Đại diện cho từng kênh động cơ đơn lẻ)
+// 3. OOP CLASS: EscMotor
 // ============================================================================
 class EscMotor {
 public:
     EscMotor();
 
-    // Khởi tạo kênh động cơ với ID, chân GPIO, chiều quay, tần số và dải xung Min/Max riêng
-    bool init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz,
-              uint16_t min_us = ESC_PULSE_MIN_US, uint16_t max_us = ESC_PULSE_MAX_US);
-
-    // Cấu hình lại dải xung Min/Max riêng cho ESC
-    void setPulseRange(uint16_t min_us, uint16_t max_us);
-    uint16_t getMinPulseUs() const { return _min_us; }
-    uint16_t getMaxPulseUs() const { return _max_us; }
-
-    // Cập nhật lại tần số xung PWM phần cứng
+    bool init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_hz);
     bool setFrequency(uint32_t freq_hz);
 
-    // Xuất xung trực tiếp ra phần cứng (bỏ qua lọc Ramp)
     void writePulseUs(uint16_t pulse_us);
-
-    // Đặt mục tiêu xung ga (qua bộ lọc Soft Ramp)
     void setTargetPulseUs(uint16_t pulse_us);
-
-    // Đặt mục tiêu ga theo phần trăm (0.0% .. 100.0%)
+    void setNormalizedCommand(float u);
     void setTargetThrottlePct(float pct);
-
-    // Cập nhật tốc độ tăng ga từ từ (Soft Ramp Limiter)
     void updateRamp(float dt);
-
-    // Dừng khẩn cấp động cơ (xuất 900 µs ngay lập tức)
     void stop();
 
     // Getters
@@ -96,6 +71,8 @@ public:
     uint16_t       getTargetPulseUs() const  { return _target_us; }
     float          getThrottlePct() const    { return _throttle_pct; }
     bool           isAttached() const        { return _attached; }
+    uint16_t       getMinPulseUs() const     { return ESC_PULSE_MIN_US; }
+    uint16_t       getMaxPulseUs() const     { return ESC_PULSE_MAX_US; }
 
 private:
     uint8_t        _id;
@@ -104,8 +81,6 @@ private:
     uint32_t       _freq_hz;
     uint32_t       _period_us;
     uint32_t       _max_duty;
-    uint16_t       _min_us;
-    uint16_t       _max_us;
     uint16_t       _current_us;
     uint16_t       _target_us;
     float          _throttle_pct;
@@ -115,49 +90,34 @@ private:
 };
 
 // ============================================================================
-// 4. OOP CLASS: QuadEscController (Quản lý 4 động cơ Quadcopter)
+// 4. OOP CLASS: QuadEscController
 // ============================================================================
 class QuadEscController {
 public:
     QuadEscController();
 
-    // Khởi tạo cả 4 động cơ: M1(7-CCW), M2(6-CCW), M3(5-CW), M4(4-CW)
     bool init(uint32_t freq_hz = ESC_DEFAULT_FREQ_HZ);
-
-    // Đổi tần số PWM đồng loạt cho 4 động cơ (50Hz hoặc 400Hz)
+    bool outputsReady() const;
     bool setFrequency(uint32_t freq_hz);
-
-    // Bắt đầu chuỗi mở khóa an toàn (Arming) chuẩn PX4
     bool arm();
-
-    // Khóa an toàn khẩn cấp cả 4 động cơ (ngắt ga về 900µs)
     void disarm();
 
-    // Đặt ga đồng loạt cả 4 động cơ theo phần trăm (0.0% .. 100.0%)
     bool setAllThrottlePct(float pct);
-
-    // Đặt ga đồng loạt cả 4 động cơ theo microsecond (1000 .. 2000 µs)
     bool setAllThrottleUs(uint16_t pulse_us);
-
-    // Đặt ga riêng cho từng động cơ (motor_id: 1, 2, 3, 4)
+    bool setAllNormalized(const float u[ESC_NUM_MOTORS]);
     bool setMotorThrottlePct(uint8_t motor_id, float pct);
     bool setMotorThrottleUs(uint8_t motor_id, uint16_t pulse_us);
 
-    // Cập nhật vòng lặp loop() cho FSM, Soft Ramp và Watchdog
     void update();
-
-    // Hiệu chuẩn hành trình ga ESC đồng loạt 4 kênh
     void startCalibration();
     void finishCalibration();
-
-    // Nuôi Watchdog an toàn
     void feedWatchdog();
 
     // Getters
     EscState        getState() const         { return _state; }
     const char*     getStateStr() const;
     uint32_t        getFrequency() const     { return _freq_hz; }
-    const EscMotor& getMotor(uint8_t index) const; // index 0..3 (tương ứng Motor 1..4)
+    const EscMotor& getMotor(uint8_t index) const;
     EscMotor&       getMotor(uint8_t index);
 
 private:
@@ -170,7 +130,6 @@ private:
     bool     _watchdog_enabled;
 };
 
-// Đối tượng Controller toàn cục
 extern QuadEscController quadMotors;
 
 #endif // ESC_PWM_H

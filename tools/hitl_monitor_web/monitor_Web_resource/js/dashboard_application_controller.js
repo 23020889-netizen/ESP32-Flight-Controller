@@ -30,7 +30,7 @@ class DashboardApplicationController {
   bindUserInterfaceControls() {
     const getElement = (id) => document.getElementById(id);
     const setActiveMode = (activeId) => {
-      ["bDemo", "bCsv", "bSerial", "bLiveWs"].forEach((id) => {
+      ["bDemo", "bCsv", "bSerial", "bLiveWs", "bApWs"].forEach((id) => {
         const el = getElement(id);
         if (el) el.classList.toggle("act", id === activeId);
       });
@@ -48,21 +48,21 @@ class DashboardApplicationController {
       };
     }
 
-    // 2. KẾT NỐI QUA SÓNG WIFI (WebSocket - Mạng TTDB hoặc SoftAP)
+    // 2. Wi-Fi VNU dùng IP cố định; SoftAP có nút riêng, không dùng IP cũ trong localStorage.
     const bLiveWs = getElement("bLiveWs");
-    const inpWsIp = getElement("inpWsIp");
-    if (inpWsIp) {
-      const savedIp = localStorage.getItem("uav_esp_ip");
-      if (savedIp) inpWsIp.value = savedIp;
-    }
+    const bApWs = getElement("bApWs");
     if (bLiveWs) {
       bLiveWs.onclick = () => {
         this.csvReplayer.stopPlayback();
-        const ip = (inpWsIp && inpWsIp.value.trim()) ? inpWsIp.value.trim() : "10.11.162.210";
-        if (inpWsIp) localStorage.setItem("uav_esp_ip", ip);
-        const wsUrl = ip.startsWith("ws://") ? ip : `ws://${ip}:81`;
-        this.telemetryStore.connectWebSocket(wsUrl);
+        this.telemetryStore.connectWebSocket("ws://10.11.162.210:81");
         setActiveMode("bLiveWs");
+      };
+    }
+    if (bApWs) {
+      bApWs.onclick = () => {
+        this.csvReplayer.stopPlayback();
+        this.telemetryStore.connectWebSocket("ws://192.168.4.1:81");
+        setActiveMode("bApWs");
       };
     }
 
@@ -119,7 +119,7 @@ class DashboardApplicationController {
       pct = Math.max(0, Math.min(100, Number(pct) || 0));
       if (rngThrottle) rngThrottle.value = pct;
       if (lblThrottle) lblThrottle.textContent = pct.toFixed(1) + "%";
-      this.telemetryStore.sendCommand(`throttle ${pct}`);
+      return pct;
     };
 
     if (rngThrottle) {
@@ -127,13 +127,11 @@ class DashboardApplicationController {
         const val = Number(e.target.value);
         if (lblThrottle) lblThrottle.textContent = val.toFixed(1) + "%";
       };
-      rngThrottle.onchange = (e) => {
-        setThrottle(Number(e.target.value));
-      };
+      rngThrottle.onchange = (e) => this.telemetryStore.sendCommand(`throttle ${setThrottle(Number(e.target.value))}`);
     }
 
     document.querySelectorAll(".btn-thr").forEach((b) => {
-      b.onclick = () => setThrottle(Number(b.dataset.thr));
+      b.onclick = () => this.telemetryStore.sendCommand(`throttle ${setThrottle(Number(b.dataset.thr))}`);
     });
 
     // Điều khiển Góc Setpoint (PX4 Angle Control)
@@ -302,12 +300,179 @@ class DashboardApplicationController {
       };
     }
 
+    // Chuyển đổi Mẫu 3D Quadcopter (4 mẫu đều khắc chữ ISILAB trên thân)
+    const selDroneModel = getElement("selDroneModel");
+    if (selDroneModel) {
+      try {
+        const savedModel = localStorage.getItem("uav_3d_model");
+        if (savedModel) {
+          selDroneModel.value = savedModel;
+          this.sceneManager.setDroneModel(savedModel);
+        }
+      } catch (_) {}
+      selDroneModel.onchange = () => {
+        const chosen = selDroneModel.value || "glb_cesium";
+        this.sceneManager.setDroneModel(chosen);
+        try {
+          localStorage.setItem("uav_3d_model", chosen);
+        } catch (_) {}
+      };
+    }
+
+    // Chuyển đổi Giao diện Màu sắc (Apple visionOS Titanium Dark / Light Ngoài Trời / Tactical Cyan)
+    const btnThemeToggle = getElement("btnThemeToggle");
+    const themeOrder = [
+      { id: "titanium", label: "🍎 Titanium" },
+      { id: "light", label: "☀️ Sáng" },
+      { id: "tactical", label: "🌌 Tactical" }
+    ];
+    const applyTheme = (themeId) => {
+      const found = themeOrder.find((t) => t.id === themeId) || themeOrder[0];
+      document.documentElement.setAttribute("data-theme", found.id);
+      if (btnThemeToggle) btnThemeToggle.textContent = found.label;
+      try {
+        localStorage.setItem("uav_ui_theme", found.id);
+      } catch (_) {}
+    };
+    try {
+      const savedTheme = localStorage.getItem("uav_ui_theme");
+      if (savedTheme) applyTheme(savedTheme);
+      else applyTheme("titanium");
+    } catch (_) {
+      applyTheme("titanium");
+    }
+    if (btnThemeToggle) {
+      btnThemeToggle.onclick = () => {
+        const current = document.documentElement.getAttribute("data-theme") || "titanium";
+        const idx = themeOrder.findIndex((t) => t.id === current);
+        const next = themeOrder[(idx + 1) % themeOrder.length];
+        applyTheme(next.id);
+      };
+    }
+
+    // Chuyển đổi Tab Hiển thị nhanh trên Mobile / iPhone (Segmented View Control)
+    const appShell = getElement("appShell");
+    const mobileTabs = document.querySelectorAll(".mobile-view-tabs button[data-view]");
+    if (appShell && mobileTabs.length > 0) {
+      mobileTabs.forEach((btn) => {
+        btn.onclick = () => {
+          mobileTabs.forEach((item) => item.classList.toggle("act", item === btn));
+          appShell.setAttribute("data-mobile-tab", btn.dataset.view || "all");
+          window.dispatchEvent(new Event("resize"));
+        };
+      });
+    }
+
     // 5. HỖ TRỢ TAY CẦM XBOX CẮM VÀO MÁY TÍNH (HTML5 GAMEPAD API)
     this.startXboxGamepadLoop(setThrottle, setMotorTest);
   }
 
+  static deadzone(v, th = 0.08) {
+    if (Math.abs(v) < th) return 0;
+    return v > 0 ? (v - th) / (1 - th) : (v + th) / (1 - th);
+  }
+
+  /**
+   * Pure function extracting normalized inputs from Gamepad API object.
+   * Conforms to docs/GAMEPAD_THROTTLE_MAPPING_FIX_GUIDE.md
+   */
+  static readGamepadInputs(gp) {
+    if (!gp) {
+      return {
+        connected: false,
+        isRcTransmitter: false,
+        deviceName: "Chưa cắm",
+        thrPct: 0,
+        rawThr: 0,
+        rollDeg: 0,
+        pitchDeg: 0,
+        yawDeg: 0
+      };
+    }
+
+    const id = gp.id || "";
+    const isRcTransmitter = /radiomaster|pocket|edgetx|opentx|jumper|boxer|tx16|t-pro/i.test(id);
+    // [GP DEBUG] Log raw axes/buttons to console every 60 frames (~1s) for axis mapping diagnosis
+    if (!DashboardApplicationController._dbgFrame) DashboardApplicationController._dbgFrame = 0;
+    if (++DashboardApplicationController._dbgFrame % 60 === 0) {
+      const activeBtns = (gp.buttons || []).map((b, i) => b.pressed ? i : null).filter(x => x !== null).join(",");
+      console.log(`[GP Debug] id="${id}" isRC=${isRcTransmitter} axes=[${[...gp.axes].map(v=>v.toFixed(3)).join(",")}] btns=[${activeBtns}]`);
+    }
+    const deviceName = gp.id ? (isRcTransmitter ? "🎮 RadioMaster (HID)" : (id.length > 16 ? id.substring(0, 16) : id)) : "Đã nhận";
+
+    let rawThr = 0;
+    let yawDeg = 0;
+    let rollDeg = 0;
+    let pitchDeg = 0;
+
+    if (isRcTransmitter) {
+      // --- CHẾ ĐỘ RADIOMASTER POCKET / EDGETX (CHUẨN MODE 2 - AETR) ---
+      // Kênh 3: Ga (Throttle) -> axes[2]: Đáy = -1.0 (0% ga), Đỉnh = +1.0 (100% ga)
+      const rawThrAxis = (gp.axes && gp.axes.length > 2) ? gp.axes[2] : -1.0;
+      let normThr = (rawThrAxis + 1.0) * 0.5;
+      if (normThr < 0.02) normThr = 0.0;
+      rawThr = Math.min(1.0, Math.max(0.0, normThr));
+
+      // Kênh 4: Hướng (Yaw) -> axes[3] (-45° .. +45°)
+      const rawYawAxis = (gp.axes && gp.axes.length > 3) ? gp.axes[3] : 0;
+      yawDeg = Math.round(DashboardApplicationController.deadzone(rawYawAxis) * 45.0 * 10) / 10;
+
+      // Kênh 1: Nghiêng ngang (Roll) -> axes[0] (-25° .. +25°)
+      const rawRollAxis = (gp.axes && gp.axes.length > 0) ? gp.axes[0] : 0;
+      rollDeg = Math.round(DashboardApplicationController.deadzone(rawRollAxis) * 25.0 * 10) / 10;
+
+      // Kênh 2: Chúc ngóc (Pitch) -> axes[1] (Đẩy lên là chúc mũi / Pitch âm)
+      const rawPitchAxis = (gp.axes && gp.axes.length > 1) ? gp.axes[1] : 0;
+      pitchDeg = Math.round(-DashboardApplicationController.deadzone(rawPitchAxis) * 25.0 * 10) / 10;
+    } else {
+      // --- CHẾ ĐỘ TAY CẦM GAMEPAD CHUẨN XBOX / A124 ---
+      // RT là buttons[7].value trong [0, 1]
+      const rtVal = (gp.buttons && gp.buttons[7]) ? gp.buttons[7].value : 0;
+      // Cần trái Y: đẩy lên là âm, kéo xuống là dương
+      const rawLy = (gp.axes && gp.axes.length > 1) ? gp.axes[1] : 0;
+      const stickLy = Math.max(0, -DashboardApplicationController.deadzone(rawLy));
+      rawThr = Math.max(rtVal, stickLy);
+
+      // Cần trái X: Yaw (-45° .. +45°)
+      const rawLx = (gp.axes && gp.axes.length > 0) ? gp.axes[0] : 0;
+      yawDeg = Math.round(DashboardApplicationController.deadzone(rawLx) * 45.0 * 10) / 10;
+
+      // Cần phải: Roll (-25° .. +25°) & Pitch (-25° .. +25°)
+      let rawRx = 0;
+      let rawRy = 0;
+      if (gp.axes) {
+        if (gp.axes.length >= 4) {
+          rawRx = gp.axes[2];
+          rawRy = gp.axes[3];
+        }
+        if (gp.axes.length >= 5 && Math.abs(rawRx) < 0.05 && Math.abs(rawRy) < 0.05) {
+          if (Math.abs(gp.axes[3]) > 0.05 || Math.abs(gp.axes[4]) > 0.05) {
+            rawRx = gp.axes[3];
+            rawRy = gp.axes[4];
+          }
+        }
+      }
+      rollDeg = Math.round(DashboardApplicationController.deadzone(rawRx) * 25.0 * 10) / 10;
+      pitchDeg = Math.round(-DashboardApplicationController.deadzone(rawRy) * 25.0 * 10) / 10;
+    }
+
+    const thrPct = Math.round(Math.min(100.0, Math.max(0.0, rawThr * 100.0)) * 10) / 10;
+
+    return {
+      connected: true,
+      isRcTransmitter,
+      deviceName,
+      thrPct,
+      rawThr,
+      rollDeg,
+      pitchDeg,
+      yawDeg
+    };
+  }
+
   startXboxGamepadLoop(setThrottle, setMotorTest) {
     let prevButtons = [];
+    let prevAxis4 = 0;
     let isGamepadArmed = false;
     let baseThrottle = 0;
     let activeMotor = 0; // 0 = All (Throttle), 1..4 = Motor 1..4
@@ -316,11 +481,6 @@ class DashboardApplicationController {
     let lastSentPitch = 999;
     let lastSentYaw = 999;
     let lastSendTime = 0;
-
-    const deadzone = (v, th = 0.08) => {
-      if (Math.abs(v) < th) return 0;
-      return v > 0 ? (v - th) / (1 - th) : (v + th) / (1 - th);
-    };
 
     const pollGamepad = () => {
       const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -336,18 +496,73 @@ class DashboardApplicationController {
       const lblGamepadArm    = document.getElementById("lblGamepadArm");
       const lblStickL        = document.getElementById("lblStickL");
       const lblStickR        = document.getElementById("lblStickR");
+      const lblEspConfirmed  = document.getElementById("lblEspConfirmed");
+
+      // Cổng an toàn kiểm tra kết nối Transport thật (WebSocket hoặc Serial)
+      const hasLink = this.telemetryStore.isTransportOpen();
+
+      // Nếu mất link hoặc transport đóng -> ép buộc DISARMED và hiện cảnh báo NO LINK
+      if (!hasLink) {
+        isGamepadArmed = false;
+        baseThrottle = 0;
+        if (lblGamepadArm) {
+          lblGamepadArm.textContent = "NO LINK";
+          lblGamepadArm.style.color = "#94a3b8";
+        }
+      } else {
+        // Đồng bộ trạng thái ARM từ telemetry thật của ESP32
+        if (this.telemetryStore.lastEspState === "DISARMED" && isGamepadArmed) {
+          isGamepadArmed = false;
+          baseThrottle = 0;
+        }
+      }
+
+      // Cập nhật phản hồi ESP32 đã xác nhận vào UI (Tách riêng biệt với Gamepad Input)
+      if (lblEspConfirmed) {
+        const espState = this.telemetryStore.lastEspState || "OFFLINE";
+        const rcSeq = this.telemetryStore.lastRcSequence || 0;
+        const spT = (this.telemetryStore.lastTargetThrottle || 0).toFixed(1);
+        lblEspConfirmed.textContent = `Seq: #${rcSeq} | SP_T: ${spT}% | ${espState}`;
+      }
 
       if (gp) {
+        const inputs = DashboardApplicationController.readGamepadInputs(gp);
         if (lblGamepadStatus) {
-          lblGamepadStatus.textContent = gp.id ? gp.id.substring(0, 16) : "Đã nhận";
+          lblGamepadStatus.textContent = inputs.deviceName;
           lblGamepadStatus.style.color = "#34d399";
         }
 
         const btns = gp.buttons.map((b) => b.pressed);
-        const justPressed = (idx) => btns[idx] && !prevButtons[idx];
 
-        // 1. Nút B (1) hoặc Back (8) / Guide: DISARM / DỪNG KHẨN CẤP
-        if (justPressed(1) || justPressed(8) || justPressed(9)) {
+        // Khởi tạo trạng thái nút ban đầu để tránh tự động kích hoạt ARM/DISARM khi vừa cắm tay cầm
+        if (prevButtons.length === 0) {
+          prevButtons = btns;
+          if (gp.axes && gp.axes.length > 4) prevAxis4 = gp.axes[4];
+          requestAnimationFrame(pollGamepad);
+          return;
+        }
+
+        const justPressed = (idx) => btns[idx] && !prevButtons[idx];
+        const justReleased = (idx) => !btns[idx] && prevButtons[idx];
+
+        // Công tắc SA trên RadioMaster (qua Axis 4 / Channel 5 nếu EdgeTX ở chế độ 8-axis)
+        const currAxis4 = (gp.axes && gp.axes.length > 4) ? gp.axes[4] : 0;
+        const saAxisArm = inputs.isRcTransmitter && gp.axes && gp.axes.length > 4 && (currAxis4 > 0.3 && prevAxis4 <= 0.3);
+        const saAxisDisarm = inputs.isRcTransmitter && gp.axes && gp.axes.length > 4 && (currAxis4 < -0.3 && prevAxis4 >= -0.3);
+        prevAxis4 = currAxis4;
+
+        // 1. DISARM / DỪNG KHẨN CẤP:
+        // - Trên mọi tay cầm: Nút B (1), Back (8), Guide (9)
+        // - Trên RadioMaster (Công tắc SA): Gạt SA về vị trí UP (nhả Button 0 hoặc Button 4, hoặc Axis 4 âm)
+        const isDisarmRequested = justPressed(1) || justPressed(8) || justPressed(9) ||
+          (inputs.isRcTransmitter && (justReleased(0) || justReleased(4) || saAxisDisarm));
+
+        // 2. ARM (Mở khóa an toàn):
+        // - Trên Xbox: Nút A (0)
+        // - Trên RadioMaster (Công tắc SA): Gạt SA xuống vị trí DOWN (nhấn Button 0 hoặc Button 4, hoặc Axis 4 dương)
+        const isArmRequested = justPressed(0) || (inputs.isRcTransmitter && (justPressed(4) || saAxisArm));
+
+        if (isDisarmRequested) {
           isGamepadArmed = false;
           baseThrottle = 0;
           lastSentThrottle = 0;
@@ -355,18 +570,26 @@ class DashboardApplicationController {
           this.telemetryStore.sendCommand("disarm");
           setThrottle(0);
         }
-        // 2. Nút A (0): ARM (Mở khóa an toàn)
-        else if (justPressed(0)) {
-          isGamepadArmed = true;
-          baseThrottle = 0;
-          lastSentThrottle = 0;
-          lastSendTime = performance.now();
-          this.telemetryStore.sendCommand("arm");
+        else if (isArmRequested) {
+          if (!hasLink) {
+            console.warn("[Gamepad] Từ chối ARM: Không có kết nối Transport tới ESP32 (WebSocket/Serial đang đóng)!");
+          } else if (inputs.thrPct > 3.0) {
+            console.warn(`[Gamepad] Từ chối ARM: Cần ga phải ở 0% trước khi ARM! (Hiện tại: ${inputs.thrPct}%)`);
+            alert("⚠️ CẢNH BÁO AN TOÀN: Vui lòng hạ cần ga về 0% trước khi gạt công tắc SA để ARM!");
+          } else {
+            isGamepadArmed = true;
+            baseThrottle = 0;
+            lastSentThrottle = 0;
+            lastSendTime = performance.now();
+            this.telemetryStore.sendCommand("arm");
+          }
         }
 
-        // 3. RB (5) / LB (4): Tăng giảm ga giữ nền (+5% / -5%)
-        if (justPressed(5)) { isGamepadArmed = true; baseThrottle = Math.min(100, baseThrottle + 5); }
-        if (justPressed(4)) { baseThrottle = Math.max(0, baseThrottle - 5); }
+        // 3. RB (5) / LB (4): Tăng giảm ga giữ nền (+5% / -5%) - chỉ áp dụng khi đã ARMED, có Link và không phải RC Transmitter
+        if (isGamepadArmed && hasLink && !inputs.isRcTransmitter) {
+          if (justPressed(5)) { baseThrottle = Math.min(100, baseThrottle + 5); }
+          if (justPressed(4)) { baseThrottle = Math.max(0, baseThrottle - 5); }
+        }
 
         // 4. D-Pad chọn motor test thủ công: Up(12)=M1, Right(15)=M2, Down(13)=M3, Left(14)=M4, Y(3)=ALL
         if (justPressed(12)) { activeMotor = 1; baseThrottle = 0; this.telemetryStore.sendCommand("m1"); }
@@ -375,64 +598,60 @@ class DashboardApplicationController {
         if (justPressed(14)) { activeMotor = 4; baseThrottle = 0; this.telemetryStore.sendCommand("m4"); }
         if (justPressed(3))  { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
 
-        // 5. ĐỌC CẦN ANALOG TRÁI (THROTTLE & YAW):
-        // Throttle: axes[1] đẩy lên là âm (-1.0 -> 0)
-        const rawLy = (gp.axes && gp.axes.length > 1) ? gp.axes[1] : 0;
-        const rawLx = (gp.axes && gp.axes.length > 0) ? gp.axes[0] : 0;
-        const rtVal = gp.buttons[7] ? gp.buttons[7].value : 0;
-        const stickLy = Math.max(0, -deadzone(rawLy));
-        const stickThr = Math.max(rtVal, stickLy);
-
-        const maxCap = 100; // Trần ga toàn dải 100% theo yêu cầu
-        let totalThr = isGamepadArmed ? Math.min(maxCap, Math.max(0, Math.round((baseThrottle + stickThr * maxCap) * 10) / 10)) : 0;
-
-        // Yaw: axes[0] (-45° .. +45°)
-        const yawDeg = Math.round(deadzone(rawLx) * 45.0 * 10) / 10;
-
-        // 6. ĐỌC CẦN ANALOG PHẢI (ROLL & PITCH) - TƯƠNG THÍCH MỌI DÒNG TAY CẦM A124 / XBOX:
-        let rawRx = 0;
-        let rawRy = 0;
-        if (gp.axes) {
-          if (gp.axes.length >= 4) {
-            rawRx = gp.axes[2];
-            rawRy = gp.axes[3];
+        // 5. KIỂM TRA ARMED TỪ BẤT KỲ NGUỒN NÀO (tay cầm hoặc Web UI)
+        // effectiveArmed = true nếu: (a) đã nhấn nút ARM trên tay cầm, HOẶC (b) ESP32 xác nhận ARMED từ Web UI
+        const effectiveArmed = isGamepadArmed || (hasLink && this.telemetryStore.lastEspState === "ARMED");
+        if (!effectiveArmed) {
+          if (lblStickL) lblStickL.textContent = `T:${inputs.thrPct.toFixed(0)}% | Y:${inputs.yawDeg > 0 ? "+" : ""}${inputs.yawDeg.toFixed(0)}°`;
+          if (lblStickR) lblStickR.textContent = `P:${inputs.pitchDeg > 0 ? "+" : ""}${inputs.pitchDeg.toFixed(0)}° | R:${inputs.rollDeg > 0 ? "+" : ""}${inputs.rollDeg.toFixed(0)}°`;
+          if (lblGamepadArm && hasLink) {
+            lblGamepadArm.textContent = inputs.isRcTransmitter ? "DISARM (SA)" : "DISARM";
+            lblGamepadArm.style.color = "#ef4444";
           }
-          // Một số tay cầm USB generic A124 đặt cần phải tại axes[3] và axes[4] (khi axes[2] là trigger)
-          if (gp.axes.length >= 5 && Math.abs(rawRx) < 0.05 && Math.abs(rawRy) < 0.05) {
-            if (Math.abs(gp.axes[3]) > 0.05 || Math.abs(gp.axes[4]) > 0.05) {
-              rawRx = gp.axes[3];
-              rawRy = gp.axes[4];
-            }
-          }
-        }
-        const rollDeg  = Math.round(deadzone(rawRx) * 25.0 * 10) / 10;
-        const pitchDeg = Math.round(-deadzone(rawRy) * 25.0 * 10) / 10;
-
-        // 7. CẬP NHẬT GIAO DIỆN HIỂN THỊ TRỰC TIẾP TRÊN WEB
-        if (lblStickL) lblStickL.textContent = `T:${totalThr.toFixed(0)}% | Y:${yawDeg > 0 ? "+" : ""}${yawDeg.toFixed(0)}°`;
-        if (lblStickR) lblStickR.textContent = `P:${pitchDeg > 0 ? "+" : ""}${pitchDeg.toFixed(0)}° | R:${rollDeg > 0 ? "+" : ""}${rollDeg.toFixed(0)}°`;
-        if (lblGamepadArm) {
-          lblGamepadArm.textContent = isGamepadArmed ? "ARMED" : "DISARM";
-          lblGamepadArm.style.color = isGamepadArmed ? "#22c55e" : "#ef4444";
+          prevButtons = btns;
+          requestAnimationFrame(pollGamepad);
+          return;
         }
 
-        // 8. PHÁT GÓI TIN ĐIỀU KHIỂN TỚI ESP32 QUA WEBSOCKET (30 Hz hoặc khi giá trị thay đổi)
+        // 6. TÍNH TOÁN THROTTLE KHI ĐANG ARMED (từ tay cầm hoặc Web UI)
+        const maxCap = 100;
+        const gpadThrPct = inputs.rawThr * maxCap; // 0..100 từ cần ga vật lý
+        // Khi stick >2%: quyền điều khiển ga thuộc về cần ga vật lý (không dùng espFloor)
+        // Khi stick ở đáy (<2%) và chưa chỉnh RB/LB: giữ nguyên mức ga ESP32 xác nhận (web slider)
+        const espFloor = (gpadThrPct < 2.0 && baseThrottle === 0)
+          ? (this.telemetryStore.lastTargetThrottle || 0)
+          : 0;
+        let totalThr = (effectiveArmed && hasLink)
+          ? Math.min(maxCap, Math.max(0, Math.round((baseThrottle + gpadThrPct + espFloor) * 10) / 10))
+          : 0;
+
+        // Cập nhật giao diện khi đang ARMED
+        if (lblStickL) lblStickL.textContent = `T:${totalThr.toFixed(0)}% | Y:${inputs.yawDeg > 0 ? "+" : ""}${inputs.yawDeg.toFixed(0)}°`;
+        if (lblStickR) lblStickR.textContent = `P:${inputs.pitchDeg > 0 ? "+" : ""}${inputs.pitchDeg.toFixed(0)}° | R:${inputs.rollDeg > 0 ? "+" : ""}${inputs.rollDeg.toFixed(0)}°`;
+        if (lblGamepadArm && hasLink) {
+          lblGamepadArm.textContent = inputs.isRcTransmitter ? "ARMED (SA)" : "ARMED";
+          lblGamepadArm.style.color = "#22c55e";
+        }
+
+        // 7. PHÁT GÓI TIN ĐIỀU KHIỂN TỚI ESP32 (DUY NHẤT KHI ĐANG ARMED TAY CẦM)
         const now = performance.now();
         const thrChanged = Math.abs(totalThr - lastSentThrottle) >= 0.5;
-        const attChanged = Math.abs(rollDeg - lastSentRoll) >= 0.5 || Math.abs(pitchDeg - lastSentPitch) >= 0.5 || Math.abs(yawDeg - lastSentYaw) >= 0.5;
-        const heartbeatDue = (isGamepadArmed || totalThr > 0) && (now - lastSendTime >= 350);
+        const attChanged = Math.abs(inputs.rollDeg - lastSentRoll) >= 0.5 || Math.abs(inputs.pitchDeg - lastSentPitch) >= 0.5 || Math.abs(inputs.yawDeg - lastSentYaw) >= 0.5;
+        // Heartbeat mỗi 200ms để duy trì sóng và chống timeout watchdog 1500ms của ESP32
+        const heartbeatDue = (now - lastSendTime >= 200);
 
-        if (((thrChanged || attChanged) && (now - lastSendTime >= 30)) || heartbeatDue || totalThr === 0 && lastSentThrottle > 0) {
+        if (hasLink && (((thrChanged || attChanged) && (now - lastSendTime >= 30)) || heartbeatDue)) {
           lastSentThrottle = totalThr;
-          lastSentRoll     = rollDeg;
-          lastSentPitch    = pitchDeg;
-          lastSentYaw      = yawDeg;
+          lastSentRoll     = inputs.rollDeg;
+          lastSentPitch    = inputs.pitchDeg;
+          lastSentYaw      = inputs.yawDeg;
           lastSendTime     = now;
 
           if (activeMotor === 0) {
-            // Gửi gói tin RC chuẩn: RC,<throttle>,<roll>,<pitch>,<yaw>,<arm>
-            const armCode = isGamepadArmed ? 1 : 0;
-            this.telemetryStore.sendCommand(`RC,${totalThr.toFixed(1)},${rollDeg.toFixed(1)},${pitchDeg.toFixed(1)},${yawDeg.toFixed(1)},${armCode}`);
+            // Gửi gói tin RC chuẩn: RC,<throttle>,<roll>,<pitch>,<yaw>,1
+            const rcCommand = `RC,${totalThr.toFixed(1)},${inputs.rollDeg.toFixed(1)},${inputs.pitchDeg.toFixed(1)},${inputs.yawDeg.toFixed(1)},1`;
+            this.telemetryStore.sendCommand(rcCommand);
+            // Đồng bộ thanh trượt hiển thị trên Web với cần ga tay cầm khi đang ARMED bằng tay cầm
             setThrottle(totalThr);
           } else {
             setMotorTest(activeMotor, Math.min(100, totalThr));

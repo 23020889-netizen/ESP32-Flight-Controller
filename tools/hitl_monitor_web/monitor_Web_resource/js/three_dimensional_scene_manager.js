@@ -33,11 +33,23 @@ class ThreeDimensionalSceneManager {
 
     this.droneGroup = new THREE.Group();
     this.scene.add(this.droneGroup);
-    DroneModelLoader.loadQuadcopterModel(this.droneGroup, (propellers) => {
-      this.propellerNodes = propellers;
-    });
+    this.setDroneModel("glb_cesium");
     this.bindCameraOrbitEvents();
     this.handleContainerResize();
+  }
+
+  /**
+   * Switches the active 3D Quadcopter model at runtime.
+   * @param {string} modelType Identifier ("glb_cesium", "glb_annelida", "glb_laser", "glb_s9").
+   */
+  setDroneModel(modelType) {
+    DroneModelLoader.loadQuadcopterModel(
+      this.droneGroup,
+      (propellers) => {
+        this.propellerNodes = propellers;
+      },
+      modelType
+    );
   }
 
   /**
@@ -87,7 +99,12 @@ class ThreeDimensionalSceneManager {
     // Tăng tốc độ slerp lên 32 để mô hình 3D xoay mượt mà 60 FPS, không có độ trễ quán tính giả
     this.droneGroup.quaternion.slerp(this.targetQuaternion, Math.min(1, deltaSeconds * 32));
     this.propellerNodes.forEach((propeller, index) => {
-      propeller.rotateZ(this.spinDirections[index] * (sample.m[index] || 0) * deltaSeconds * 0.08);
+      const spinDelta = this.spinDirections[index] * (sample.m[index] || 0) * deltaSeconds * 0.08;
+      if (propeller.userData && propeller.userData.spinAxis === "z") {
+        propeller.rotateZ(spinDelta);
+      } else {
+        propeller.rotateY(spinDelta);
+      }
     });
     this.camera.position.set(
       this.cameraDistance * Math.sin(this.azimuthRadians) * Math.cos(this.elevationRadians),

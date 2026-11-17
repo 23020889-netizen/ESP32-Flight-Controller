@@ -14,7 +14,7 @@ SƠ ĐỒ NÚT BẤM TAY CẦM XBOX:
   - Nút [RB] / [LB]   : Tăng / Giảm mức ga giữ cố định (+5% / -5%)
   - [D-Pad Lên]       : Chọn riêng Motor 1 (GPIO 7 - ESC Vàng)
   - [D-Pad Phải]      : Chọn riêng Motor 2 (GPIO 6 - ESC Vàng)
-  - [D-Pad Xuống]     : Chọn riêng Motor 3 (GPIO 5 - ESC Đen 40A, Min=850us)
+  - [D-Pad Xuống]     : Chọn riêng Motor 3 (GPIO 5; dải ESC chung 1000–2000us)
   - [D-Pad Trái]      : Chọn riêng Motor 4 (GPIO 4 - ESC Vàng)
   - Nút [Y]           : Chọn đồng loạt CẢ 4 ĐỘNG CƠ (ALL MOTORS)
   - Nút [Start/Menu]  : Bật/Tắt trộn nghiêng Quad-X (Roll/Pitch/Yaw bằng cần phải)
@@ -217,7 +217,7 @@ def main():
                 base_throttle = 0.0
                 last_sent_cmd = ""
                 send_cmd("stop")
-                print("\n[XBOX] [NUT B] >>> EMERGENCY STOP / DISARM! Ca 4 motor ve 0% (M1,2,4=1000us, M3=850us).")
+                print("\n[XBOX] [NUT B] >>> EMERGENCY STOP / DISARM! Ca 4 motor ve 1000us (dai chung 1000-2000us).")
 
             # 2. Nút [A]: ARM (Mở khóa an toàn)
             elif pressed & XINPUT_GAMEPAD_A:

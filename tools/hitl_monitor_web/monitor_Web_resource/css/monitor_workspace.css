@@ -1,9 +1,13 @@
+/* ============================================================================
+ * 1. DESKTOP & LANDSCAPE COCKPIT WORKSPACE (1440px & 1180px)
+ * ============================================================================ */
 .flex-workspace {
   flex: 1;
   display: flex;
   min-height: 0;
   gap: 0;
   align-items: stretch;
+  position: relative;
 }
 
 .dock-col {
@@ -12,16 +16,28 @@
   gap: 8px;
   min-height: 0;
   overflow-y: auto;
-  scrollbar-width: none;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bd) transparent;
   flex-shrink: 0;
+  padding-bottom: 4px;
+}
+
+.dock-col::-webkit-scrollbar {
+  width: 4px;
+}
+
+.dock-col::-webkit-scrollbar-thumb {
+  background: var(--bd);
+  border-radius: 4px;
 }
 
 #colLeft {
-  width: 310px;
+  width: clamp(295px, 23vw, 345px);
 }
 
 #colRight {
-  width: 390px;
+  width: clamp(320px, 26vw, 400px);
 }
 
 .flex-splitter {
@@ -36,22 +52,25 @@
 .flex-splitter::after {
   content: "";
   width: 3px;
-  height: 42px;
+  height: 44px;
   border-radius: 3px;
   background: var(--bd);
-  transition: 0.15s;
+  transition: 0.15s ease;
 }
 
 .flex-splitter:hover::after,
 .flex-splitter.dragging::after {
-  background: var(--c1);
-  height: 72px;
-  box-shadow: 0 0 10px var(--c1);
+  background: var(--primary);
+  height: 76px;
+  box-shadow: 0 0 12px var(--primary);
 }
 
+/* ============================================================================
+ * 2. 3D WEBGL VIEWPORT & FLOATING HUD OVERLAYS (LAYER 1 & LAYER 2)
+ * ============================================================================ */
 .viewport-pane {
   flex: 1;
-  min-width: 260px;
+  min-width: 280px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -60,19 +79,35 @@
 
 .vp-hdr {
   position: absolute;
-  top: 10px;
-  left: 12px;
+  top: 12px;
+  left: 14px;
+  right: 14px;
   z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   font-size: 11px;
-  letter-spacing: 1px;
-  color: var(--mu);
+  font-weight: 600;
+  letter-spacing: 0.9px;
+  color: var(--tx-sec);
   pointer-events: none;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+}
+
+.vp-badge {
+  background: var(--gl-inset);
+  border: 1px solid var(--bd);
+  border-radius: var(--r-pill);
+  padding: 4px 11px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 #gl {
   flex: 1;
   width: 100%;
   height: 100%;
+  min-height: 260px;
   cursor: grab;
   position: relative;
 }
@@ -83,14 +118,18 @@
 
 .bot {
   position: absolute;
-  bottom: 10px;
+  bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   padding: 6px 12px;
+  border-radius: var(--r-pill);
   z-index: 2;
+  max-width: calc(100% - 20px);
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .sep {
@@ -99,3 +138,172 @@
   background: var(--bd);
 }
 
+/* ============================================================================
+ * 3. IOS SEGMENTED VIEW SWITCHER (MOBILE & TABLET PORTRAIT)
+ * ============================================================================ */
+.mobile-view-tabs {
+  display: none;
+  background: var(--gl-inset);
+  border: 1px solid var(--bd);
+  border-radius: var(--r-md);
+  padding: 4px;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.mobile-view-tabs button {
+  flex: 1;
+  min-height: 36px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--mu);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mobile-view-tabs button.act {
+  background: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 2px 10px rgba(10, 132, 255, 0.35);
+}
+
+/* ============================================================================
+ * 4. RESPONSIVE BREAKPOINTS (1180px / 820px iPad / 390px iPhone)
+ * ============================================================================ */
+
+/* Mốc 1180px: iPad Landscape / Laptop 13-inch */
+@media (max-width: 1220px) {
+  #colLeft {
+    width: 285px;
+  }
+
+  #colRight {
+    width: 305px;
+  }
+
+  .hdr {
+    padding: 7px 10px;
+    gap: 6px 8px;
+  }
+}
+
+/* Mốc 820px: iPad Portrait / Tablet (Không gian 3D phía trên + 2 cột điều khiển/đồ thị phía dưới) */
+@media (max-width: 960px) {
+  body {
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .ui {
+    position: relative;
+    height: auto;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  .flex-splitter {
+    display: none;
+  }
+
+  .flex-workspace {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "viewport viewport"
+      "left right";
+    gap: 10px;
+    overflow: visible;
+  }
+
+  #colCenter {
+    grid-area: viewport;
+    height: 380px;
+    min-height: 340px;
+  }
+
+  #colLeft {
+    grid-area: left;
+    width: 100% !important;
+    overflow: visible;
+  }
+
+  #colRight {
+    grid-area: right;
+    width: 100% !important;
+    overflow: visible;
+  }
+}
+
+/* Mốc 390px: iPhone & Smartphone (Segmented Tab View + Chống tràn ngang 100%) */
+@media (max-width: 640px) {
+  .ui {
+    padding:
+      max(6px, env(safe-area-inset-top))
+      8px
+      max(12px, env(safe-area-inset-bottom))
+      8px;
+    gap: 8px;
+  }
+
+  .hdr {
+    padding: 8px 10px;
+  }
+
+  .nav-toggles {
+    width: 100%;
+    justify-content: space-between;
+    order: 3;
+  }
+
+  .chips {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .mobile-view-tabs {
+    display: flex;
+  }
+
+  .flex-workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  #colCenter {
+    height: 320px;
+    min-height: 290px;
+    order: 1;
+  }
+
+  #colLeft {
+    order: 2;
+    width: 100% !important;
+  }
+
+  #colRight {
+    order: 3;
+    width: 100% !important;
+  }
+
+  /* Lọc tab trên iPhone khi người dùng bấm chọn chế độ xem */
+  .ui[data-mobile-tab="controls"] #colRight {
+    display: none;
+  }
+
+  .ui[data-mobile-tab="telemetry"] #colLeft {
+    display: none;
+  }
+
+  .ui[data-mobile-tab="3d"] #colLeft,
+  .ui[data-mobile-tab="3d"] #colRight {
+    display: none;
+  }
+
+  .ui[data-mobile-tab="3d"] #colCenter {
+    height: calc(100dvh - 210px);
+    min-height: 380px;
+  }
+}

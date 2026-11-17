@@ -15,6 +15,11 @@ class TelemetryDataStore {
     this.packetFrequencyHertz = 0;
     this.packetsInCurrentSecond = 0;
 
+    // Cache trạng thái xác nhận từ ESP32 firmware
+    this.lastEspState = "DISARMED";
+    this.lastRcSequence = 0;
+    this.lastTargetThrottle = 0;
+
     // Cache giá trị trạng thái tức thời
     this.currentRoll = 0;
     this.currentPitch = 0;
@@ -164,8 +169,13 @@ class TelemetryDataStore {
       }
     }
     // 4. Phân tích trạng thái động cơ (dòng cuối của mỗi chu kỳ Telemetry):
-    // [ESC_QUAD] State:ARMED | M1(P7-CCW):1000us( 0.0%) | M2(P6-CCW):1000us( 0.0%) | M3(P5-CW): 850us( 0.0%) | M4(P4-CW):1000us( 0.0%) @ 50Hz
+    // [ESC_QUAD] State:ARMED | M1(P7-CCW):1000us( 0.0%) | M2(P6-CCW):1000us( 0.0%) | M3(P5-CW):1000us( 0.0%) | M4(P4-CW):1000us( 0.0%) @ 50Hz
     else if (line.includes("[ESC_QUAD]")) {
+      if (line.includes("State:ARMED")) {
+        this.lastEspState = "ARMED";
+      } else if (line.includes("State:DISARMED")) {
+        this.lastEspState = "DISARMED";
+      }
       const pcts = [...line.matchAll(/\(\s*([-\d.]+)%\)/g)];
       if (pcts.length >= 4) {
         this.currentMotors = [
@@ -219,6 +229,21 @@ class TelemetryDataStore {
       this.webSocketConnection.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
+          const linkState = document.getElementById("espLinkState");
+          const rcState = document.getElementById("espRcState");
+          if (parsed) {
+            if (parsed.state !== undefined) this.lastEspState = parsed.state;
+            if (parsed.rc_seq !== undefined) this.lastRcSequence = parsed.rc_seq;
+            if (parsed.sp_t !== undefined) this.lastTargetThrottle = Number(parsed.sp_t);
+          }
+          if (linkState && parsed && parsed.state !== undefined) {
+            const network = parsed.sta_connected ? `VNU ${parsed.sta_ip || ""}` : "SoftAP/STA offline";
+            const pwm = parsed.pwm_ok === 0 ? "PWM lỗi" : "PWM OK";
+            linkState.textContent = `${network} | ${parsed.state} | ${pwm}`;
+          }
+          if (rcState && parsed && parsed.rc_seq !== undefined) {
+            rcState.textContent = `#${parsed.rc_seq} | ${Number(parsed.sp_t || 0).toFixed(1)}%`;
+          }
           // Bỏ qua các bản tin log thuần túy {"log":"..."} để không ghi đè góc 0 vào đồ thị 3D
           if (parsed && (typeof parsed.roll === "number" || Array.isArray(parsed.m))) {
             this.pushSample(parsed);
@@ -231,6 +256,11 @@ class TelemetryDataStore {
           bLiveWs.style.background = "#0284c7";
           bLiveWs.textContent = "📡 Kết Nối WiFi";
         }
+        const linkState = document.getElementById("espLinkState");
+        if (linkState) {
+          linkState.textContent = "Mất kết nối (Disconnected)";
+        }
+        this.lastEspState = "DISARMED";
         if (this.connectionMode === "ws") {
           setTimeout(() => this.connectionMode === "ws" && this.connectWebSocket(endpointUrl), 2000);
         }
@@ -239,6 +269,19 @@ class TelemetryDataStore {
         console.warn("[WebSocket Lỗi]", err);
       };
     } catch (_connectionError) {}
+  }
+
+  /**
+   * Kiểm tra xem đường truyền vật lý (WebSocket hoặc WebSerial) có đang mở và sẵn sàng hay không
+   */
+  isTransportOpen() {
+    if (this.connectionMode === "ws") {
+      return !!(this.webSocketConnection && this.webSocketConnection.readyState === WebSocket.OPEN);
+    }
+    if (this.connectionMode === "serial") {
+      return !!(this.serialPort && this.serialPort.readable && this.serialPort.writable);
+    }
+    return false;
   }
 
   /**

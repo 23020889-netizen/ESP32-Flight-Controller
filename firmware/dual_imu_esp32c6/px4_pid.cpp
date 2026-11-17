@@ -111,11 +111,14 @@ float PX4_AttitudeControl::wrapAngle180(float angle_deg) {
     return angle_deg;
 }
 
-void PX4_AttitudeControl::update(const float target_euler[3], const float actual_euler[3], float rate_sp_out[3]) {
+void PX4_AttitudeControl::update(const float target_euler[3], const float actual_euler[3], float rate_sp_out[3], bool yaw_valid) {
     // Chuyển đổi sai số góc sang Radian
     float err_roll_rad  = (target_euler[0] - actual_euler[0]) * DEG_TO_RAD;
     float err_pitch_rad = (target_euler[1] - actual_euler[1]) * DEG_TO_RAD;
-    float err_yaw_rad   = wrapAngle180(target_euler[2] - actual_euler[2]) * DEG_TO_RAD;
+    float err_yaw_rad   = 0.0f;
+    if (yaw_valid) {
+        err_yaw_rad = wrapAngle180(target_euler[2] - actual_euler[2]) * DEG_TO_RAD;
+    }
 
     // Outer P Control ra target angular rate (rad/s)
     rate_sp_out[0] = constrain(err_roll_rad  * _roll_p,  -_max_roll_rate_rad,  _max_roll_rate_rad);
@@ -132,11 +135,11 @@ void PX4_AttitudeControl::reset() {
 // ============================================================================
 PX4_QuadMixer::PX4_QuadMixer() {}
 
-void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, float yaw_torque, uint16_t motor_out_us[4]) {
-    // Nếu throttle quá nhỏ (< 2%), cả 4 động cơ giữ xung Idle
+void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch_torque, float yaw_torque, float motor_norm_out[4]) {
+    // Nếu throttle quá nhỏ (< 2%), cả 4 động cơ giữ mức 0
     if (throttle < 0.02f) {
         for (int i = 0; i < 4; i++) {
-            motor_out_us[i] = ESC_PULSE_IDLE_US;
+            motor_norm_out[i] = 0.0f;
         }
         return;
     }
@@ -150,14 +153,7 @@ void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, f
     pitch_torque = constrain(pitch_torque, -max_authority, max_authority);
     yaw_torque   = constrain(yaw_torque,   -max_authority * 0.5f, max_authority * 0.5f);
 
-        // Cấu hình Quad-X chuẩn PX4 với Phản Hồi Âm Tự Cân Bằng (Negative Feedback 100%):
-    // - Bên nào nghiêng THẤP xuống -> Động cơ bên đó TĂNG GA đẩy lên thăng bằng!
-    // - Khi nghiêng PHẢI (Roll > 0, tau_roll < 0) -> Cánh phải thấp: M1(FR) & M4(RR) TĂNG ga, M2(RL) & M3(FL) GIẢM ga.
-    // - Khi nghiêng TRÁI (Roll < 0, tau_roll > 0) -> Cánh trái thấp: M2(RL) & M3(FL) TĂNG ga, M1(FR) & M4(RR) GIẢM ga.
-    // - Khi ngóc MŨI    (Pitch > 0, tau_pitch < 0) -> Đuôi thấp:     M2(RL) & M4(RR) TĂNG ga, M1(FR) & M3(FL) GIẢM ga.
-    // - Khi chúc MŨI    (Pitch < 0, tau_pitch > 0) -> Mũi thấp:      M1(FR) & M3(FL) TĂNG ga, M2(RL) & M4(RR) GIẢM ga.
-    // - Khi xoay YAW CW (Yaw > 0, tau_yaw < 0)    -> Hãm xoay:     M3(FL) & M4(RR) CW TĂNG ga, M1(FR) & M2(RL) CCW GIẢM ga.
-    //
+    // Cấu hình Quad-X chuẩn PX4 với Phản Hồi Âm Tự Cân Bằng (Negative Feedback 100%):
     // Motor 1: GPIO 7 (Front-Right, CCW) = T - R + P + Y
     // Motor 2: GPIO 6 (Rear-Left,   CCW) = T + R - P + Y
     // Motor 3: GPIO 5 (Front-Left,  CW)  = T + R + P - Y
@@ -196,10 +192,21 @@ void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, f
         for (int i = 0; i < 4; i++) m[i] += shift;
     }
 
-    // Chuyển đổi sang xung Microsecond (1000 .. 2000 us)
+    // Xuất ra mảng lệnh chuẩn hóa [0.0 .. 1.0]
     for (int i = 0; i < 4; i++) {
-        m[i] = constrain(m[i], min_floor, 1.0f);
-        motor_out_us[i] = ESC_PULSE_MIN_US + (uint16_t)(m[i] * (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US));
+        motor_norm_out[i] = constrain(m[i], 0.0f, 1.0f);
+    }
+}
+
+void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, float yaw_torque, uint16_t motor_out_us[4]) {
+    float norm[4];
+    mixNormalized(throttle, roll_torque, pitch_torque, yaw_torque, norm);
+    for (int i = 0; i < 4; i++) {
+        if (norm[i] <= 0.001f) {
+            motor_out_us[i] = ESC_PULSE_IDLE_US;
+        } else {
+            motor_out_us[i] = ESC_PULSE_MIN_US + (uint16_t)(norm[i] * (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US));
+        }
     }
 }
 
@@ -210,7 +217,10 @@ PX4_FlightController::PX4_FlightController()
     : _target_roll(0.0f), _target_pitch(0.0f), _target_yaw(0.0f), _target_throttle(0.0f),
       _filtered_gx(0.0f), _filtered_gy(0.0f), _filtered_gz(0.0f),
       _invert_pitch(false) {
+    _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
+    _tau[0] = 0.0f; _tau[1] = 0.0f; _tau[2] = 0.0f;
     for (int i = 0; i < 4; i++) {
+        _motor_norm[i] = 0.0f;
         _motor_outputs_us[i] = ESC_PULSE_DISARM_US;
     }
 }
@@ -276,14 +286,18 @@ void PX4_FlightController::reset() {
     _rate_pid_yaw.reset();
     _att_control.reset();
 
+    _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
+    _tau[0] = 0.0f; _tau[1] = 0.0f; _tau[2] = 0.0f;
+
     for (int i = 0; i < 4; i++) {
+        _motor_norm[i] = 0.0f;
         _motor_outputs_us[i] = ESC_PULSE_DISARM_US;
     }
 }
 
 void PX4_FlightController::update(float actual_roll, float actual_pitch, float actual_yaw,
-                                 float raw_gx, float raw_gy, float raw_gz,
-                                 float dt, bool is_armed) {
+                                  float raw_gx, float raw_gy, float raw_gz,
+                                  float dt, bool is_armed, bool yaw_valid) {
     // 1. Lọc nhiễu rung cơ học trên Gyro bằng bộ lọc 2nd-Order Butterworth LPF (30Hz)
     _filtered_gx = _gyro_filter_x.apply(raw_gx);
     _filtered_gy = _gyro_filter_y.apply(raw_gy);
@@ -294,11 +308,26 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
     float actual_gy_rad = _filtered_gy * DEG_TO_RAD;
     float actual_gz_rad = _filtered_gz * DEG_TO_RAD;
 
-    // Nếu chưa Arm hoặc ga dưới ngưỡng cất cánh (< 5%): Không can thiệp động cơ
-    if (!is_armed || _target_throttle < 0.05f) {
+    // Nếu chưa Arm: Khóa cứng an toàn
+    if (!is_armed) {
         reset();
         for (int i = 0; i < 4; i++) {
-            _motor_outputs_us[i] = is_armed ? ESC_PULSE_IDLE_US : ESC_PULSE_DISARM_US;
+            _motor_norm[i] = 0.0f;
+            _motor_outputs_us[i] = ESC_PULSE_DISARM_US;
+        }
+        return;
+    }
+
+    // Nếu Armed nhưng mức ga < 2%: Giữ động cơ ở mức Idle Spin an toàn, không tích phân PID
+    if (_target_throttle < 0.02f) {
+        _rate_pid_roll.reset();
+        _rate_pid_pitch.reset();
+        _rate_pid_yaw.reset();
+        _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
+        _tau[0] = 0.0f; _tau[1] = 0.0f; _tau[2] = 0.0f;
+        for (int i = 0; i < 4; i++) {
+            _motor_norm[i] = 0.0f;
+            _motor_outputs_us[i] = ESC_PULSE_IDLE_US;
         }
         return;
     }
@@ -306,17 +335,21 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
     // 2. VÒNG NGOÀI (Outer Angle P-Loop): Tính tốc độ góc mục tiêu (rad/s)
     float target_att[3] = { _target_roll, _target_pitch, _target_yaw };
     float actual_att[3] = { actual_roll,  actual_pitch,  actual_yaw  };
-    float rate_sp_rad[3] = { 0.0f, 0.0f, 0.0f };
 
-    _att_control.update(target_att, actual_att, rate_sp_rad);
+    _att_control.update(target_att, actual_att, _rate_sp_rad, yaw_valid);
 
     // 3. VÒNG TRONG (Inner Angular Rate PID-Loop): Tính mô-men điều khiển
     bool allow_integral = (_target_throttle >= 0.10f); // Chỉ cho phép tích phân khi ga >= 10%
-    float tau_roll  = _rate_pid_roll.update(rate_sp_rad[0], actual_gx_rad, dt, allow_integral);
-    float tau_pitch = _rate_pid_pitch.update(rate_sp_rad[1], actual_gy_rad, dt, allow_integral);
-    if (_invert_pitch) tau_pitch = -tau_pitch;
-    float tau_yaw   = _rate_pid_yaw.update(rate_sp_rad[2],  actual_gz_rad, dt, allow_integral);
+    _tau[0] = _rate_pid_roll.update(_rate_sp_rad[0], actual_gx_rad, dt, allow_integral);
+    _tau[1] = _rate_pid_pitch.update(_rate_sp_rad[1], actual_gy_rad, dt, allow_integral);
+    if (_invert_pitch) _tau[1] = -_tau[1];
+    _tau[2] = _rate_pid_yaw.update(_rate_sp_rad[2],  actual_gz_rad, dt, allow_integral);
 
-    // 4. BỘ PHỐI TRỘN (Mixer): Phân bổ mô-men và ga ra 4 động cơ
-    _mixer.mix(_target_throttle, tau_roll, tau_pitch, tau_yaw, _motor_outputs_us);
+    // 4. BỘ PHỐI TRỘN (Mixer / Allocator): Phân bổ mô-men và ga ra 4 kênh chuẩn hóa [0..1]
+    _mixer.mixNormalized(_target_throttle, _tau[0], _tau[1], _tau[2], _motor_norm);
+
+    // Ánh xạ ra xung Microsecond cho telemetry
+    for (int i = 0; i < 4; i++) {
+        _motor_outputs_us[i] = ESC_PULSE_MIN_US + (uint16_t)(_motor_norm[i] * (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US));
+    }
 }

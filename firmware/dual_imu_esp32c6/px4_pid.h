@@ -77,10 +77,11 @@ public:
     /**
      * @brief Tính toán tốc độ góc mục tiêu
      * @param target_euler [Roll, Pitch, Yaw] mục tiêu (Độ)
-     * @param actual_euler [Roll, Pitch, Yaw] thực tế từ PX4 EKF (Độ)
+     * @param actual_euler [Roll, Pitch, Yaw] thực tế từ cảm biến (Độ)
      * @param rate_sp_out [Roll, Pitch, Yaw] tốc độ góc đầu ra (rad/s)
+     * @param yaw_valid Trạng thái hợp lệ của cảm biến góc Yaw
      */
-    void update(const float target_euler[3], const float actual_euler[3], float rate_sp_out[3]);
+    void update(const float target_euler[3], const float actual_euler[3], float rate_sp_out[3], bool yaw_valid = true);
 
     void reset();
 
@@ -98,18 +99,24 @@ private:
 
 /**
  * @brief Bộ phối trộn 4 động cơ Quad-X chuẩn PX4 kèm thuật toán chống bão hòa (Desaturation)
+ * Tách biệt hoàn toàn khỏi Controller: nhận Collective Thrust & Torques, xuất Normalized [0..1]
  */
 class PX4_QuadMixer {
 public:
     PX4_QuadMixer();
 
     /**
-     * @brief Phối trộn ga và mô-men 3 trục ra xung cho 4 động cơ
+     * @brief Phối trộn ga và mô-men 3 trục ra lệnh chuẩn hóa [0.0 .. 1.0] cho 4 động cơ
      * @param throttle Mức ga cơ bản [0.0 .. 1.0]
      * @param roll_torque Mô-men nghiêng ngang [-1.0 .. 1.0]
      * @param pitch_torque Mô-men chúc ngóc [-1.0 .. 1.0]
      * @param yaw_torque Mô-men xoay thân [-1.0 .. 1.0]
-     * @param motor_out_us Mảng đầu ra 4 kênh xung (1000 .. 2000 us)
+     * @param motor_norm_out Mảng đầu ra 4 kênh chuẩn hóa [0.0 .. 1.0]
+     */
+    void mixNormalized(float throttle, float roll_torque, float pitch_torque, float yaw_torque, float motor_norm_out[4]);
+
+    /**
+     * @brief Phối trộn ra xung PWM trực tiếp (tương thích ngược)
      */
     void mix(float throttle, float roll_torque, float pitch_torque, float yaw_torque, uint16_t motor_out_us[4]);
 };
@@ -143,18 +150,19 @@ public:
 
     /**
      * @brief Chạy chu trình điều khiển bay thời gian thực
-     * @param actual_roll Góc Roll từ EKF (độ)
-     * @param actual_pitch Góc Pitch từ EKF (độ)
-     * @param actual_yaw Góc Yaw từ EKF (độ)
+     * @param actual_roll Góc Roll từ cảm biến (độ)
+     * @param actual_pitch Góc Pitch từ cảm biến (độ)
+     * @param actual_yaw Góc Yaw từ cảm biến (độ)
      * @param raw_gx Tốc độ góc Gyro X (deg/s)
      * @param raw_gy Tốc độ góc Gyro Y (deg/s)
      * @param raw_gz Tốc độ góc Gyro Z (deg/s)
      * @param dt Chu kỳ thời gian (giây)
      * @param is_armed Trạng thái đã mở khóa động cơ hay chưa
+     * @param yaw_valid Trạng thái hợp lệ của góc Yaw
      */
     void update(float actual_roll, float actual_pitch, float actual_yaw,
                 float raw_gx, float raw_gy, float raw_gz,
-                float dt, bool is_armed);
+                float dt, bool is_armed, bool yaw_valid = true);
 
     void reset();
 
@@ -168,12 +176,28 @@ public:
     }
     float getTargetThrottle() const { return _target_throttle * 100.0f; }
 
+    // Lệnh chuẩn hóa u1..u4 [0.0 .. 1.0] từ Mixer
+    const float* getNormalizedMotorOutputs() const { return _motor_norm; }
+
+    // Xung vi giây xuất cho ESC
     const uint16_t* getMotorOutputsUs() const { return _motor_outputs_us; }
 
-    // Truy cập trực tiếp các bộ PID
+    // Mô-men ảo thân bay [tau_roll, tau_pitch, tau_yaw]
+    void getTorques(float& tr, float& tp, float& ty) const {
+        tr = _tau[0]; tp = _tau[1]; ty = _tau[2];
+    }
+
+    // Tốc độ góc mục tiêu [p_sp, q_sp, r_sp] (rad/s)
+    void getRateSetpoints(float& p, float& q, float& r) const {
+        p = _rate_sp_rad[0]; q = _rate_sp_rad[1]; r = _rate_sp_rad[2];
+    }
+
+    // Truy cập trực tiếp các bộ PID & Mixer
     PX4_RatePID& getRatePidRoll()  { return _rate_pid_roll; }
     PX4_RatePID& getRatePidPitch() { return _rate_pid_pitch; }
     PX4_RatePID& getRatePidYaw()   { return _rate_pid_yaw; }
+    PX4_QuadMixer& getMixer()      { return _mixer; }
+    PX4_AttitudeControl& getAttitudeControl() { return _att_control; }
 
 private:
     float _target_roll;
@@ -201,6 +225,9 @@ private:
     // Bộ phối trộn
     PX4_QuadMixer _mixer;
 
+    float    _rate_sp_rad[3];
+    float    _tau[3];
+    float    _motor_norm[4];
     uint16_t _motor_outputs_us[4];
     bool     _invert_pitch;
 };

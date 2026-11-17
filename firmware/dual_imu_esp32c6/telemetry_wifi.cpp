@@ -32,6 +32,8 @@ static uint32_t g_lastBroadcastMs = 0;
 static const uint32_t BROADCAST_INTERVAL_MS = 20; // 50 Hz siêu mượt mà cho 3D Monitor và PID Telemetry
 
 static String g_activeIpStr = "192.168.4.1";
+static uint8_t g_wsRxBuffer[MAX_WS_CLIENTS][512] = {};
+static size_t g_wsRxLength[MAX_WS_CLIENTS] = {};
 
 // ============================================================================
 // 2. HELPER CHUẨN RFC6455 WEBSOCKET HANDSHAKE
@@ -107,59 +109,62 @@ static void send_ws_text_frame(WiFiClient& client, const char* textPayload, size
 
 // Đọc Frame từ Web Browser
 static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
-    while (client.available() >= 2) {
-        uint8_t b1 = client.read();
-        uint8_t b2 = client.read();
+    size_t& buffered = g_wsRxLength[clientIndex];
+    while (client.available() > 0 && buffered < sizeof(g_wsRxBuffer[clientIndex])) {
+        int value = client.read();
+        if (value < 0) break;
+        g_wsRxBuffer[clientIndex][buffered++] = (uint8_t)value;
+    }
 
-        uint8_t opcode = b1 & 0x0F;
-        bool isMasked = (b2 & 0x80) != 0;
-        uint64_t payloadLen = b2 & 0x7F;
+    size_t consumed = 0;
+    while (buffered - consumed >= 2) {
+        const uint8_t* frame = g_wsRxBuffer[clientIndex] + consumed;
+        const uint8_t opcode = frame[0] & 0x0F;
+        const bool isMasked = (frame[1] & 0x80) != 0;
+        uint64_t payloadLen = frame[1] & 0x7F;
+        size_t headerLen = 2;
+        if (payloadLen == 126) {
+            if (buffered - consumed < 4) break;
+            payloadLen = ((uint64_t)frame[2] << 8) | frame[3];
+            headerLen = 4;
+        } else if (payloadLen == 127) {
+            // Command frames are capped below 256 bytes; reject oversized frame form.
+            buffered = 0;
+            return;
+        }
+        if (isMasked) headerLen += 4;
+        if (buffered - consumed < headerLen + payloadLen) break; // Keep partial TCP frame intact.
 
-        if (opcode == 0x08) { // Close frame
+        if (opcode == 0x08) {
             client.stop();
             g_wsHandshakeDone[clientIndex] = false;
+            buffered = 0;
             return;
         }
 
-        if (payloadLen == 126) {
-            if (client.available() < 2) return;
-            payloadLen = ((uint64_t)client.read() << 8) | client.read();
-        }
-
-        uint8_t maskKey[4] = {0};
-        if (isMasked) {
-            if (client.available() < 4) return;
-            for (int i = 0; i < 4; i++) maskKey[i] = client.read();
-        }
-
-        if (payloadLen > 256) {
-            for (uint64_t i = 0; i < payloadLen; i++) if (client.available()) client.read();
-            return;
-        }
-
-        char buffer[256];
-        size_t bytesRead = 0;
-        while (bytesRead < payloadLen && client.available()) {
-            buffer[bytesRead] = (char)client.read();
-            if (isMasked) {
-                buffer[bytesRead] ^= maskKey[bytesRead % 4];
+        if (payloadLen <= 256 && opcode == 0x01) {
+            char command[257];
+            const uint8_t* mask = isMasked ? frame + headerLen - 4 : nullptr;
+            const uint8_t* payload = frame + headerLen;
+            for (size_t i = 0; i < payloadLen; ++i) {
+                command[i] = (char)(payload[i] ^ (isMasked ? mask[i % 4] : 0));
             }
-            bytesRead++;
-        }
-        buffer[bytesRead] = '\0';
-
-        if (bytesRead > 0) {
-            String cmd = String(buffer);
+            command[payloadLen] = '\0';
+            String cmd(command);
             cmd.trim();
             if (cmd.length() > 0) {
-                // Giữ hàng đợi lệnh luôn mới nhất (xóa lệnh cũ nếu dồn quá 10)
-                while (g_cmdQueue.size() >= 10) {
-                    g_cmdQueue.pop_front();
-                }
+                while (g_cmdQueue.size() >= 10) g_cmdQueue.pop_front();
                 g_cmdQueue.push_back(cmd);
             }
         }
+        consumed += headerLen + (size_t)payloadLen;
     }
+
+    if (consumed > 0) {
+        memmove(g_wsRxBuffer[clientIndex], g_wsRxBuffer[clientIndex] + consumed, buffered - consumed);
+        buffered -= consumed;
+    }
+    if (buffered == sizeof(g_wsRxBuffer[clientIndex])) buffered = 0; // Drop malformed/full buffer.
 }
 
 // ============================================================================
@@ -183,19 +188,22 @@ void telemetry_wifi_init(const char* sta_ssid, const char* sta_pass,
 
     // 2. Kết nối vào mạng TTDB với IP tĩnh 10.11.162.210
     Serial.printf("[WIFI_STA] Dang cau hinh Static IP %s tren mang '%s'...", STA_STATIC_IP.toString().c_str(), sta_ssid);
-    if (!WiFi.config(STA_STATIC_IP, STA_GATEWAY, STA_SUBNET, STA_DNS)) {
-        Serial.println("\n[WIFI_STA] [CANH BAO] Cau hinh Static IP that bai! Se nhan DHCP tu router.");
+    const bool staticIpConfigured = WiFi.config(STA_STATIC_IP, STA_GATEWAY, STA_SUBNET, STA_DNS);
+    if (!staticIpConfigured) {
+        Serial.println("\n[WIFI_STA] [LOI] Cau hinh IP tinh that bai; khong ket noi STA bang DHCP.");
+    } else {
+        WiFi.setAutoReconnect(true);
+        WiFi.begin(sta_ssid, sta_pass);
     }
-    WiFi.begin(sta_ssid, sta_pass);
 
     uint32_t startMs = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startMs < 6000) {
+    while (staticIpConfigured && WiFi.status() != WL_CONNECTED && millis() - startMs < 6000) {
         delay(250);
         Serial.print(".");
     }
     Serial.println();
 
-    if (WiFi.status() == WL_CONNECTED) {
+    if (staticIpConfigured && WiFi.status() == WL_CONNECTED) {
         g_activeIpStr = WiFi.localIP().toString();
         Serial.println("------------------------------------------------------------------");
         Serial.printf("  [WIFI_STA] >>> KET NOI THANH CONG MANG TTDB: '%s'!\n", sta_ssid);
@@ -204,8 +212,8 @@ void telemetry_wifi_init(const char* sta_ssid, const char* sta_pass,
         Serial.println("------------------------------------------------------------------\n");
     } else {
         g_activeIpStr = "192.168.4.1";
-        Serial.printf("[WIFI_STA] [CANH BAO] Khong tim thay song '%s' (hoac timeout).\n", sta_ssid);
-        Serial.printf("[WIFI_STA] Hay bat WiFi may tinh vao: '%s' | Link: ws://192.168.4.1:%u\n\n", ap_ssid, wsPort);
+        Serial.printf("[WIFI_STA] [CANH BAO] STA '%s' chua ket noi; IP VNU %s hien chua truy cap duoc.\n", sta_ssid, STA_STATIC_IP.toString().c_str());
+        Serial.printf("[WIFI_STA] Du phong: ket noi may tinh vao '%s' | ws://192.168.4.1:%u\n\n", ap_ssid, wsPort);
     }
 
     // 3. Khởi động WebSocket Server
@@ -221,6 +229,8 @@ void telemetry_wifi_init(const char* sta_ssid, const char* sta_pass,
 // 4. CHU TRÌNH PHÁT VÀ NHẬN DỮ LIỆU TELEMETRY
 // ============================================================================
 void telemetry_wifi_update(const TelemetryPacket& packet) {
+    const bool staConnected = WiFi.status() == WL_CONNECTED;
+    g_activeIpStr = staConnected ? WiFi.localIP().toString() : AP_LOCAL_IP.toString();
     // 1. Quản lý kết nối mới từ WebSocket Server
     if (g_wsServer.hasClient()) {
         WiFiClient newClient = g_wsServer.accept();
@@ -271,24 +281,33 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
     }
     g_lastBroadcastMs = nowMs;
 
-    // Đóng gói JSON chi tiết bao gồm cả EKF Fused, MPU-6050 và Xsens MTi-3
-    char jsonMsg[420];
+    // Đóng gói JSON chi tiết bao gồm cả EKF Fused, MPU-6050, Xsens MTi-3, Setpoint, Torque và Allocator
+    char jsonMsg[512];
     snprintf(jsonMsg, sizeof(jsonMsg),
              "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
              "\"mpu_r\":%.1f,\"mpu_p\":%.1f,\"mpu_y\":%.1f,"
              "\"xs_r\":%.1f,\"xs_p\":%.1f,\"xs_y\":%.1f,"
              "\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,"
              "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"z\":%.2f,\"vz\":%.2f,"
-             "\"m\":[%.1f,%.1f,%.1f,%.1f],\"us\":[%u,%u,%u,%u],\"state\":\"%s\"}",
+             "\"m\":[%.1f,%.1f,%.1f,%.1f],\"us\":[%u,%u,%u,%u],\"state\":\"%s\","
+             "\"sp_r\":%.1f,\"sp_p\":%.1f,\"sp_y\":%.1f,\"sp_t\":%.1f,"
+             "\"tau\":[%.2f,%.2f,%.2f],\"u\":[%.2f,%.2f,%.2f,%.2f],\"yaw_ok\":%d,"
+             "\"rc_seq\":%lu,\"sta_connected\":%d,\"sta_ip\":\"%s\",\"pwm_ok\":%d}",
              packet.roll, packet.pitch, packet.yaw,
              packet.mpu_roll, packet.mpu_pitch, packet.mpu_yaw,
              packet.xs_roll,  packet.xs_pitch,  packet.xs_yaw,
              packet.ax,   packet.ay,   packet.az,
              packet.gx,   packet.gy,   packet.gz,
              packet.z,    packet.vz,
-             packet.m_pct[0] * 10.0f, packet.m_pct[1] * 10.0f, packet.m_pct[2] * 10.0f, packet.m_pct[3] * 10.0f,
+             packet.m_pct[0], packet.m_pct[1], packet.m_pct[2], packet.m_pct[3],
              packet.m_us[0],  packet.m_us[1],  packet.m_us[2],  packet.m_us[3],
-             packet.state_str);
+             packet.state_str,
+             packet.sp_roll, packet.sp_pitch, packet.sp_yaw, packet.sp_throttle,
+             packet.tau[0], packet.tau[1], packet.tau[2],
+             packet.u_norm[0], packet.u_norm[1], packet.u_norm[2], packet.u_norm[3],
+             packet.yaw_valid ? 1 : 0, (unsigned long)packet.rc_sequence,
+             staConnected ? 1 : 0, staConnected ? WiFi.localIP().toString().c_str() : "",
+             packet.pwm_outputs_ready ? 1 : 0);
 
     size_t jsonLen = strlen(jsonMsg);
     for (int i = 0; i < MAX_WS_CLIENTS; i++) {

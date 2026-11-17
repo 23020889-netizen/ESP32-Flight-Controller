@@ -30,7 +30,7 @@ class DashboardApplicationController {
   bindUserInterfaceControls() {
     const getElement = (id) => document.getElementById(id);
     const setActiveMode = (activeId) => {
-      ["bDemo", "bCsv", "bSerial", "bLiveWs"].forEach((id) => {
+      ["bDemo", "bCsv", "bSerial", "bLiveWs", "bApWs"].forEach((id) => {
         const el = getElement(id);
         if (el) el.classList.toggle("act", id === activeId);
       });
@@ -48,21 +48,21 @@ class DashboardApplicationController {
       };
     }
 
-    // 2. KẾT NỐI QUA SÓNG WIFI (WebSocket - Mạng TTDB hoặc SoftAP)
+    // 2. Wi-Fi VNU dùng IP cố định; SoftAP có nút riêng, không dùng IP cũ trong localStorage.
     const bLiveWs = getElement("bLiveWs");
-    const inpWsIp = getElement("inpWsIp");
-    if (inpWsIp) {
-      const savedIp = localStorage.getItem("uav_esp_ip");
-      if (savedIp) inpWsIp.value = savedIp;
-    }
+    const bApWs = getElement("bApWs");
     if (bLiveWs) {
       bLiveWs.onclick = () => {
         this.csvReplayer.stopPlayback();
-        const ip = (inpWsIp && inpWsIp.value.trim()) ? inpWsIp.value.trim() : "10.11.162.210";
-        if (inpWsIp) localStorage.setItem("uav_esp_ip", ip);
-        const wsUrl = ip.startsWith("ws://") ? ip : `ws://${ip}:81`;
-        this.telemetryStore.connectWebSocket(wsUrl);
+        this.telemetryStore.connectWebSocket("ws://10.11.162.210:81");
         setActiveMode("bLiveWs");
+      };
+    }
+    if (bApWs) {
+      bApWs.onclick = () => {
+        this.csvReplayer.stopPlayback();
+        this.telemetryStore.connectWebSocket("ws://192.168.4.1:81");
+        setActiveMode("bApWs");
       };
     }
 
@@ -119,7 +119,7 @@ class DashboardApplicationController {
       pct = Math.max(0, Math.min(100, Number(pct) || 0));
       if (rngThrottle) rngThrottle.value = pct;
       if (lblThrottle) lblThrottle.textContent = pct.toFixed(1) + "%";
-      this.telemetryStore.sendCommand(`throttle ${pct}`);
+      return pct;
     };
 
     if (rngThrottle) {
@@ -127,13 +127,11 @@ class DashboardApplicationController {
         const val = Number(e.target.value);
         if (lblThrottle) lblThrottle.textContent = val.toFixed(1) + "%";
       };
-      rngThrottle.onchange = (e) => {
-        setThrottle(Number(e.target.value));
-      };
+      rngThrottle.onchange = (e) => this.telemetryStore.sendCommand(`throttle ${setThrottle(Number(e.target.value))}`);
     }
 
     document.querySelectorAll(".btn-thr").forEach((b) => {
-      b.onclick = () => setThrottle(Number(b.dataset.thr));
+      b.onclick = () => this.telemetryStore.sendCommand(`throttle ${setThrottle(Number(b.dataset.thr))}`);
     });
 
     // Điều khiển Góc Setpoint (PX4 Angle Control)
@@ -401,8 +399,9 @@ class DashboardApplicationController {
       const lblStickR        = document.getElementById("lblStickR");
 
       if (gp) {
+        const isRcTransmitter = /radiomaster|pocket|edgetx|opentx|jumper|boxer|tx16|t-pro/i.test(gp.id || "");
         if (lblGamepadStatus) {
-          lblGamepadStatus.textContent = gp.id ? gp.id.substring(0, 16) : "Đã nhận";
+          lblGamepadStatus.textContent = gp.id ? (isRcTransmitter ? "🎮 RadioMaster (HID)" : gp.id.substring(0, 16)) : "Đã nhận";
           lblGamepadStatus.style.color = "#34d399";
         }
 
@@ -438,38 +437,61 @@ class DashboardApplicationController {
         if (justPressed(14)) { activeMotor = 4; baseThrottle = 0; this.telemetryStore.sendCommand("m4"); }
         if (justPressed(3))  { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
 
-        // 5. ĐỌC CẦN ANALOG TRÁI (THROTTLE & YAW):
-        // Throttle: axes[1] đẩy lên là âm (-1.0 -> 0)
-        const rawLy = (gp.axes && gp.axes.length > 1) ? gp.axes[1] : 0;
-        const rawLx = (gp.axes && gp.axes.length > 0) ? gp.axes[0] : 0;
-        const rtVal = gp.buttons[7] ? gp.buttons[7].value : 0;
-        const stickLy = Math.max(0, -deadzone(rawLy));
-        const stickThr = Math.max(rtVal, stickLy);
+        // 5. ĐỌC CẦN ANALOG & ÁNH XẠ THÔNG MINH CHO XBOX VÀ TAY CẦM RC (RADIOMASTER POCKET)
+        let stickThr = 0;
+        let yawDeg = 0;
+        let rollDeg = 0;
+        let pitchDeg = 0;
+
+        if (isRcTransmitter) {
+          // --- CHẾ ĐỘ RADIOMASTER POCKET / EDGETX (CHUẨN MODE 2 - AETR) ---
+          // Kênh 3: Ga (Throttle) -> axes[2]: Đáy = -1.0 (0% ga), Đỉnh = +1.0 (100% ga)
+          const rawThrAxis = (gp.axes && gp.axes.length > 2) ? gp.axes[2] : 0;
+          let normThr = (rawThrAxis + 1.0) * 0.5;
+          if (normThr < 0.03) normThr = 0.0;
+          stickThr = Math.min(1.0, Math.max(0.0, normThr));
+
+          // Kênh 4: Hướng (Yaw) -> axes[3] (-45° .. +45°)
+          const rawYawAxis = (gp.axes && gp.axes.length > 3) ? gp.axes[3] : 0;
+          yawDeg = Math.round(deadzone(rawYawAxis) * 45.0 * 10) / 10;
+
+          // Kênh 1: Nghiêng ngang (Roll) -> axes[0] (-25° .. +25°)
+          const rawRollAxis = (gp.axes && gp.axes.length > 0) ? gp.axes[0] : 0;
+          rollDeg = Math.round(deadzone(rawRollAxis) * 25.0 * 10) / 10;
+
+          // Kênh 2: Chúc ngóc (Pitch) -> axes[1] (Đẩy lên là chúc mũi / Pitch âm)
+          const rawPitchAxis = (gp.axes && gp.axes.length > 1) ? gp.axes[1] : 0;
+          pitchDeg = Math.round(-deadzone(rawPitchAxis) * 25.0 * 10) / 10;
+        } else {
+          // --- CHẾ ĐỘ TAY CẦM GAMEPAD CHUẨN XBOX / A124 ---
+          const rawLy = (gp.axes && gp.axes.length > 1) ? gp.axes[1] : 0;
+          const rawLx = (gp.axes && gp.axes.length > 0) ? gp.axes[0] : 0;
+          const rtVal = gp.buttons[7] ? gp.buttons[7].value : 0;
+          const stickLy = Math.max(0, -deadzone(rawLy));
+          stickThr = Math.max(rtVal, stickLy);
+
+          yawDeg = Math.round(deadzone(rawLx) * 45.0 * 10) / 10;
+
+          let rawRx = 0;
+          let rawRy = 0;
+          if (gp.axes) {
+            if (gp.axes.length >= 4) {
+              rawRx = gp.axes[2];
+              rawRy = gp.axes[3];
+            }
+            if (gp.axes.length >= 5 && Math.abs(rawRx) < 0.05 && Math.abs(rawRy) < 0.05) {
+              if (Math.abs(gp.axes[3]) > 0.05 || Math.abs(gp.axes[4]) > 0.05) {
+                rawRx = gp.axes[3];
+                rawRy = gp.axes[4];
+              }
+            }
+          }
+          rollDeg  = Math.round(deadzone(rawRx) * 25.0 * 10) / 10;
+          pitchDeg = Math.round(-deadzone(rawRy) * 25.0 * 10) / 10;
+        }
 
         const maxCap = 100; // Trần ga toàn dải 100% theo yêu cầu
         let totalThr = isGamepadArmed ? Math.min(maxCap, Math.max(0, Math.round((baseThrottle + stickThr * maxCap) * 10) / 10)) : 0;
-
-        // Yaw: axes[0] (-45° .. +45°)
-        const yawDeg = Math.round(deadzone(rawLx) * 45.0 * 10) / 10;
-
-        // 6. ĐỌC CẦN ANALOG PHẢI (ROLL & PITCH) - TƯƠNG THÍCH MỌI DÒNG TAY CẦM A124 / XBOX:
-        let rawRx = 0;
-        let rawRy = 0;
-        if (gp.axes) {
-          if (gp.axes.length >= 4) {
-            rawRx = gp.axes[2];
-            rawRy = gp.axes[3];
-          }
-          // Một số tay cầm USB generic A124 đặt cần phải tại axes[3] và axes[4] (khi axes[2] là trigger)
-          if (gp.axes.length >= 5 && Math.abs(rawRx) < 0.05 && Math.abs(rawRy) < 0.05) {
-            if (Math.abs(gp.axes[3]) > 0.05 || Math.abs(gp.axes[4]) > 0.05) {
-              rawRx = gp.axes[3];
-              rawRy = gp.axes[4];
-            }
-          }
-        }
-        const rollDeg  = Math.round(deadzone(rawRx) * 25.0 * 10) / 10;
-        const pitchDeg = Math.round(-deadzone(rawRy) * 25.0 * 10) / 10;
 
         // 7. CẬP NHẬT GIAO DIỆN HIỂN THỊ TRỰC TIẾP TRÊN WEB
         if (lblStickL) lblStickL.textContent = `T:${totalThr.toFixed(0)}% | Y:${yawDeg > 0 ? "+" : ""}${yawDeg.toFixed(0)}°`;

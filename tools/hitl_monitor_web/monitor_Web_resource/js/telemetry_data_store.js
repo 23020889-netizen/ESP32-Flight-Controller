@@ -164,7 +164,7 @@ class TelemetryDataStore {
       }
     }
     // 4. Phân tích trạng thái động cơ (dòng cuối của mỗi chu kỳ Telemetry):
-    // [ESC_QUAD] State:ARMED | M1(P7-CCW):1000us( 0.0%) | M2(P6-CCW):1000us( 0.0%) | M3(P5-CW): 850us( 0.0%) | M4(P4-CW):1000us( 0.0%) @ 50Hz
+    // [ESC_QUAD] State:ARMED | M1(P7-CCW):1000us( 0.0%) | M2(P6-CCW):1000us( 0.0%) | M3(P5-CW):1000us( 0.0%) | M4(P4-CW):1000us( 0.0%) @ 50Hz
     else if (line.includes("[ESC_QUAD]")) {
       const pcts = [...line.matchAll(/\(\s*([-\d.]+)%\)/g)];
       if (pcts.length >= 4) {
@@ -219,6 +219,16 @@ class TelemetryDataStore {
       this.webSocketConnection.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
+          const linkState = document.getElementById("espLinkState");
+          const rcState = document.getElementById("espRcState");
+          if (linkState && parsed && parsed.state !== undefined) {
+            const network = parsed.sta_connected ? `VNU ${parsed.sta_ip || ""}` : "SoftAP/STA offline";
+            const pwm = parsed.pwm_ok === 0 ? "PWM lỗi" : "PWM OK";
+            linkState.textContent = `${network} | ${parsed.state} | ${pwm}`;
+          }
+          if (rcState && parsed && parsed.rc_seq !== undefined) {
+            rcState.textContent = `#${parsed.rc_seq} | ${Number(parsed.sp_t || 0).toFixed(1)}%`;
+          }
           // Bỏ qua các bản tin log thuần túy {"log":"..."} để không ghi đè góc 0 vào đồ thị 3D
           if (parsed && (typeof parsed.roll === "number" || Array.isArray(parsed.m))) {
             this.pushSample(parsed);

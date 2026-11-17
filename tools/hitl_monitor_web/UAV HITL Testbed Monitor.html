@@ -32,11 +32,14 @@
       <div class="chips">
         <div class="chip" title="Tần số cập nhật dữ liệu">FREQ <b class="mono" id="sFreq">0 Hz</b></div>
         <div class="chip" title="Tổng số gói tin Telemetry">PKT <b class="mono" id="sPk">0</b></div>
+        <div class="chip" title="Kết nối và xác nhận lệnh từ ESP">ESP <b class="mono" id="espLinkState">Chưa kết nối</b></div>
+        <div class="chip" title="RC hợp lệ đã nhận và throttle phản hồi">RC/THR <b class="mono" id="espRcState">--</b></div>
         <div class="chip chip-ip">
-          <label for="inpWsIp">ESP IP:</label>
-          <input type="text" id="inpWsIp" value="10.11.162.210" placeholder="10.11.162.xxx" aria-label="Địa chỉ IP của ESP32-C6">
+          <label for="inpWsIp">ESP IP VNU:</label>
+          <input type="text" id="inpWsIp" value="10.11.162.210" readonly aria-label="IP cố định ESP32-C6 trên Wi-Fi VNU">
         </div>
         <button id="bLiveWs" class="btn-wifi" title="Kết nối trực tiếp ESP32-C6 qua mạng WiFi TTDB hoặc SoftAP">📡 Kết Nối WiFi</button>
+        <button id="bApWs" class="btn-wifi" title="Dùng IP SoftAP dự phòng 192.168.4.1">Kết nối SoftAP</button>
         <div class="chip chip-gamepad" id="chipGamepad">🎮 Tay Cầm: <b id="lblGamepadStatus">Chưa cắm</b></div>
         <button id="bSerial" class="btn-usb" title="Kết nối trực tiếp qua cáp USB Serial (COM32)">⚡ Cáp USB (COM)</button>
         <button id="bDemo" class="act">Tự động (Demo)</button>
@@ -129,7 +132,7 @@
 
           <!-- Dòng nhập lệnh CLI -->
           <div class="cli-bar">
-            <input type="text" id="cmdInput" placeholder="m1 15 / throttle 20 / spin3 892" aria-label="Nhập lệnh điều khiển CLI">
+            <input type="text" id="cmdInput" placeholder="m1 15 / throttle 20 / status" aria-label="Nhập lệnh điều khiển CLI">
             <button type="button" id="btnSendCmd">Gửi</button>
           </div>
         </div>

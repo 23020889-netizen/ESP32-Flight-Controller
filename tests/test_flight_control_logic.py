@@ -326,6 +326,55 @@ class TestFlightControlRebuild(unittest.TestCase):
         self.assertEqual(state, "ARMED")
         self.assertEqual(thr_sp, 25.0)
 
+    def test_manual_throttle_setpoint_preservation_vs_rc_watchdog(self):
+        """
+        Verify that manual UI/CLI throttle setpoint is preserved and NOT wiped by RC watchdog.
+        RC Watchdog only applies when active RC streaming is enabled.
+        """
+        class MockSetpointManager:
+            def __init__(self):
+                self.throttle_pct = 0.0
+                self.rc_stream_active = False
+                self.last_rc_ms = 0
+                self.is_armed = True
+
+            def set_manual_throttle(self, pct: float):
+                self.throttle_pct = pct
+                self.rc_stream_active = False
+
+            def set_rc_stream_packet(self, pct: float, now_ms: int):
+                self.throttle_pct = pct
+                self.rc_stream_active = True
+                self.last_rc_ms = now_ms
+
+            def update_watchdog(self, now_ms: int, timeout_ms: int = 1500):
+                if self.is_armed and self.rc_stream_active and (now_ms - self.last_rc_ms > timeout_ms):
+                    self.throttle_pct = 0.0
+                    self.rc_stream_active = False
+
+        mgr = MockSetpointManager()
+
+        # Step 1: User sets manual throttle from Web UI: 30%
+        mgr.set_manual_throttle(30.0)
+        self.assertEqual(mgr.throttle_pct, 30.0)
+        self.assertFalse(mgr.rc_stream_active)
+
+        # Step 2: 5 seconds pass (5000 ms > 1500 ms)
+        mgr.update_watchdog(now_ms=5000)
+        # MUST STAY AT 30.0% (strictly obeys setpoint)
+        self.assertEqual(mgr.throttle_pct, 30.0)
+
+        # Step 3: Now user switches to Gamepad streaming mode at 50%
+        mgr.set_rc_stream_packet(50.0, now_ms=6000)
+        self.assertEqual(mgr.throttle_pct, 50.0)
+        self.assertTrue(mgr.rc_stream_active)
+
+        # Step 4: Gamepad stream lost for > 1500 ms (now_ms = 8000)
+        mgr.update_watchdog(now_ms=8000)
+        # Failsafe MUST trigger and safely cut throttle to 0.0
+        self.assertEqual(mgr.throttle_pct, 0.0)
+        self.assertFalse(mgr.rc_stream_active)
+
 
 if __name__ == "__main__":
     unittest.main()

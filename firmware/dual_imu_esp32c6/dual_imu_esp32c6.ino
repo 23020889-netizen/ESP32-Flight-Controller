@@ -50,8 +50,9 @@ struct SetpointState {
     float throttle_pct; // 0.0 .. 100.0%
     bool  heading_locked;
     uint32_t last_rc_ms;
+    bool  rc_stream_active; // true chỉ khi đang bay bằng luồng RC streaming từ tay cầm
 };
-SetpointState setpointState = { 0.0f, 0.0f, 0.0f, 0.0f, false, 0 };
+SetpointState setpointState = { 0.0f, 0.0f, 0.0f, 0.0f, false, 0, false };
 
 const uint32_t RC_WATCHDOG_TIMEOUT_MS = 1500; // Failsafe timeout khi mất sóng RC quá 1.5s
 uint32_t acceptedRcSequence = 0;
@@ -146,6 +147,7 @@ void executeCommand(String cmd, const char* sourceTag) {
             ysp = constrain(ysp, -180.0f, 180.0f);
 
             if (arm == 0) {
+                setpointState.rc_stream_active = false;
                 if (quadMotors.getState() == ESC_STATE_ARMED) {
                     quadMotors.disarm();
                     px4Controller.reset();
@@ -183,6 +185,7 @@ void executeCommand(String cmd, const char* sourceTag) {
                 }
             }
             setpointState.last_rc_ms = millis();
+            setpointState.rc_stream_active = (arm == 1);
             ++acceptedRcSequence;
             quadMotors.feedWatchdog();
             return;
@@ -240,6 +243,7 @@ void executeCommand(String cmd, const char* sourceTag) {
         activeTestMotor = 0;
         setpointState.throttle_pct = 0.0f;
         setpointState.heading_locked = false;
+        setpointState.rc_stream_active = false;
         snprintf(logBuf, sizeof(logBuf), "[%s] Quad Disarmed & Motors Safe", sourceTag);
         telemetry_wifi_broadcast_msg(logBuf);
         Serial.printf("[%s] >>> DA DISARM! Toan bo 4 dong co ngat ve 0%% an toan.\n", sourceTag);
@@ -305,7 +309,7 @@ void executeCommand(String cmd, const char* sourceTag) {
                 setpointState.heading_locked = true;
             }
             setpointState.throttle_pct = pct;
-            setpointState.last_rc_ms = millis();
+            setpointState.rc_stream_active = false; // Chế độ đặt ga tĩnh từ Web UI / CLI: tuân thủ setpoint, không bị watchdog ngắt
             quadMotors.feedWatchdog();
             Serial.printf("[%s] Dat muc ga tong the: %.1f%%\n", sourceTag, pct);
         }
@@ -510,11 +514,13 @@ void loop() {
     }
     attitudeState.timestamp_us = nowUs;
 
-    // Failsafe RC Watchdog: Mất tín hiệu RC quá 1.5s khi đang ARM
+    // Failsafe RC Watchdog: Mất tín hiệu RC quá 1.5s CHỈ áp dụng khi đang bay bằng luồng RC streaming từ tay cầm
     uint32_t nowMs = millis();
-    if (quadMotors.getState() == ESC_STATE_ARMED && setpointState.last_rc_ms > 0 &&
+    if (quadMotors.getState() == ESC_STATE_ARMED && setpointState.rc_stream_active &&
         (nowMs - setpointState.last_rc_ms > RC_WATCHDOG_TIMEOUT_MS)) {
         setpointState.throttle_pct = 0.0f;
+        setpointState.rc_stream_active = false;
+        Serial.println("[FAILSAFE] Mat tin hieu RC Gamepad > 1.5s -> Ha ga ve 0%!");
     }
 
     // 4. CHU TRÌNH ĐIỀU KHIỂN BAY THỜI GIAN THỰC PX4 CASCADED PID (200 Hz / 5ms)

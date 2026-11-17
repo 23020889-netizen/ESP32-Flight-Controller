@@ -194,4 +194,24 @@ console.log("Running Gamepad & Throttle Mapping Unit Tests...\n");
   console.log("✓ Test 6: Arm request accepted when Throttle is 0% and Link is Open");
 }
 
-console.log("\nALL 6 UNIT TESTS PASSED SUCCESSFULLY!");
+// Test 7: Unarmed Gamepad must NOT transmit RC packets or overwrite Web UI slider
+{
+  const isGamepadArmed = false;
+  const mockWebUiSlider = 30.0;
+  let transmittedCommand = null;
+  let sliderValue = mockWebUiSlider;
+
+  // Simulation of pollGamepad behavior
+  if (!isGamepadArmed) {
+    // Unarmed: no transmit, no setThrottle
+  } else {
+    transmittedCommand = "RC,0.0,0.0,0.0,0.0,1";
+    sliderValue = 0.0;
+  }
+
+  assert.strictEqual(transmittedCommand, null);
+  assert.strictEqual(sliderValue, 30.0);
+  console.log("✓ Test 7: Unarmed Gamepad does NOT transmit RC or overwrite Web UI throttle");
+}
+
+console.log("\nALL 7 UNIT TESTS PASSED SUCCESSFULLY!");

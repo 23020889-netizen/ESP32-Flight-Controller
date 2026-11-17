@@ -566,26 +566,39 @@ class DashboardApplicationController {
         if (justPressed(14)) { activeMotor = 4; baseThrottle = 0; this.telemetryStore.sendCommand("m4"); }
         if (justPressed(3))  { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
 
-        // 5. TÍNH TOÁN THROTTLE TỔNG THỂ
+        // 5. NẾU CHƯA ARM TAY CẦM: CHỈ HIỂN THỊ INPUT THÔ, TUYỆT ĐỐI KHÔNG GỬI RC ĐÈ LÊN WEB UI SETPOINT
+        if (!isGamepadArmed) {
+          if (lblStickL) lblStickL.textContent = `T:${inputs.thrPct.toFixed(0)}% | Y:${inputs.yawDeg > 0 ? "+" : ""}${inputs.yawDeg.toFixed(0)}°`;
+          if (lblStickR) lblStickR.textContent = `P:${inputs.pitchDeg > 0 ? "+" : ""}${inputs.pitchDeg.toFixed(0)}° | R:${inputs.rollDeg > 0 ? "+" : ""}${inputs.rollDeg.toFixed(0)}°`;
+          if (lblGamepadArm && hasLink) {
+            lblGamepadArm.textContent = "DISARM";
+            lblGamepadArm.style.color = "#ef4444";
+          }
+          prevButtons = btns;
+          requestAnimationFrame(pollGamepad);
+          return;
+        }
+
+        // 6. TÍNH TOÁN THROTTLE KHI TAY CẦM ĐANG ARMED
         const maxCap = 100;
         let totalThr = (isGamepadArmed && hasLink) ? Math.min(maxCap, Math.max(0, Math.round((baseThrottle + inputs.rawThr * maxCap) * 10) / 10)) : 0;
 
-        // 6. CẬP NHẬT GIAO DIỆN HIỂN THỊ TRỰC TIẾP TRÊN WEB (Tách bạch Gamepad Input)
+        // Cập nhật giao diện khi đang ARMED
         if (lblStickL) lblStickL.textContent = `T:${totalThr.toFixed(0)}% | Y:${inputs.yawDeg > 0 ? "+" : ""}${inputs.yawDeg.toFixed(0)}°`;
         if (lblStickR) lblStickR.textContent = `P:${inputs.pitchDeg > 0 ? "+" : ""}${inputs.pitchDeg.toFixed(0)}° | R:${inputs.rollDeg > 0 ? "+" : ""}${inputs.rollDeg.toFixed(0)}°`;
         if (lblGamepadArm && hasLink) {
-          lblGamepadArm.textContent = isGamepadArmed ? "ARMED" : "DISARM";
-          lblGamepadArm.style.color = isGamepadArmed ? "#22c55e" : "#ef4444";
+          lblGamepadArm.textContent = "ARMED";
+          lblGamepadArm.style.color = "#22c55e";
         }
 
-        // 7. PHÁT GÓI TIN ĐIỀU KHIỂN TỚI ESP32 (DUY NHẤT 1 KÊNH TRUYỀN RC)
+        // 7. PHÁT GÓI TIN ĐIỀU KHIỂN TỚI ESP32 (DUY NHẤT KHI ĐANG ARMED TAY CẦM)
         const now = performance.now();
         const thrChanged = Math.abs(totalThr - lastSentThrottle) >= 0.5;
         const attChanged = Math.abs(inputs.rollDeg - lastSentRoll) >= 0.5 || Math.abs(inputs.pitchDeg - lastSentPitch) >= 0.5 || Math.abs(inputs.yawDeg - lastSentYaw) >= 0.5;
-        // Heartbeat mỗi 200ms để không bị timeout 600ms watchdog của ESP32
-        const heartbeatDue = (isGamepadArmed || totalThr > 0) && (now - lastSendTime >= 200);
+        // Heartbeat mỗi 200ms để duy trì sóng và chống timeout watchdog 1500ms của ESP32
+        const heartbeatDue = (now - lastSendTime >= 200);
 
-        if (hasLink && (((thrChanged || attChanged) && (now - lastSendTime >= 30)) || heartbeatDue || (totalThr === 0 && lastSentThrottle > 0))) {
+        if (hasLink && (((thrChanged || attChanged) && (now - lastSendTime >= 30)) || heartbeatDue)) {
           lastSentThrottle = totalThr;
           lastSentRoll     = inputs.rollDeg;
           lastSentPitch    = inputs.pitchDeg;
@@ -593,11 +606,10 @@ class DashboardApplicationController {
           lastSendTime     = now;
 
           if (activeMotor === 0) {
-            // Gửi gói tin RC chuẩn: RC,<throttle>,<roll>,<pitch>,<yaw>,<arm>
-            const armCode = isGamepadArmed ? 1 : 0;
-            const rcCommand = `RC,${totalThr.toFixed(1)},${inputs.rollDeg.toFixed(1)},${inputs.pitchDeg.toFixed(1)},${inputs.yawDeg.toFixed(1)},${armCode}`;
+            // Gửi gói tin RC chuẩn: RC,<throttle>,<roll>,<pitch>,<yaw>,1
+            const rcCommand = `RC,${totalThr.toFixed(1)},${inputs.rollDeg.toFixed(1)},${inputs.pitchDeg.toFixed(1)},${inputs.yawDeg.toFixed(1)},1`;
             this.telemetryStore.sendCommand(rcCommand);
-            // Chỉ cập nhật hiển thị thanh slider trên Web, KHÔNG gửi thêm lệnh 'throttle ...' cạnh tranh
+            // Đồng bộ thanh trượt hiển thị trên Web với cần ga tay cầm khi đang ARMED bằng tay cầm
             setThrottle(totalThr);
           } else {
             setMotorTest(activeMotor, Math.min(100, totalThr));

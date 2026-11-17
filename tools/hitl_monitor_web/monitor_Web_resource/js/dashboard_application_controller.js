@@ -392,6 +392,11 @@ class DashboardApplicationController {
 
     const id = gp.id || "";
     const isRcTransmitter = /radiomaster|pocket|edgetx|opentx|jumper|boxer|tx16|t-pro/i.test(id);
+    // [GP DEBUG] Log raw axes/buttons to console every 60 frames (~1s) for axis mapping diagnosis
+    if (!DashboardApplicationController._dbgFrame) DashboardApplicationController._dbgFrame = 0;
+    if (++DashboardApplicationController._dbgFrame % 60 === 0) {
+      console.log(`[GP Debug] id="${id}" isRC=${isRcTransmitter} axes=[${[...gp.axes].map(v=>v.toFixed(3)).join(",")}] btn7=${gp.buttons[7]?.value?.toFixed(3)||"N/A"}`);
+    }
     const deviceName = gp.id ? (isRcTransmitter ? "🎮 RadioMaster (HID)" : (id.length > 16 ? id.substring(0, 16) : id)) : "Đã nhận";
 
     let rawThr = 0;
@@ -581,7 +586,15 @@ class DashboardApplicationController {
 
         // 6. TÍNH TOÁN THROTTLE KHI TAY CẦM ĐANG ARMED
         const maxCap = 100;
-        let totalThr = (isGamepadArmed && hasLink) ? Math.min(maxCap, Math.max(0, Math.round((baseThrottle + inputs.rawThr * maxCap) * 10) / 10)) : 0;
+        // Bug B fix: khi rawThr < 2% (stick ở đáy) VÀ baseThrottle = 0 (chưa chỉnh RB/LB),
+        // dùng sp_t từ ESP32 telemetry thay vì gửi 0 — tránh đè lên mức ga đã set bằng Web UI.
+        const gpadThrPct = inputs.rawThr * maxCap; // 0..100 từ cần ga vật lý
+        const espFloor = (gpadThrPct < 2.0 && baseThrottle === 0)
+          ? (this.telemetryStore.lastTargetThrottle || 0)
+          : 0;
+        let totalThr = (isGamepadArmed && hasLink)
+          ? Math.min(maxCap, Math.max(0, Math.round((baseThrottle + gpadThrPct + espFloor) * 10) / 10))
+          : 0;
 
         // Cập nhật giao diện khi đang ARMED
         if (lblStickL) lblStickL.textContent = `T:${totalThr.toFixed(0)}% | Y:${inputs.yawDeg > 0 ? "+" : ""}${inputs.yawDeg.toFixed(0)}°`;

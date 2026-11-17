@@ -114,6 +114,32 @@ function evaluateArmRequest(inputs, isTransportOpen) {
   return { allowed: true, reason: "OK" };
 }
 
+/**
+ * Pure evaluation function matching dashboard_application_controller.js arm/disarm triggers
+ */
+function evaluateGamepadArmDisarm(inputs, btns, prevButtons, axes, prevAxis4, hasLink) {
+  const justPressed = (idx) => btns[idx] && !prevButtons[idx];
+  const justReleased = (idx) => !btns[idx] && prevButtons[idx];
+
+  const currAxis4 = (axes && axes.length > 4) ? axes[4] : 0;
+  const saAxisArm = inputs.isRcTransmitter && axes && axes.length > 4 && (currAxis4 > 0.3 && prevAxis4 <= 0.3);
+  const saAxisDisarm = inputs.isRcTransmitter && axes && axes.length > 4 && (currAxis4 < -0.3 && prevAxis4 >= -0.3);
+
+  const isDisarmRequested = justPressed(1) || justPressed(8) || justPressed(9) ||
+    (inputs.isRcTransmitter && (justReleased(0) || justReleased(4) || saAxisDisarm));
+
+  const isArmRequested = justPressed(0) || (inputs.isRcTransmitter && (justPressed(4) || saAxisArm));
+
+  if (isDisarmRequested) {
+    return { action: "DISARM" };
+  } else if (isArmRequested) {
+    if (!hasLink) return { action: "REJECT", reason: "NO_LINK" };
+    if (inputs.thrPct > 3.0) return { action: "REJECT", reason: "THROTTLE_NOT_ZERO" };
+    return { action: "ARM" };
+  }
+  return { action: "NONE" };
+}
+
 // ================= TEST CASES =================
 
 console.log("Running Gamepad & Throttle Mapping Unit Tests...\n");
@@ -214,4 +240,59 @@ console.log("Running Gamepad & Throttle Mapping Unit Tests...\n");
   console.log("✓ Test 7: Unarmed Gamepad does NOT transmit RC or overwrite Web UI throttle");
 }
 
-console.log("\nALL 7 UNIT TESTS PASSED SUCCESSFULLY!");
+// Test 8: RadioMaster Switch SA toggle DOWN (Button 0 false -> true) triggers ARM when throttle <= 3%
+{
+  const inputs = { isRcTransmitter: true, thrPct: 0.0 };
+  const prevBtns = [false, false, false, false];
+  const currBtns = [true, false, false, false]; // SA flipped DOWN (Button 0 pressed)
+  const res = evaluateGamepadArmDisarm(inputs, currBtns, prevBtns, [0,0,-1,0], 0, true);
+  assert.strictEqual(res.action, "ARM");
+  console.log("✓ Test 8: RadioMaster Switch SA toggle DOWN triggers ARM when throttle is 0%");
+}
+
+// Test 9: RadioMaster Switch SA toggle UP (Button 0 true -> false) triggers DISARM
+{
+  const inputs = { isRcTransmitter: true, thrPct: 50.0 }; // Even at 50% throttle, SA UP must immediately DISARM
+  const prevBtns = [true, false, false, false]; // SA was DOWN
+  const currBtns = [false, false, false, false]; // SA flipped UP (Button 0 released)
+  const res = evaluateGamepadArmDisarm(inputs, currBtns, prevBtns, [0,0,0,0], 0, true);
+  assert.strictEqual(res.action, "DISARM");
+  console.log("✓ Test 9: RadioMaster Switch SA toggle UP triggers emergency DISARM");
+}
+
+// Test 10: RadioMaster Switch SA toggle DOWN rejected when throttle > 3%
+{
+  const inputs = { isRcTransmitter: true, thrPct: 15.0 }; // Throttle at 15%
+  const prevBtns = [false, false, false, false];
+  const currBtns = [true, false, false, false]; // SA flipped DOWN
+  const res = evaluateGamepadArmDisarm(inputs, currBtns, prevBtns, [0,0,-0.7,0], 0, true);
+  assert.strictEqual(res.action, "REJECT");
+  assert.strictEqual(res.reason, "THROTTLE_NOT_ZERO");
+  console.log("✓ Test 10: RadioMaster Switch SA toggle DOWN rejected when throttle > 3% (Safety)");
+}
+
+// Test 11: Xbox Button 'A' release does NOT trigger DISARM
+{
+  const inputs = { isRcTransmitter: false, thrPct: 20.0 };
+  const prevBtns = [true, false, false, false]; // Button A was pressed
+  const currBtns = [false, false, false, false]; // Button A released
+  const res = evaluateGamepadArmDisarm(inputs, currBtns, prevBtns, [0,0,0,0], 0, true);
+  assert.strictEqual(res.action, "NONE"); // Releasing A on Xbox must NOT disarm!
+  console.log("✓ Test 11: Xbox Button 'A' release does NOT trigger DISARM (momentary behavior preserved)");
+}
+
+// Test 12: RadioMaster 8-axis mode: Axis 4 (CH5) transition triggers ARM and DISARM
+{
+  const inputs = { isRcTransmitter: true, thrPct: 0.0 };
+  const btns = [false, false, false, false];
+  // Axis 4 goes from -1.0 (UP) to +1.0 (DOWN)
+  const resArm = evaluateGamepadArmDisarm(inputs, btns, btns, [0,0,-1,0, 1.0], -1.0, true);
+  assert.strictEqual(resArm.action, "ARM");
+
+  // Axis 4 goes from +1.0 (DOWN) to -1.0 (UP)
+  const resDisarm = evaluateGamepadArmDisarm(inputs, btns, btns, [0,0,0,0, -1.0], 1.0, true);
+  assert.strictEqual(resDisarm.action, "DISARM");
+  console.log("✓ Test 12: RadioMaster 8-axis mode: Axis 4 transitions trigger ARM and DISARM");
+}
+
+console.log("\nALL 12 UNIT TESTS PASSED SUCCESSFULLY!");

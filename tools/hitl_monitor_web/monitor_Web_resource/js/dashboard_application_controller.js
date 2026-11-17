@@ -395,7 +395,8 @@ class DashboardApplicationController {
     // [GP DEBUG] Log raw axes/buttons to console every 60 frames (~1s) for axis mapping diagnosis
     if (!DashboardApplicationController._dbgFrame) DashboardApplicationController._dbgFrame = 0;
     if (++DashboardApplicationController._dbgFrame % 60 === 0) {
-      console.log(`[GP Debug] id="${id}" isRC=${isRcTransmitter} axes=[${[...gp.axes].map(v=>v.toFixed(3)).join(",")}] btn7=${gp.buttons[7]?.value?.toFixed(3)||"N/A"}`);
+      const activeBtns = (gp.buttons || []).map((b, i) => b.pressed ? i : null).filter(x => x !== null).join(",");
+      console.log(`[GP Debug] id="${id}" isRC=${isRcTransmitter} axes=[${[...gp.axes].map(v=>v.toFixed(3)).join(",")}] btns=[${activeBtns}]`);
     }
     const deviceName = gp.id ? (isRcTransmitter ? "🎮 RadioMaster (HID)" : (id.length > 16 ? id.substring(0, 16) : id)) : "Đã nhận";
 
@@ -471,6 +472,7 @@ class DashboardApplicationController {
 
   startXboxGamepadLoop(setThrottle, setMotorTest) {
     let prevButtons = [];
+    let prevAxis4 = 0;
     let isGamepadArmed = false;
     let baseThrottle = 0;
     let activeMotor = 0; // 0 = All (Throttle), 1..4 = Motor 1..4
@@ -531,10 +533,36 @@ class DashboardApplicationController {
         }
 
         const btns = gp.buttons.map((b) => b.pressed);
-        const justPressed = (idx) => btns[idx] && !prevButtons[idx];
 
-        // 1. Nút B (1) hoặc Back (8) / Guide (9): DISARM / DỪNG KHẨN CẤP
-        if (justPressed(1) || justPressed(8) || justPressed(9)) {
+        // Khởi tạo trạng thái nút ban đầu để tránh tự động kích hoạt ARM/DISARM khi vừa cắm tay cầm
+        if (prevButtons.length === 0) {
+          prevButtons = btns;
+          if (gp.axes && gp.axes.length > 4) prevAxis4 = gp.axes[4];
+          requestAnimationFrame(pollGamepad);
+          return;
+        }
+
+        const justPressed = (idx) => btns[idx] && !prevButtons[idx];
+        const justReleased = (idx) => !btns[idx] && prevButtons[idx];
+
+        // Công tắc SA trên RadioMaster (qua Axis 4 / Channel 5 nếu EdgeTX ở chế độ 8-axis)
+        const currAxis4 = (gp.axes && gp.axes.length > 4) ? gp.axes[4] : 0;
+        const saAxisArm = inputs.isRcTransmitter && gp.axes && gp.axes.length > 4 && (currAxis4 > 0.3 && prevAxis4 <= 0.3);
+        const saAxisDisarm = inputs.isRcTransmitter && gp.axes && gp.axes.length > 4 && (currAxis4 < -0.3 && prevAxis4 >= -0.3);
+        prevAxis4 = currAxis4;
+
+        // 1. DISARM / DỪNG KHẨN CẤP:
+        // - Trên mọi tay cầm: Nút B (1), Back (8), Guide (9)
+        // - Trên RadioMaster (Công tắc SA): Gạt SA về vị trí UP (nhả Button 0 hoặc Button 4, hoặc Axis 4 âm)
+        const isDisarmRequested = justPressed(1) || justPressed(8) || justPressed(9) ||
+          (inputs.isRcTransmitter && (justReleased(0) || justReleased(4) || saAxisDisarm));
+
+        // 2. ARM (Mở khóa an toàn):
+        // - Trên Xbox: Nút A (0)
+        // - Trên RadioMaster (Công tắc SA): Gạt SA xuống vị trí DOWN (nhấn Button 0 hoặc Button 4, hoặc Axis 4 dương)
+        const isArmRequested = justPressed(0) || (inputs.isRcTransmitter && (justPressed(4) || saAxisArm));
+
+        if (isDisarmRequested) {
           isGamepadArmed = false;
           baseThrottle = 0;
           lastSentThrottle = 0;
@@ -542,13 +570,12 @@ class DashboardApplicationController {
           this.telemetryStore.sendCommand("disarm");
           setThrottle(0);
         }
-        // 2. Nút A (0): ARM (Mở khóa an toàn)
-        else if (justPressed(0)) {
+        else if (isArmRequested) {
           if (!hasLink) {
             console.warn("[Gamepad] Từ chối ARM: Không có kết nối Transport tới ESP32 (WebSocket/Serial đang đóng)!");
           } else if (inputs.thrPct > 3.0) {
             console.warn(`[Gamepad] Từ chối ARM: Cần ga phải ở 0% trước khi ARM! (Hiện tại: ${inputs.thrPct}%)`);
-            alert("⚠️ CẢNH BÁO AN TOÀN: Vui lòng hạ cần ga về 0% trước khi bấm ARM!");
+            alert("⚠️ CẢNH BÁO AN TOÀN: Vui lòng hạ cần ga về 0% trước khi gạt công tắc SA để ARM!");
           } else {
             isGamepadArmed = true;
             baseThrottle = 0;
@@ -558,8 +585,8 @@ class DashboardApplicationController {
           }
         }
 
-        // 3. RB (5) / LB (4): Tăng giảm ga giữ nền (+5% / -5%) - chỉ áp dụng khi đã ARMED và có Link
-        if (isGamepadArmed && hasLink) {
+        // 3. RB (5) / LB (4): Tăng giảm ga giữ nền (+5% / -5%) - chỉ áp dụng khi đã ARMED, có Link và không phải RC Transmitter
+        if (isGamepadArmed && hasLink && !inputs.isRcTransmitter) {
           if (justPressed(5)) { baseThrottle = Math.min(100, baseThrottle + 5); }
           if (justPressed(4)) { baseThrottle = Math.max(0, baseThrottle - 5); }
         }
@@ -578,7 +605,7 @@ class DashboardApplicationController {
           if (lblStickL) lblStickL.textContent = `T:${inputs.thrPct.toFixed(0)}% | Y:${inputs.yawDeg > 0 ? "+" : ""}${inputs.yawDeg.toFixed(0)}°`;
           if (lblStickR) lblStickR.textContent = `P:${inputs.pitchDeg > 0 ? "+" : ""}${inputs.pitchDeg.toFixed(0)}° | R:${inputs.rollDeg > 0 ? "+" : ""}${inputs.rollDeg.toFixed(0)}°`;
           if (lblGamepadArm && hasLink) {
-            lblGamepadArm.textContent = "DISARM";
+            lblGamepadArm.textContent = inputs.isRcTransmitter ? "DISARM (SA)" : "DISARM";
             lblGamepadArm.style.color = "#ef4444";
           }
           prevButtons = btns;
@@ -602,7 +629,7 @@ class DashboardApplicationController {
         if (lblStickL) lblStickL.textContent = `T:${totalThr.toFixed(0)}% | Y:${inputs.yawDeg > 0 ? "+" : ""}${inputs.yawDeg.toFixed(0)}°`;
         if (lblStickR) lblStickR.textContent = `P:${inputs.pitchDeg > 0 ? "+" : ""}${inputs.pitchDeg.toFixed(0)}° | R:${inputs.rollDeg > 0 ? "+" : ""}${inputs.rollDeg.toFixed(0)}°`;
         if (lblGamepadArm && hasLink) {
-          lblGamepadArm.textContent = "ARMED";
+          lblGamepadArm.textContent = inputs.isRcTransmitter ? "ARMED (SA)" : "ARMED";
           lblGamepadArm.style.color = "#22c55e";
         }
 

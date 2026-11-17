@@ -571,8 +571,10 @@ class DashboardApplicationController {
         if (justPressed(14)) { activeMotor = 4; baseThrottle = 0; this.telemetryStore.sendCommand("m4"); }
         if (justPressed(3))  { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
 
-        // 5. NẾU CHƯA ARM TAY CẦM: CHỈ HIỂN THỊ INPUT THÔ, TUYỆT ĐỐI KHÔNG GỬI RC ĐÈ LÊN WEB UI SETPOINT
-        if (!isGamepadArmed) {
+        // 5. KIỂM TRA ARMED TỪ BẤT KỲ NGUỒN NÀO (tay cầm hoặc Web UI)
+        // effectiveArmed = true nếu: (a) đã nhấn nút ARM trên tay cầm, HOẶC (b) ESP32 xác nhận ARMED từ Web UI
+        const effectiveArmed = isGamepadArmed || (hasLink && this.telemetryStore.lastEspState === "ARMED");
+        if (!effectiveArmed) {
           if (lblStickL) lblStickL.textContent = `T:${inputs.thrPct.toFixed(0)}% | Y:${inputs.yawDeg > 0 ? "+" : ""}${inputs.yawDeg.toFixed(0)}°`;
           if (lblStickR) lblStickR.textContent = `P:${inputs.pitchDeg > 0 ? "+" : ""}${inputs.pitchDeg.toFixed(0)}° | R:${inputs.rollDeg > 0 ? "+" : ""}${inputs.rollDeg.toFixed(0)}°`;
           if (lblGamepadArm && hasLink) {
@@ -584,15 +586,15 @@ class DashboardApplicationController {
           return;
         }
 
-        // 6. TÍNH TOÁN THROTTLE KHI TAY CẦM ĐANG ARMED
+        // 6. TÍNH TOÁN THROTTLE KHI ĐANG ARMED (từ tay cầm hoặc Web UI)
         const maxCap = 100;
-        // Bug B fix: khi rawThr < 2% (stick ở đáy) VÀ baseThrottle = 0 (chưa chỉnh RB/LB),
-        // dùng sp_t từ ESP32 telemetry thay vì gửi 0 — tránh đè lên mức ga đã set bằng Web UI.
         const gpadThrPct = inputs.rawThr * maxCap; // 0..100 từ cần ga vật lý
+        // Khi stick >2%: quyền điều khiển ga thuộc về cần ga vật lý (không dùng espFloor)
+        // Khi stick ở đáy (<2%) và chưa chỉnh RB/LB: giữ nguyên mức ga ESP32 xác nhận (web slider)
         const espFloor = (gpadThrPct < 2.0 && baseThrottle === 0)
           ? (this.telemetryStore.lastTargetThrottle || 0)
           : 0;
-        let totalThr = (isGamepadArmed && hasLink)
+        let totalThr = (effectiveArmed && hasLink)
           ? Math.min(maxCap, Math.max(0, Math.round((baseThrottle + gpadThrPct + espFloor) * 10) / 10))
           : 0;
 

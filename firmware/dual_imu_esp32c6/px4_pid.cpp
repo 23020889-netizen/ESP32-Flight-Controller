@@ -153,16 +153,21 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
     pitch_torque = constrain(pitch_torque, -max_authority, max_authority);
     yaw_torque   = constrain(yaw_torque,   -max_authority * 0.5f, max_authority * 0.5f);
 
-    // Cấu hình Quad-X chuẩn PX4 với Phản Hồi Âm Tự Cân Bằng (Negative Feedback 100%):
-    // Motor 1: GPIO 7 (Front-Right, CCW) = T - R + P + Y
-    // Motor 2: GPIO 6 (Rear-Left,   CCW) = T + R - P + Y
-    // Motor 3: GPIO 5 (Front-Left,  CW)  = T + R + P - Y
-    // Motor 4: GPIO 4 (Rear-Right, CW)   = T - R - P - Y
+    // Cấu hình Quad-X theo bố trí vật lý thực tế (M1,M3=TRÁI; M2,M4=PHẢI):
+    // Quy tắc Roll: LEFT motor = +R, RIGHT motor = -R
+    // Khi drone ngả PHẢI (roll_torque < 0 để kéo về trái):
+    //   M1,M3 (LEFT): T + (âm) → GIẢM → Cánh trái hạ, cánh phải nâng → Cân bằng ✓
+    //   M2,M4 (RIGHT): T - (âm) → TĂNG → Nâng cánh phải về vị trí level ✓
+    //
+    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R + P + Y   ← LEFT: +R (đã sửa từ -R)
+    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R - P + Y   ← RIGHT: -R (đã sửa từ +R)
+    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R - P - Y   ← LEFT: +R ✓ (giữ nguyên)
+    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R + P - Y   ← RIGHT: -R ✓ (giữ nguyên)
     float m[4];
-    m[0] = throttle - roll_torque + pitch_torque + yaw_torque;
-    m[1] = throttle + roll_torque - pitch_torque + yaw_torque;
-    m[2] = throttle + roll_torque + pitch_torque - yaw_torque;
-    m[3] = throttle - roll_torque - pitch_torque - yaw_torque;
+    m[0] = throttle + roll_torque + pitch_torque + yaw_torque;
+    m[1] = throttle - roll_torque - pitch_torque + yaw_torque;
+    m[2] = throttle + roll_torque - pitch_torque - yaw_torque;
+    m[3] = throttle - roll_torque + pitch_torque - yaw_torque;
 
     // Thuật toán Desaturation chuẩn PX4: Co giãn bảo toàn hình học mô-men (Dynamic Scale & Shift)
     float max_val = m[0];

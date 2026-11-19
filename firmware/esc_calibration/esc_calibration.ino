@@ -4,16 +4,16 @@
  * ============================================================================
  * Tác giả: Nhóm Nghiên cứu UAV - ISILAB
  * Mục đích:
- *   1. Dạy dải ga (Throttle Range Calibration 1000µs - 2000µs) cho 4 ESC.
- *   2. Cho phép Calibrate ĐỒNG THỜI cả 4 ESC hoặc CALIBRATE RIÊNG TỪNG CON
- *      (rất quan trọng khi dùng hỗn hợp ESC Vàng 30A và ESC Đen 40A).
+ *   1. Dạy dải ga (Throttle Range Calibration 1000µs - 2000µs) đồng bộ cho cả 4 ESC Vàng 30A.
+ *   2. Hỗ trợ Calibrate ĐỒNG THỜI cả 4 ESC (nhanh và chuẩn nhất vì cả 4 ESC cùng loại Vàng 30A)
+ *      hoặc CALIBRATE RIÊNG TỪNG CON (M1, M2, M3, M4) khi cần kiểm tra đường dây tín hiệu.
  *   3. Kiểm tra chiều quay (CW/CCW) và ngưỡng quay không tải (Idle Spin)
  *      ngay sau khi hiệu chuẩn.
  * 
- * SƠ ĐỒ CHÂN PHẦN CỨNG (Quad-X chuẩn PX4):
+ * SƠ ĐỒ CHÂN PHẦN CỨNG (Quad-X chuẩn PX4 - Đồng bộ 100% ESC Vàng 30A):
  *   - Motor 1 (M1): GPIO 7 (Front-Left,  CCW) - ESC Vàng 30A
  *   - Motor 2 (M2): GPIO 6 (Rear-Right,  CCW) - ESC Vàng 30A
- *   - Motor 3 (M3): GPIO 5 (Rear-Left,   CW ) - ESC Đen  40A
+ *   - Motor 3 (M3): GPIO 5 (Rear-Left,   CW ) - ESC Vàng 30A
  *   - Motor 4 (M4): GPIO 4 (Front-Right, CW ) - ESC Vàng 30A
  * 
  * Tần số PWM: 50 Hz (Chu kỳ 20,000 µs - Chuẩn công nghiệp cho mọi loại ESC)
@@ -136,13 +136,16 @@ void printBanner() {
 
 void printMenu() {
     Serial.println("\n----------------- DANH SACH LENH DIEU KHIEN -----------------");
-    Serial.println(" [1] HIỆU CHUẨN RIÊNG TỪNG ESC (KHUYÊN DÙNG NẾU ESC KHÁC LOẠI):");
-    Serial.println("     cal 1   : Calibrate rieng ESC 1 (GPIO 7 - ESC Vang)");
-    Serial.println("     cal 2   : Calibrate rieng ESC 2 (GPIO 6 - ESC Vang)");
-    Serial.println("     cal 3   : Calibrate rieng ESC 3 (GPIO 5 - ESC Den 40A)");
-    Serial.println("     cal 4   : Calibrate rieng ESC 4 (GPIO 4 - ESC Vang)");
+    Serial.println(" [1] HIỆU CHUẨN ĐỒNG LOẠT CẢ 4 ESC VÀNG 30A (KHUYÊN DÙNG - CỰC NHANH):");
+    Serial.println("     cal all : Calibrate ca 4 ESC Vang 30A dong thoi (dong nhat tieng bip)");
     Serial.println("");
-    Serial.println(" [2] HIỆU CHUẨN ĐỒNG LOẠT CẢ 4 ESC:");
+    Serial.println(" [2] HIỆU CHUẨN RIÊNG TỪNG ESC (KHI CẦN TEST RIÊNG TỪNG KÊNH):");
+    Serial.println("     cal 1   : Calibrate rieng ESC 1 (GPIO 7 - ESC Vang 30A)");
+    Serial.println("     cal 2   : Calibrate rieng ESC 2 (GPIO 6 - ESC Vang 30A)");
+    Serial.println("     cal 3   : Calibrate rieng ESC 3 (GPIO 5 - ESC Vang 30A)");
+    Serial.println("     cal 4   : Calibrate rieng ESC 4 (GPIO 4 - ESC Vang 30A)");
+    Serial.println("");
+    Serial.println(" [3] BƯỚC HẠ GA XÁC NHẬN (KHI ĐÃ NGHE TIẾNG BIP-BIP):");
     Serial.println("     cal all : Calibrate ca 4 ESC cung mot luc");
     Serial.println("");
     Serial.println(" [3] BƯỚC HẠ GA XÁC NHẬN (KHI ĐÃ NGHE TIẾNG BIP-BIP):");

@@ -17,11 +17,11 @@
 #define XSENS_TX_PIN    3
 #define XSENS_BAUDRATE  115200
 
-// Động cơ Quadcopter chuẩn PX4 (Đã định nghĩa trong esc_pwm.h):
-// - Motor 1: GPIO 7 (Front-Right, CCW) - (Min: 1000 us, Max: 2000 us)
-// - Motor 2: GPIO 6 (Rear-Left,   CCW) - (Min: 1000 us, Max: 2000 us)
-// - Motor 3: GPIO 5 (Front-Left,  CW ) - (Min: 1000 us, Max: 2000 us)
-// - Motor 4: GPIO 4 (Rear-Right,  CW ) - (Min: 1000 us, Max: 2000 us)
+// Động cơ Quadcopter chuẩn PX4 (Đồng bộ 100% 4 ESC Vàng 30A, 1000..2000 us):
+// - Motor 1: GPIO 7 (Front-Left,  CCW - Trái) - ESC Vàng 30A
+// - Motor 2: GPIO 6 (Rear-Right,  CCW - Phải) - ESC Vàng 30A
+// - Motor 3: GPIO 5 (Rear-Left,   CW  - Trái) - ESC Vàng 30A
+// - Motor 4: GPIO 4 (Front-Right, CW  - Phải) - ESC Vàng 30A
 
 // ============================================================================
 // 2. GLOBAL MODULE OBJECTS & DATA HOLDERS

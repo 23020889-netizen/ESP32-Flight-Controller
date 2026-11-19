@@ -73,6 +73,11 @@ class TelemetryLoopUpdater {
     const hz = getElement("hz");
     if (hz) ArtificialHorizonRenderer.renderHorizon(hz, latestSample.roll, latestSample.pitch);
 
+    // 4. Cập nhật bảng PID Auto-Tuner
+    if (window.pidAutoTuner) {
+      window.pidAutoTuner.updateFromTelemetry(latestSample);
+    }
+
     latestSample.m.forEach((speed, index) => {
       const pct = Math.max(0, Math.min(100, speed / 10));
       const mb = getElement("mb" + index);

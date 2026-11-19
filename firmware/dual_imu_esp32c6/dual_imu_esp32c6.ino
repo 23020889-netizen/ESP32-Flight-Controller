@@ -5,6 +5,7 @@
 #include "px4_pid.h"
 #include "esc_pwm.h"
 #include "telemetry_wifi.h"
+#include "pid_autotuner.h"
 
 // ============================================================================
 // 1. HARDWARE PIN CONFIGURATION (ESP32-C6)
@@ -369,6 +370,85 @@ void executeCommand(String cmd, const char* sourceTag) {
             px4Controller.setAngleGains(rp, pp, yp);
             Serial.printf("[%s] Cap nhat Outer Angle P: Roll_P=%.2f, Pitch_P=%.2f, Yaw_P=%.2f\n", sourceTag, rp, pp, yp);
         }
+    // 12. Auto-Tuner commands: tune roll/pitch/yaw/angle/stop/apply/save
+    } else if (cmd.startsWith("tune ") || cmd.startsWith("TUNE ")) {
+        String sub = cmd.substring(5);
+        sub.trim();
+        sub.toLowerCase();
+
+        if (sub.startsWith("roll")) {
+            float amp = 0.15f;
+            int spaceIdx = sub.indexOf(' ');
+            if (spaceIdx > 0) {
+                float val = sub.substring(spaceIdx + 1).toFloat();
+                if (val > 0.0f) amp = (val > 1.0f) ? (val / 100.0f) : val;
+            }
+            amp = constrain(amp, 0.05f, 0.30f);
+            autoTuner.configure(amp, 8, 25.0f, 0.04f);
+            autoTuner.start(TUNE_ROLL_RATE);
+            Serial.printf("[%s] [TUNE] Bat dau tune Roll Rate PID | amp=%.2f (%.0f%%)\n", sourceTag, amp, amp * 100.0f);
+        } else if (sub.startsWith("pitch")) {
+            float amp = 0.15f;
+            int spaceIdx = sub.indexOf(' ');
+            if (spaceIdx > 0) {
+                float val = sub.substring(spaceIdx + 1).toFloat();
+                if (val > 0.0f) amp = (val > 1.0f) ? (val / 100.0f) : val;
+            }
+            amp = constrain(amp, 0.05f, 0.30f);
+            autoTuner.configure(amp, 8, 25.0f, 0.04f);
+            autoTuner.start(TUNE_PITCH_RATE);
+            Serial.printf("[%s] [TUNE] Bat dau tune Pitch Rate PID | amp=%.2f (%.0f%%)\n", sourceTag, amp, amp * 100.0f);
+        } else if (sub.startsWith("yaw")) {
+            float amp = 0.10f;
+            int spaceIdx = sub.indexOf(' ');
+            if (spaceIdx > 0) {
+                float val = sub.substring(spaceIdx + 1).toFloat();
+                if (val > 0.0f) amp = (val > 1.0f) ? (val / 100.0f) : val;
+            }
+            amp = constrain(amp, 0.05f, 0.25f);
+            autoTuner.configure(amp, 8, 25.0f, 0.04f);
+            autoTuner.start(TUNE_YAW_RATE);
+            Serial.printf("[%s] [TUNE] Bat dau tune Yaw Rate PID | amp=%.2f (%.0f%%)\n", sourceTag, amp, amp * 100.0f);
+        } else if (sub.startsWith("angle")) {
+            autoTuner.start(TUNE_ANGLE_P);
+            Serial.printf("[%s] [TUNE] Bat dau danh gia Angle P\n", sourceTag);
+        } else if (sub.startsWith("stop")) {
+            autoTuner.stop();
+            Serial.printf("[%s] [TUNE] Da dung tune\n", sourceTag);
+        } else if (sub.startsWith("apply")) {
+            bool smooth = (sub.indexOf("50") >= 0 || sub.indexOf("smooth") >= 0 || sub.indexOf("half") >= 0);
+            if (autoTuner.isDone()) {
+                const TuneResult& r = autoTuner.getResult();
+                if (r.valid) {
+                    TuneAxis ax = autoTuner.getAxis();
+                    float kp = smooth ? r.kp_smooth : r.kp;
+                    float ki = smooth ? r.ki_smooth : r.ki;
+                    float kd = smooth ? r.kd_smooth : r.kd;
+                    if (ax == TUNE_ROLL_RATE)  px4Controller.setRatePidRoll(kp, ki, kd);
+                    if (ax == TUNE_PITCH_RATE) px4Controller.setRatePidPitch(kp, ki, kd);
+                    if (ax == TUNE_YAW_RATE)   px4Controller.setRatePidYaw(kp, ki, kd);
+                    if (ax == TUNE_ANGLE_P) {
+                        px4Controller.setAngleGains(r.angle_p, r.angle_p, 2.8f);
+                    }
+                    Serial.printf("[%s] [TUNE] DA AP DUNG (%s) → %s: Kp=%.4f Ki=%.4f Kd=%.5f | Angle_P=%.2f\n",
+                                  sourceTag, smooth ? "SMOOTH" : "STANDARD", r.axis_name, kp, ki, kd, r.angle_p);
+                }
+            } else {
+                Serial.printf("[%s] [TUNE] Khong co ket qua hop le de ap dung (chua hoan thanh)\n", sourceTag);
+            }
+        } else if (sub.startsWith("save")) {
+            const TuneResult& r = autoTuner.getResult();
+            if (r.valid) {
+                Serial.println("\n// ================== PX4_PID.CPP COPY-PASTE GAINS ==================");
+                Serial.printf("// Truc: %s (Tu=%.3fs, Ku=%.4f)\n", r.axis_name, r.tu, r.ku);
+                Serial.printf("  _rate_pid_%s.init(%.4ff, %.4ff, %.5ff, 0.30f, 20.0f, loop_freq_hz);\n",
+                              r.axis_name, r.kp, r.ki, r.kd);
+                Serial.printf("// Ban smooth (khuyen nghi neu con rung): init(%.4ff, %.4ff, %.5ff...)\n",
+                              r.kp_smooth, r.ki_smooth, r.kd_smooth);
+                Serial.printf("  // Outer Angle P goi y: %.2ff\n", r.angle_p);
+                Serial.println("// ===================================================================\n");
+            }
+        }
     } else if (cmd.equalsIgnoreCase("pid")) {
         const PidGains& gr = px4Controller.getRatePidRoll().getGains();
         const PidGains& gp = px4Controller.getRatePidPitch().getGains();
@@ -542,18 +622,53 @@ void loop() {
                              attitudeState.gx,   attitudeState.gy,    attitudeState.gz,
                              dt, isArmed, attitudeState.yaw_valid);
 
-        // OUTPUT SAFETY GATE (Đảm bảo duy nhất 1 Output Owner ghi vào ESC khi ARMED):
-        if (isArmed && activeTestMotor == 0) {
+        // AUTO-TUNER HOẶC CHẾ ĐỘ BAY TIÊU CHUẨN
+        if (autoTuner.isActive()) {
+            TuneAxis ax = autoTuner.getAxis();
+            float rate_meas = 0.0f, angle_abs = 0.0f;
+            if (ax == TUNE_ROLL_RATE)  { rate_meas = attitudeState.gx * DEG_TO_RAD; angle_abs = fabsf(attitudeState.roll); }
+            if (ax == TUNE_PITCH_RATE) { rate_meas = attitudeState.gy * DEG_TO_RAD; angle_abs = fabsf(attitudeState.pitch); }
+            if (ax == TUNE_YAW_RATE)   { rate_meas = attitudeState.gz * DEG_TO_RAD; angle_abs = fabsf(attitudeState.yaw); }
+            if (ax == TUNE_ANGLE_P)    { rate_meas = attitudeState.gx * DEG_TO_RAD; angle_abs = fabsf(attitudeState.roll); }
+
+            // Nếu ga < 2%, ngắt tuner vì không đủ mô-men
             if (setpointState.throttle_pct < 2.0f) {
-                // Ga < 2%: Cả 4 động cơ quay chậm không tải (Idle Spin)
-                for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-                    quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
+                autoTuner.stop(ABORT_LOW_THROTTLE);
+            }
+
+            float relay_torque = autoTuner.update(rate_meas, angle_abs, dt);
+
+            if (isArmed && activeTestMotor == 0) {
+                if (autoTuner.isAborted()) {
+                    for (int i = 0; i < ESC_NUM_MOTORS; i++)
+                        quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
+                } else if (setpointState.throttle_pct >= 2.0f) {
+                    float tau_r = (ax == TUNE_ROLL_RATE || ax == TUNE_ANGLE_P) ? relay_torque : 0.0f;
+                    float tau_p = (ax == TUNE_PITCH_RATE) ? relay_torque : 0.0f;
+                    float tau_y = (ax == TUNE_YAW_RATE)   ? relay_torque : 0.0f;
+                    float thr   = setpointState.throttle_pct / 100.0f;
+                    float u_tune[4];
+                    px4Controller.getMixer().mixNormalized(thr, tau_r, tau_p, tau_y, u_tune);
+                    quadMotors.setAllNormalized(u_tune);
+                } else {
+                    for (int i = 0; i < ESC_NUM_MOTORS; i++)
+                        quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
                 }
-            } else {
-                // Ga >= 2%: Nhận trực tiếp lệnh chuẩn hóa u1..u4 [0..1] từ Allocator/Mixer
-                // Cả bốn ESC dùng chung dải xung 1000..2000 us.
-                const float* u_norm = px4Controller.getNormalizedMotorOutputs();
-                quadMotors.setAllNormalized(u_norm);
+            }
+        } else {
+            // OUTPUT SAFETY GATE (Đảm bảo duy nhất 1 Output Owner ghi vào ESC khi ARMED):
+            if (isArmed && activeTestMotor == 0) {
+                if (setpointState.throttle_pct < 2.0f) {
+                    // Ga < 2%: Cả 4 động cơ quay chậm không tải (Idle Spin)
+                    for (int i = 0; i < ESC_NUM_MOTORS; i++) {
+                        quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
+                    }
+                } else {
+                    // Ga >= 2%: Nhận trực tiếp lệnh chuẩn hóa u1..u4 [0..1] từ Allocator/Mixer
+                    // Cả bốn ESC dùng chung dải xung 1000..2000 us.
+                    const float* u_norm = px4Controller.getNormalizedMotorOutputs();
+                    quadMotors.setAllNormalized(u_norm);
+                }
             }
         }
     }

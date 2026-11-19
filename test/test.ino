@@ -16,7 +16,7 @@
 
 #define MOTOR1_PIN          7     // Động cơ 1 (GPIO 7) - ESC Vàng 30A
 #define MOTOR2_PIN          6     // Động cơ 2 (GPIO 6) - ESC Vàng 30A
-#define MOTOR3_PIN          5     // Động cơ 3 (GPIO 5) - ESC Đen  40A
+#define MOTOR3_PIN          5     // Động cơ 3 (GPIO 5) - ESC Vàng 30A
 #define MOTOR4_PIN          4     // Động cơ 4 (GPIO 4) - ESC Vàng 30A
 
 #define ESC_FREQ_HZ         50    // 50Hz chuẩn Servo/ESC PWM (chu kỳ 20,000 us)
@@ -133,8 +133,8 @@ void writeSelectedTargetPct(float pct, bool verbose = true) {
             writeMotorPct(i, pct);
         }
         if (verbose) {
-            Serial.printf("[THR] ALL 4 Motors -> %5.1f%% (M1,2,4=%4u us | M3=%4u us)\n",
-                          pct, currentPulseUs[0], currentPulseUs[2]);
+            Serial.printf("[THR] ALL 4 Motors -> %5.1f%% (%4u us) [ESC Vang 30A dong bo]\n",
+                          pct, currentPulseUs[0]);
         }
     } else {
         uint8_t idx = (uint8_t)activeTarget;
@@ -387,19 +387,19 @@ void processCommand(String cmd) {
     if (cmd.equalsIgnoreCase("m3")) {
         stopAllMotorsToMin();
         activeTarget = SELECT_MOTOR_3;
-        Serial.println("[SELECT] >>> Da chon: MOTOR 3 (GPIO 5 - cùng dải 1000-2000us).");
+        Serial.println("[SELECT] >>> Da chon: MOTOR 3 (GPIO 5 - ESC Vang 30A).");
         return;
     }
     if (cmd.equalsIgnoreCase("m4")) {
         stopAllMotorsToMin();
         activeTarget = SELECT_MOTOR_4;
-        Serial.println("[SELECT] >>> Da chon: MOTOR 4 (GPIO 4 - ESC Vang).");
+        Serial.println("[SELECT] >>> Da chon: MOTOR 4 (GPIO 4 - ESC Vang 30A).");
         return;
     }
     if (cmd.equalsIgnoreCase("all")) {
         stopAllMotorsToMin();
         activeTarget = SELECT_ALL;
-        Serial.println("[SELECT] >>> Da chon: CA 4 DONG CO (Tu dong dong bo % ga giua ESC Vang & ESC Den).");
+        Serial.println("[SELECT] >>> Da chon: CA 4 DONG CO (Dong bo 100% ESC Vang 30A).");
         return;
     }
 

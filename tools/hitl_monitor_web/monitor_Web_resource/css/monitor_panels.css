@@ -251,3 +251,128 @@
   color: var(--tx-sec);
   text-align: right;
 }
+
+/* ============================================================================
+ * 6. PID AUTO-TUNER PANEL (RELAY / ZIEGLER-NICHOLS CONTROLS)
+ * ============================================================================ */
+.tune-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+.tune-badge.tune-idle {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--tx-muted);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.tune-badge.tune-active {
+  background: rgba(14, 165, 233, 0.2);
+  color: #38bdf8;
+  border: 1px solid #0284c7;
+  animation: pulseTune 1.2s infinite alternate;
+}
+
+.tune-badge.tune-done {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+  border: 1px solid #16a34a;
+}
+
+.tune-badge.tune-aborted {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid #dc2626;
+}
+
+@keyframes pulseTune {
+  0% { box-shadow: 0 0 4px rgba(14, 165, 233, 0.3); }
+  100% { box-shadow: 0 0 12px rgba(14, 165, 233, 0.8); }
+}
+
+.tune-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+}
+
+.tune-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tx-sec);
+  white-space: nowrap;
+}
+
+.btn-tune-axis {
+  background: var(--gl-inset);
+  color: var(--tx-sec);
+  border: 1px solid var(--bd);
+  border-radius: var(--r-sm);
+  padding: 5px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-tune-axis:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--tx);
+}
+
+.btn-tune-axis.active {
+  background: rgba(14, 165, 233, 0.25);
+  color: #38bdf8;
+  border-color: #0284c7;
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.4);
+}
+
+.btn-tune-action {
+  background: var(--gl-inset);
+  color: var(--tx);
+  border: 1px solid var(--bd);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-tune-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.btn-tune-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.tune-result-box {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(14, 165, 233, 0.35);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  margin-top: 6px;
+  box-shadow: inset 0 0 12px rgba(0, 0, 0, 0.4);
+}
+
+.tune-log {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: #94a3b8;
+  background: #020617;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--r-sm);
+  padding: 5px 8px;
+  margin-top: 6px;
+  min-height: 22px;
+  max-height: 48px;
+  overflow-y: auto;
+  line-height: 1.35;
+}

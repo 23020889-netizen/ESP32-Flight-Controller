@@ -210,6 +210,89 @@
           <button type="button" id="btnReturnPid" class="btn-return-pid">🔄 Trở Lại Chế Độ PID Tự Cân Bằng</button>
         </div>
 
+        <!-- BẢNG PID AUTO-TUNER (Relay/ZN Method) -->
+        <div class="gl pn" id="panelPidTuner">
+          <div class="pn-head-actions">
+            <h2>PID AUTO-TUNER <em>RELAY/ZN</em></h2>
+            <span id="tuneStatusBadge" class="tune-badge tune-idle">⬛ IDLE</span>
+          </div>
+
+          <!-- Chọn trục tune -->
+          <div class="tune-row">
+            <label class="tune-label">Trục tune:</label>
+            <div class="preset-grid-4" style="flex:1">
+              <button type="button" class="btn-tune-axis active" data-axis="roll">Roll Rate</button>
+              <button type="button" class="btn-tune-axis" data-axis="pitch">Pitch Rate</button>
+              <button type="button" class="btn-tune-axis" data-axis="yaw">Yaw Rate</button>
+              <button type="button" class="btn-tune-axis" data-axis="angle">Angle P</button>
+            </div>
+          </div>
+
+          <!-- Relay amplitude -->
+          <div class="tune-row">
+            <label class="tune-label">Relay amp:</label>
+            <input type="range" id="rngRelayAmp" min="5" max="25" value="15" step="1" style="flex:1">
+            <b id="lblRelayAmp" class="mono" style="width:40px;text-align:right">15%</b>
+          </div>
+
+          <!-- Safety: góc hiện tại -->
+          <div class="tune-row" style="gap:12px">
+            <span class="tune-label">Góc hiện tại:</span>
+            <span class="mono">R:<b id="tuneRollLive" style="color:var(--c1)">0.0°</b></span>
+            <span class="mono">P:<b id="tunePitchLive" style="color:var(--c3)">0.0°</b></span>
+            <span id="tuneSafetyWarn" style="color:var(--warn);font-size:11px;display:none">⚠️ Góc quá lớn!</span>
+          </div>
+
+          <!-- Graph gyro rate trong relay -->
+          <canvas id="tuneGraph" width="260" height="70" style="width:100%;background:#0a0e1a;border-radius:6px;border:1px solid var(--border);margin:6px 0"></canvas>
+
+          <!-- Tiến độ -->
+          <div class="tune-row" style="justify-content:space-between">
+            <span class="tune-label">Chu kỳ thu thập:</span>
+            <span><b id="tuneCycleCount">0</b> / <b id="tuneMinCycles">8</b></span>
+            <div style="flex:1;margin:0 8px;background:#111;border-radius:4px;height:8px;overflow:hidden">
+              <div id="tuneProgressBar" style="height:100%;width:0%;background:var(--accent);transition:width 0.3s"></div>
+            </div>
+          </div>
+
+          <!-- Kết quả -->
+          <div class="tune-result-box" id="tuneResultBox" style="display:none">
+            <div class="tune-row" style="justify-content:space-between;margin-bottom:4px">
+              <span><span class="tune-label" style="color:var(--warn)">Ku:</span> <b id="tuneKu" class="mono">—</b></span>
+              <span><span class="tune-label" style="color:var(--warn)">Tu:</span> <b id="tuneTu" class="mono">— s</b></span>
+              <span><span class="tune-label" style="color:var(--tx-sec)">Angle P:</span> <b id="tuneAngleP" class="mono" style="color:#38bdf8">—</b></span>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.1);padding-top:4px;margin-top:4px">
+              <div style="font-size:10px;font-weight:700;color:var(--c1);margin-bottom:2px">ZN Chuẩn (Dynamic):</div>
+              <div class="tune-row" style="justify-content:space-between;font-size:11px">
+                <span>P: <b id="tuneKp" class="mono" style="color:var(--c1)">—</b></span>
+                <span>I: <b id="tuneKi" class="mono" style="color:var(--c3)">—</b></span>
+                <span>D: <b id="tuneKd" class="mono" style="color:var(--c4)">—</b></span>
+              </div>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.1);padding-top:4px;margin-top:4px">
+              <div style="font-size:10px;font-weight:700;color:#4ade80;margin-bottom:2px">ZN Mượt (Smooth / Giảm rung):</div>
+              <div class="tune-row" style="justify-content:space-between;font-size:11px">
+                <span>P: <b id="tuneKpSmooth" class="mono" style="color:#4ade80">—</b></span>
+                <span>I: <b id="tuneKiSmooth" class="mono" style="color:var(--c3)">—</b></span>
+                <span>D: <b id="tuneKdSmooth" class="mono" style="color:var(--c4)">—</b></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Nút điều khiển -->
+          <div class="preset-grid-4" style="margin-top:8px">
+            <button type="button" id="btnTuneStart" class="btn-tune-action" title="Bắt đầu relay auto-tune">▶ Bắt Đầu</button>
+            <button type="button" id="btnTuneStop" class="btn-tune-action btn-stop-motors" title="Dừng khẩn cấp">⏹ Dừng</button>
+            <button type="button" id="btnTuneApply" class="btn-tune-action" title="Áp dụng bộ số ZN chuẩn" disabled>⚡ Áp Dụng</button>
+            <button type="button" id="btnTuneApplySmooth" class="btn-tune-action" title="Áp dụng bộ số ZN mượt (50% damping)" disabled>🛡️ Mượt</button>
+          </div>
+          <div style="display:flex;gap:6px;margin-top:5px">
+            <button type="button" id="btnTuneSave" class="btn-tune-action" style="flex:1" title="In mã nguồn C++ để lưu vào firmware" disabled>💾 In Mã Lưu Vào Firmware</button>
+          </div>
+          <div id="tuneLog" class="tune-log">Sẵn sàng. Chọn trục và bấm "Bắt Đầu" (Cần ARM ga 25-35%).</div>
+        </div>
+
         <!-- BẢNG SO SÁNH DỮ LIỆU CẢM BIẾN DUAL-IMU & PX4 EKF -->
         <div class="gl pn">
           <h2>SO SÁNH CẢM BIẾN DUAL-IMU &amp; PX4 EKF<em>MULTI-SENSOR</em></h2>
@@ -314,5 +397,6 @@
   <script src="monitor_Web_resource/js/flex_layout_workspace_manager.js"></script>
   <script src="monitor_Web_resource/js/dashboard_application_controller.js"></script>
   <script src="monitor_Web_resource/js/telemetry_loop_updater.js"></script>
+  <script src="monitor_Web_resource/js/pid_autotuner_controller.js"></script>
 </body>
 </html>

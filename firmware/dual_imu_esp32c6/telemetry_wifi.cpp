@@ -1,4 +1,5 @@
 #include "telemetry_wifi.h"
+#include "pid_autotuner.h"
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <mbedtls/sha1.h>
@@ -282,7 +283,10 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
     g_lastBroadcastMs = nowMs;
 
     // Đóng gói JSON chi tiết bao gồm cả EKF Fused, MPU-6050, Xsens MTi-3, Setpoint, Torque và Allocator
-    char jsonMsg[512];
+    char jsonMsg[800];
+    char tuneBuf[240];
+    autoTuner.buildStatusJson(tuneBuf, sizeof(tuneBuf));
+
     snprintf(jsonMsg, sizeof(jsonMsg),
              "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
              "\"mpu_r\":%.1f,\"mpu_p\":%.1f,\"mpu_y\":%.1f,"
@@ -292,7 +296,8 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
              "\"m\":[%.1f,%.1f,%.1f,%.1f],\"us\":[%u,%u,%u,%u],\"state\":\"%s\","
              "\"sp_r\":%.1f,\"sp_p\":%.1f,\"sp_y\":%.1f,\"sp_t\":%.1f,"
              "\"tau\":[%.2f,%.2f,%.2f],\"u\":[%.2f,%.2f,%.2f,%.2f],\"yaw_ok\":%d,"
-             "\"rc_seq\":%lu,\"sta_connected\":%d,\"sta_ip\":\"%s\",\"pwm_ok\":%d}",
+             "\"rc_seq\":%lu,\"sta_connected\":%d,\"sta_ip\":\"%s\",\"pwm_ok\":%d,"
+             "%s}",
              packet.roll, packet.pitch, packet.yaw,
              packet.mpu_roll, packet.mpu_pitch, packet.mpu_yaw,
              packet.xs_roll,  packet.xs_pitch,  packet.xs_yaw,
@@ -307,7 +312,8 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
              packet.u_norm[0], packet.u_norm[1], packet.u_norm[2], packet.u_norm[3],
              packet.yaw_valid ? 1 : 0, (unsigned long)packet.rc_sequence,
              staConnected ? 1 : 0, staConnected ? WiFi.localIP().toString().c_str() : "",
-             packet.pwm_outputs_ready ? 1 : 0);
+             packet.pwm_outputs_ready ? 1 : 0,
+             tuneBuf);
 
     size_t jsonLen = strlen(jsonMsg);
     for (int i = 0; i < MAX_WS_CLIENTS; i++) {

@@ -1,9 +1,11 @@
 #include "telemetry_wifi.h"
 #include "pid_autotuner.h"
+#include "telemetry_json.h"
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <mbedtls/sha1.h>
 #include <mbedtls/base64.h>
+#include <strings.h>
 #include <deque>
 
 // ============================================================================
@@ -28,84 +30,126 @@ static WiFiServer g_wsServer(81);
 static WiFiClient g_wsClients[MAX_WS_CLIENTS];
 static bool g_wsHandshakeDone[MAX_WS_CLIENTS] = {false};
 
+// Handshake KHÔNG CHẶN: gom request HTTP qua nhiều vòng loop() thay vì vòng while 400 ms.
+// Bản cũ chặn loop() tới 400 ms mỗi khi trình duyệt kết nối => vòng PID 200 Hz đứng hình
+// trong lúc đang ARMED (motor giữ nguyên lệnh cũ, mất cân bằng).
+static const size_t   WS_HANDSHAKE_MAX = 1024;
+static const uint32_t WS_HANDSHAKE_TIMEOUT_MS = 1500;
+static char     g_wsReqBuf[MAX_WS_CLIENTS][WS_HANDSHAKE_MAX];
+static size_t   g_wsReqLen[MAX_WS_CLIENTS] = {};
+static uint32_t g_wsAcceptMs[MAX_WS_CLIENTS] = {};
+
 static std::deque<String> g_cmdQueue;
 static uint32_t g_lastBroadcastMs = 0;
-static const uint32_t BROADCAST_INTERVAL_MS = 20; // 50 Hz siêu mượt mà cho 3D Monitor và PID Telemetry
+static const uint32_t BROADCAST_INTERVAL_MS = 20; // 50 Hz cho 3D Monitor và PID Telemetry
 
 static String g_activeIpStr = "192.168.4.1";
+static bool g_staConnected = false;
+static uint32_t g_lastNetCheckMs = 0;
 static uint8_t g_wsRxBuffer[MAX_WS_CLIENTS][512] = {};
 static size_t g_wsRxLength[MAX_WS_CLIENTS] = {};
+
+static uint32_t g_txDropped = 0;   // Số frame bị hủy do ghi TCP không trọn vẹn
+static uint32_t g_jsonErrors = 0;  // Số lần JSON không vừa buffer (đã chặn, không gửi)
+
+static void ws_release_slot(int i) {
+    if (g_wsClients[i]) g_wsClients[i].stop();
+    g_wsHandshakeDone[i] = false;
+    g_wsRxLength[i] = 0;   // Bản cũ không xóa => byte rác của client cũ dính vào client mới
+    g_wsReqLen[i] = 0;
+}
 
 // ============================================================================
 // 2. HELPER CHUẨN RFC6455 WEBSOCKET HANDSHAKE
 // ============================================================================
-static bool perform_ws_handshake(WiFiClient& client, int clientIndex) {
-    String req = "";
-    uint32_t startMs = millis();
-    while (client.connected() && millis() - startMs < 400) {
-        if (client.available()) {
-            char c = (char)client.read();
-            req += c;
-            if (req.endsWith("\r\n\r\n")) break;
-        }
+// Trả về: 1 = xong, 0 = cần thêm dữ liệu, -1 = lỗi (đóng kết nối)
+static int poll_ws_handshake(WiFiClient& client, int clientIndex) {
+    size_t& len = g_wsReqLen[clientIndex];
+    char* req = g_wsReqBuf[clientIndex];
+    while (client.available() > 0 && len < WS_HANDSHAKE_MAX - 1) {
+        int c = client.read();
+        if (c < 0) break;
+        req[len++] = (char)c;
+    }
+    req[len] = '\0';
+
+    if (strstr(req, "\r\n\r\n") == nullptr) {
+        if (len >= WS_HANDSHAKE_MAX - 1) return -1;
+        if (millis() - g_wsAcceptMs[clientIndex] > WS_HANDSHAKE_TIMEOUT_MS) return -1;
+        return 0;
     }
 
-    if (!req.startsWith("GET")) {
-        return false;
+    if (strncmp(req, "GET", 3) != 0) return -1;
+
+    // Tìm header không phân biệt hoa/thường
+    const char* keyHdr = nullptr;
+    for (const char* q = req; *q; ++q) {
+        if (strncasecmp(q, "Sec-WebSocket-Key:", 18) == 0) { keyHdr = q + 18; break; }
     }
+    if (!keyHdr) return -1;
+    while (*keyHdr == ' ' || *keyHdr == '\t') ++keyHdr;
+    const char* keyEnd = strstr(keyHdr, "\r\n");
+    if (!keyEnd || keyEnd - keyHdr > 60 || keyEnd == keyHdr) return -1;
 
-    int keyIndex = req.indexOf("Sec-WebSocket-Key: ");
-    if (keyIndex == -1) {
-        return false;
-    }
+    char concat[128];
+    const int klen = (int)(keyEnd - keyHdr);
+    snprintf(concat, sizeof(concat), "%.*s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", klen, keyHdr);
 
-    int keyEnd = req.indexOf("\r\n", keyIndex);
-    String clientKey = req.substring(keyIndex + 19, keyEnd);
-    clientKey.trim();
-
-    String concat = clientKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     unsigned char sha1_result[20];
-    mbedtls_sha1((const unsigned char*)concat.c_str(), concat.length(), sha1_result);
+    mbedtls_sha1((const unsigned char*)concat, strlen(concat), sha1_result);
 
-    unsigned char base64_out[36];
+    unsigned char base64_out[40];
     size_t olen = 0;
-    mbedtls_base64_encode(base64_out, sizeof(base64_out), &olen, sha1_result, 20);
+    mbedtls_base64_encode(base64_out, sizeof(base64_out) - 1, &olen, sha1_result, 20);
     base64_out[olen] = '\0';
 
-    client.print("HTTP/1.1 101 Switching Protocols\r\n");
-    client.print("Upgrade: websocket\r\n");
-    client.print("Connection: Upgrade\r\n");
-    client.print("Sec-WebSocket-Accept: ");
-    client.print((char*)base64_out);
-    client.print("\r\n\r\n");
+    char resp[200];
+    const int rlen = snprintf(resp, sizeof(resp),
+                              "HTTP/1.1 101 Switching Protocols\r\n"
+                              "Upgrade: websocket\r\n"
+                              "Connection: Upgrade\r\n"
+                              "Sec-WebSocket-Accept: %s\r\n\r\n", (char*)base64_out);
+    if (client.write((const uint8_t*)resp, rlen) != (size_t)rlen) return -1;
 
     g_wsHandshakeDone[clientIndex] = true;
+    g_wsRxLength[clientIndex] = 0;
+    len = 0;
     Serial.printf("[WIFI_WS] Client #%d ket noi thanh cong tu Web Browser!\n", clientIndex);
+    return 1;
+}
+
+// Gửi 1 Frame Text Unmasked Server -> Browser (RFC6455) bằng MỘT lần ghi TCP.
+// Bản cũ ghi header và payload bằng 2 lệnh write() riêng => 2 segment TCP/frame (tăng trễ,
+// nghẽn WiFi). Nếu ghi không trọn vẹn, luồng WS bị lệch khung => đóng client để trình duyệt
+// tự kết nối lại thay vì nhận dữ liệu rác.
+static bool send_ws_frame(WiFiClient& client, uint8_t opcode, const char* payload, size_t len) {
+    if (!client.connected()) return false;
+    static uint8_t frame[1600];
+    size_t headerLen = 0;
+    if (len + 4 > sizeof(frame)) return false;
+
+    frame[0] = 0x80 | (opcode & 0x0F);
+    if (len <= 125) {
+        frame[1] = (uint8_t)len;
+        headerLen = 2;
+    } else {
+        frame[1] = 126;
+        frame[2] = (uint8_t)((len >> 8) & 0xFF);
+        frame[3] = (uint8_t)(len & 0xFF);
+        headerLen = 4;
+    }
+    if (len) memcpy(frame + headerLen, payload, len);
+    const size_t total = headerLen + len;
+    const size_t written = client.write(frame, total);
+    if (written != total) {
+        g_txDropped++;
+        return false;
+    }
     return true;
 }
 
-// Gửi 1 Frame Text Unmasked từ Server -> Browser (Chuẩn RFC6455)
-static void send_ws_text_frame(WiFiClient& client, const char* textPayload, size_t len) {
-    if (!client.connected()) return;
-
-    uint8_t header[10];
-    size_t headerLen = 0;
-
-    header[0] = 0x81; // FIN + Text frame
-    if (len <= 125) {
-        header[1] = (uint8_t)len;
-        headerLen = 2;
-    } else if (len <= 65535) {
-        header[1] = 126;
-        header[2] = (uint8_t)((len >> 8) & 0xFF);
-        header[3] = (uint8_t)(len & 0xFF);
-        headerLen = 4;
-    } else {
-        return;
-    }
-
-    client.write(header, headerLen);
-    client.write((const uint8_t*)textPayload, len);
+static bool send_ws_text_frame(WiFiClient& client, const char* textPayload, size_t len) {
+    return send_ws_frame(client, 0x01, textPayload, len);
 }
 
 // Đọc Frame từ Web Browser
@@ -134,19 +178,29 @@ static void read_ws_incoming_frames(WiFiClient& client, int clientIndex) {
             return;
         }
         if (isMasked) headerLen += 4;
+        if (payloadLen > sizeof(g_wsRxBuffer[clientIndex]) - headerLen) {
+            buffered = 0; // Frame lớn hơn buffer: không bao giờ ghép đủ => hủy
+            return;
+        }
         if (buffered - consumed < headerLen + payloadLen) break; // Keep partial TCP frame intact.
 
+        const uint8_t* mask = isMasked ? frame + headerLen - 4 : nullptr;
+        const uint8_t* payload = frame + headerLen;
+
         if (opcode == 0x08) {
-            client.stop();
-            g_wsHandshakeDone[clientIndex] = false;
-            buffered = 0;
+            ws_release_slot(clientIndex);
             return;
         }
 
-        if (payloadLen <= 256 && opcode == 0x01) {
+        if (opcode == 0x09 && payloadLen <= 125) {
+            // Ping -> Pong (giữ kết nối với client/proxy có keep-alive)
+            char pong[126];
+            for (size_t i = 0; i < payloadLen; ++i) {
+                pong[i] = (char)(payload[i] ^ (isMasked ? mask[i % 4] : 0));
+            }
+            send_ws_frame(client, 0x0A, pong, (size_t)payloadLen);
+        } else if (payloadLen <= 256 && opcode == 0x01) {
             char command[257];
-            const uint8_t* mask = isMasked ? frame + headerLen - 4 : nullptr;
-            const uint8_t* payload = frame + headerLen;
             for (size_t i = 0; i < payloadLen; ++i) {
                 command[i] = (char)(payload[i] ^ (isMasked ? mask[i % 4] : 0));
             }
@@ -230,18 +284,27 @@ void telemetry_wifi_init(const char* sta_ssid, const char* sta_pass,
 // 4. CHU TRÌNH PHÁT VÀ NHẬN DỮ LIỆU TELEMETRY
 // ============================================================================
 void telemetry_wifi_update(const TelemetryPacket& packet) {
-    const bool staConnected = WiFi.status() == WL_CONNECTED;
-    g_activeIpStr = staConnected ? WiFi.localIP().toString() : AP_LOCAL_IP.toString();
-    // 1. Quản lý kết nối mới từ WebSocket Server
+    const uint32_t nowMs = millis();
+
+    // 0. Trạng thái mạng: kiểm tra 1 lần/giây (bản cũ gọi WiFi.status() + localIP().toString()
+    //    MỖI vòng loop() => cấp phát String liên tục, phân mảnh heap, tốn CPU vòng PID)
+    if (nowMs - g_lastNetCheckMs >= 1000 || g_lastNetCheckMs == 0) {
+        g_lastNetCheckMs = nowMs;
+        g_staConnected = (WiFi.status() == WL_CONNECTED);
+        g_activeIpStr = g_staConnected ? WiFi.localIP().toString() : AP_LOCAL_IP.toString();
+    }
+
+    // 1. Quản lý kết nối mới từ WebSocket Server (không chặn)
     if (g_wsServer.hasClient()) {
         WiFiClient newClient = g_wsServer.accept();
         bool slotFound = false;
         for (int i = 0; i < MAX_WS_CLIENTS; i++) {
             if (!g_wsClients[i] || !g_wsClients[i].connected()) {
+                ws_release_slot(i);
                 g_wsClients[i] = newClient;
-                g_wsHandshakeDone[i] = false;
+                g_wsClients[i].setNoDelay(true); // Tắt Nagle: telemetry nhỏ, cần trễ thấp
+                g_wsAcceptMs[i] = nowMs;
                 slotFound = true;
-                perform_ws_handshake(g_wsClients[i], i);
                 break;
             }
         }
@@ -250,13 +313,21 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
         }
     }
 
-    // 2. Nhận dữ liệu / Lệnh điều khiển từ Web Browser (Cần Analog / Nút Bấm / CLI)
+    // 2. Handshake dang dở + nhận lệnh từ Web Browser
     for (int i = 0; i < MAX_WS_CLIENTS; i++) {
-        if (g_wsClients[i] && g_wsClients[i].connected()) {
-            if (g_wsHandshakeDone[i]) {
-                read_ws_incoming_frames(g_wsClients[i], i);
-            }
+        if (!g_wsClients[i]) continue;
+        if (!g_wsClients[i].connected()) {
+            if (g_wsHandshakeDone[i] || g_wsReqLen[i] > 0) ws_release_slot(i);
+            continue;
         }
+        if (!g_wsHandshakeDone[i]) {
+            if (poll_ws_handshake(g_wsClients[i], i) < 0) {
+                Serial.printf("[WIFI_WS] Client #%d handshake loi/timeout -> dong ket noi\n", i);
+                ws_release_slot(i);
+            }
+            continue;
+        }
+        read_ws_incoming_frames(g_wsClients[i], i);
     }
 
     // 3. Nhận lệnh điều khiển qua mạng UDP
@@ -275,50 +346,41 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
         }
     }
 
-    // 4. Bắn dữ liệu Telemetry JSON định kỳ lên Web (Rate Limiter: 25 Hz)
-    uint32_t nowMs = millis();
+    // 4. Phát Telemetry JSON định kỳ (50 Hz)
     if (nowMs - g_lastBroadcastMs < BROADCAST_INTERVAL_MS) {
         return;
     }
     g_lastBroadcastMs = nowMs;
 
-    // Đóng gói JSON chi tiết bao gồm cả EKF Fused, MPU-6050, Xsens MTi-3, Setpoint, Torque và Allocator
-    char jsonMsg[800];
-    char tuneBuf[240];
-    autoTuner.buildStatusJson(tuneBuf, sizeof(tuneBuf));
+    bool anyClient = false;
+    for (int i = 0; i < MAX_WS_CLIENTS; i++) {
+        if (g_wsClients[i] && g_wsHandshakeDone[i]) { anyClient = true; break; }
+    }
+    if (!anyClient) return; // Không ai xem => không tốn CPU đóng gói JSON
 
-    snprintf(jsonMsg, sizeof(jsonMsg),
-             "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,"
-             "\"mpu_r\":%.1f,\"mpu_p\":%.1f,\"mpu_y\":%.1f,"
-             "\"xs_r\":%.1f,\"xs_p\":%.1f,\"xs_y\":%.1f,"
-             "\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,"
-             "\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,\"z\":%.2f,\"vz\":%.2f,"
-             "\"m\":[%.1f,%.1f,%.1f,%.1f],\"us\":[%u,%u,%u,%u],\"state\":\"%s\","
-             "\"sp_r\":%.1f,\"sp_p\":%.1f,\"sp_y\":%.1f,\"sp_t\":%.1f,"
-             "\"tau\":[%.2f,%.2f,%.2f],\"u\":[%.2f,%.2f,%.2f,%.2f],\"yaw_ok\":%d,"
-             "\"rc_seq\":%lu,\"sta_connected\":%d,\"sta_ip\":\"%s\",\"pwm_ok\":%d,"
-             "%s}",
-             packet.roll, packet.pitch, packet.yaw,
-             packet.mpu_roll, packet.mpu_pitch, packet.mpu_yaw,
-             packet.xs_roll,  packet.xs_pitch,  packet.xs_yaw,
-             packet.ax,   packet.ay,   packet.az,
-             packet.gx,   packet.gy,   packet.gz,
-             packet.z,    packet.vz,
-             packet.m_pct[0], packet.m_pct[1], packet.m_pct[2], packet.m_pct[3],
-             packet.m_us[0],  packet.m_us[1],  packet.m_us[2],  packet.m_us[3],
-             packet.state_str,
-             packet.sp_roll, packet.sp_pitch, packet.sp_yaw, packet.sp_throttle,
-             packet.tau[0], packet.tau[1], packet.tau[2],
-             packet.u_norm[0], packet.u_norm[1], packet.u_norm[2], packet.u_norm[3],
-             packet.yaw_valid ? 1 : 0, (unsigned long)packet.rc_sequence,
-             staConnected ? 1 : 0, staConnected ? WiFi.localIP().toString().c_str() : "",
-             packet.pwm_outputs_ready ? 1 : 0,
-             tuneBuf);
+    // Bản cũ: buffer 800 byte + khối tune 240 byte => snprintf cắt cụt JSON khi số liệu dài,
+    // Web JSON.parse() thất bại và bỏ qua gói tin âm thầm (đồ thị IMU giật/đứng).
+    static char jsonMsg[1400];
+    char tuneBuf[360];
+    const int tn = autoTuner.buildStatusJson(tuneBuf, sizeof(tuneBuf));
+    if (tn <= 0 || tn >= (int)sizeof(tuneBuf)) tuneBuf[0] = '\0';
 
-    size_t jsonLen = strlen(jsonMsg);
+    const size_t jsonLen = telemetry_build_json(packet, g_staConnected, g_activeIpStr.c_str(),
+                                                tuneBuf, jsonMsg, sizeof(jsonMsg));
+    if (jsonLen == 0) {
+        if ((g_jsonErrors++ % 50) == 0) {
+            Serial.println("[WIFI_WS] [LOI] JSON telemetry vuot buffer -> bo qua goi tin");
+        }
+        return;
+    }
+
     for (int i = 0; i < MAX_WS_CLIENTS; i++) {
         if (g_wsClients[i] && g_wsClients[i].connected() && g_wsHandshakeDone[i]) {
-            send_ws_text_frame(g_wsClients[i], jsonMsg, jsonLen);
+            if (!send_ws_text_frame(g_wsClients[i], jsonMsg, jsonLen)) {
+                Serial.printf("[WIFI_WS] Client #%d ghi TCP that bai (drop=%lu) -> dong ket noi\n",
+                              i, (unsigned long)g_txDropped);
+                ws_release_slot(i);
+            }
         }
     }
 }
@@ -339,12 +401,12 @@ String telemetry_wifi_get_command() {
 
 void telemetry_wifi_broadcast_msg(const char* msg) {
     if (!msg) return;
-    char text[128];
-    snprintf(text, sizeof(text), "{\"log\":\"%s\"}", msg);
-    size_t len = strlen(text);
+    char text[256];
+    const size_t len = telemetry_build_log_json(msg, text, sizeof(text)); // escape dấu ngoặc kép, backslash, ký tự điều khiển
+    if (len == 0) return;
     for (int i = 0; i < MAX_WS_CLIENTS; i++) {
         if (g_wsClients[i] && g_wsClients[i].connected() && g_wsHandshakeDone[i]) {
-            send_ws_text_frame(g_wsClients[i], text, len);
+            if (!send_ws_text_frame(g_wsClients[i], text, len)) ws_release_slot(i);
         }
     }
 }

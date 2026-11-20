@@ -6,6 +6,13 @@
 static const float GRAVITY = 9.80665f;
 static const float RAD_TO_DEG_F = 57.2957795f;
 
+// Dải đo: Gyro ±1000 dps (32.8 LSB/dps), Accel ±8 g (4096 LSB/g).
+// Bản cũ dùng ±250 dps / ±2 g: Gyro bão hòa ở 250 dps trong khi vòng ngoài cho phép
+// lệnh tới 220 dps (+ overshoot), và Accel ±2 g bị rung động cơ làm bão hòa
+// => góc nghiêng từ gia tốc sai, vòng trong mất phản hồi khi quay nhanh.
+static const float GYRO_LSB_PER_DPS = 32.8f;
+static const float ACC_LSB_PER_G    = 4096.0f;
+
 static float mpu_gx_bias = 0.0f;
 static float mpu_gy_bias = 0.0f;
 static float mpu_gz_bias = 0.0f;
@@ -54,10 +61,10 @@ bool mpu6050_init(uint8_t sda_pin, uint8_t scl_pin, uint32_t freq) {
     writeReg(0x6B, 0x01);
     delay(10);
 
-    // Accel +/- 2g
-    writeReg(0x1C, 0x00);
-    // Gyro +/- 250 deg/s
-    writeReg(0x1B, 0x00);
+    // Accel +/- 8g
+    writeReg(0x1C, 0x10);
+    // Gyro +/- 1000 deg/s
+    writeReg(0x1B, 0x10);
     // DLPF 42Hz Bandwidth
     writeReg(0x1A, 0x03);
     // Sample Rate Divider (200Hz)
@@ -84,9 +91,9 @@ void mpu6050_calibrate_gyro(uint16_t sample_count) {
             int16_t raw_gy = (int16_t)((Wire.read() << 8) | Wire.read());
             int16_t raw_gz = (int16_t)((Wire.read() << 8) | Wire.read());
 
-            sum_x += (raw_gx / 131.0f);
-            sum_y += (raw_gy / 131.0f);
-            sum_z += (raw_gz / 131.0f);
+            sum_x += (raw_gx / GYRO_LSB_PER_DPS);
+            sum_y += (raw_gy / GYRO_LSB_PER_DPS);
+            sum_z += (raw_gz / GYRO_LSB_PER_DPS);
             count++;
         }
         delay(5);
@@ -111,10 +118,17 @@ bool mpu6050_read(MpuData &data) {
         return false;
     }
 
+    // Lỗi I2C liên tiếp => đánh dấu mất cảm biến (bản cũ giữ data.ready=true với dữ liệu cũ mãi mãi)
+    static uint8_t fail_count = 0;
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x3B);
-    if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)14) != 14) return false;
+    if (Wire.endTransmission(false) != 0 ||
+        Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)14) != 14) {
+        if (fail_count < 255) fail_count++;
+        if (fail_count >= 10) data.ready = false;
+        return false;
+    }
+    fail_count = 0;
 
     uint8_t buf[14];
     for (int i = 0; i < 14; i++) {
@@ -129,13 +143,13 @@ bool mpu6050_read(MpuData &data) {
     int16_t raw_gy = (int16_t)((buf[10] << 8) | buf[11]);
     int16_t raw_gz = (int16_t)((buf[12] << 8) | buf[13]);
 
-    data.ax = (raw_ax / 16384.0f) * GRAVITY;
-    data.ay = (raw_ay / 16384.0f) * GRAVITY;
-    data.az = (raw_az / 16384.0f) * GRAVITY;
+    data.ax = (raw_ax / ACC_LSB_PER_G) * GRAVITY;
+    data.ay = (raw_ay / ACC_LSB_PER_G) * GRAVITY;
+    data.az = (raw_az / ACC_LSB_PER_G) * GRAVITY;
 
-    data.gx = (raw_gx / 131.0f) - mpu_gx_bias;
-    data.gy = (raw_gy / 131.0f) - mpu_gy_bias;
-    data.gz = (raw_gz / 131.0f) - mpu_gz_bias;
+    data.gx = (raw_gx / GYRO_LSB_PER_DPS) - mpu_gx_bias;
+    data.gy = (raw_gy / GYRO_LSB_PER_DPS) - mpu_gy_bias;
+    data.gz = (raw_gz / GYRO_LSB_PER_DPS) - mpu_gz_bias;
 
     // Tinh Roll & Pitch tu gia toc
     float rollAcc  = atan2f(data.ay, data.az) * RAD_TO_DEG_F;
@@ -151,9 +165,16 @@ bool mpu6050_read(MpuData &data) {
         last_update_us = nowUs;
         if (dt <= 0.0f || dt > 0.1f) dt = 0.005f;
 
-        const float alpha = 0.96f;
+        // Chỉ tin gia tốc khi |a| gần 1 g (không bị rung/gia tốc tuyến tính lớn)
+        const float a_norm = sqrtf(data.ax * data.ax + data.ay * data.ay + data.az * data.az);
+        const bool acc_trust = fabsf(a_norm - GRAVITY) < 0.25f * GRAVITY;
+        // Hằng số thời gian 0.5 s, độc lập với tần số gọi hàm (loop() chạy nhanh hơn 200 Hz)
+        const float tau_cf = 0.5f;
+        const float alpha = acc_trust ? (tau_cf / (tau_cf + dt)) : 1.0f;
         current_roll  = alpha * (current_roll  + data.gx * dt) + (1.0f - alpha) * rollAcc;
         current_pitch = alpha * (current_pitch + data.gy * dt) + (1.0f - alpha) * pitchAcc;
+        if (current_roll > 180.0f)  current_roll -= 360.0f;
+        if (current_roll < -180.0f) current_roll += 360.0f;
         current_yaw  += data.gz * dt;
 
         if (current_yaw > 180.0f)  current_yaw -= 360.0f;

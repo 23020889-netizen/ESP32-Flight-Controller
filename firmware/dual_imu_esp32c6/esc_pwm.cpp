@@ -11,6 +11,7 @@ EscMotor::EscMotor()
     : _id(0), _pin(0), _direction(MOTOR_DIR_CCW),
       _freq_hz(ESC_DEFAULT_FREQ_HZ), _period_us(20000), _max_duty(16383),
       _current_us(ESC_PULSE_MIN_US), _target_us(ESC_PULSE_MIN_US),
+      _ramp_us((float)ESC_PULSE_MIN_US),
       _throttle_pct(0.0f), _attached(false) {
 }
 
@@ -30,6 +31,7 @@ bool EscMotor::init(uint8_t id, uint8_t pin, MotorDirection dir, uint32_t freq_h
     _max_duty    = (1UL << ESC_RESOLUTION_BITS) - 1UL;
     _current_us  = ESC_PULSE_MIN_US;
     _target_us   = ESC_PULSE_MIN_US;
+    _ramp_us     = (float)ESC_PULSE_MIN_US;
     _throttle_pct= 0.0f;
 
     pinMode(_pin, OUTPUT);
@@ -69,8 +71,11 @@ bool EscMotor::setFrequency(uint32_t freq_hz) {
 }
 
 void EscMotor::writePulseUs(uint16_t pulse_us) {
+    if (pulse_us < ESC_PULSE_MIN_US) pulse_us = ESC_PULSE_MIN_US;
+    if (pulse_us > ESC_PULSE_MAX_US) pulse_us = ESC_PULSE_MAX_US;
     _current_us = pulse_us;
     _target_us  = pulse_us;
+    _ramp_us    = (float)pulse_us;
 
     if (_current_us <= ESC_PULSE_MIN_US) {
         _throttle_pct = 0.0f;
@@ -87,14 +92,17 @@ void EscMotor::setTargetPulseUs(uint16_t pulse_us) {
     _target_us = pulse_us;
 }
 
-void EscMotor::setNormalizedCommand(float u) {
-    if (isnan(u) || isinf(u) || u <= 0.001f) {
-        setTargetPulseUs(ESC_PULSE_MIN_US);
-        return;
+void EscMotor::setNormalizedCommand(float u, bool immediate) {
+    uint16_t pulse = ESC_PULSE_MIN_US;
+    if (!(isnan(u) || isinf(u) || u <= 0.001f)) {
+        if (u > 1.0f) u = 1.0f;
+        pulse = ESC_PULSE_MIN_US + (uint16_t)((u * (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US)) + 0.5f);
     }
-    if (u > 1.0f) u = 1.0f;
-    uint16_t pulse = ESC_PULSE_MIN_US + (uint16_t)((u * (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US)) + 0.5f);
-    setTargetPulseUs(pulse);
+    if (immediate) {
+        if (pulse != _current_us || pulse != _target_us) writePulseUs(pulse);
+    } else {
+        setTargetPulseUs(pulse);
+    }
 }
 
 void EscMotor::setTargetThrottlePct(float pct) {
@@ -109,18 +117,22 @@ void EscMotor::setTargetThrottlePct(float pct) {
 
 void EscMotor::updateRamp(float dt) {
     if (_current_us != _target_us) {
-        float max_step = (float)ESC_SLEW_RATE_US_PER_SEC * dt;
-        if (max_step < 1.0f) max_step = 1.0f;
-
-        float diff = (float)_target_us - (float)_current_us;
+        // Tích lũy dạng float: tốc độ ramp đúng 2500 us/s bất kể tần số loop()
+        // (bản cũ ép (uint16_t)max_step >= 1 => tốc độ ramp phụ thuộc tốc độ loop).
+        const float max_step = (float)ESC_SLEW_RATE_US_PER_SEC * dt;
+        const float diff = (float)_target_us - _ramp_us;
         if (fabsf(diff) <= max_step) {
-            _current_us = _target_us;
-        } else if (diff > 0.0f) {
-            _current_us += (uint16_t)max_step;
+            _ramp_us = (float)_target_us;
         } else {
-            _current_us -= (uint16_t)max_step;
+            _ramp_us += (diff > 0.0f) ? max_step : -max_step;
         }
-        ledcWrite(_pin, usToDuty(_current_us));
+        const uint16_t next_us = (uint16_t)(_ramp_us + 0.5f);
+        if (next_us != _current_us) {
+            _current_us = next_us;
+            ledcWrite(_pin, usToDuty(_current_us));
+        }
+    } else {
+        _ramp_us = (float)_current_us;
     }
 
     if (_current_us <= ESC_PULSE_MIN_US) {
@@ -134,6 +146,7 @@ void EscMotor::updateRamp(float dt) {
 void EscMotor::stop() {
     _current_us   = ESC_PULSE_MIN_US;
     _target_us    = ESC_PULSE_MIN_US;
+    _ramp_us      = (float)ESC_PULSE_MIN_US;
     _throttle_pct = 0.0f;
     ledcWrite(_pin, usToDuty(ESC_PULSE_MIN_US));
 }
@@ -268,7 +281,7 @@ bool QuadEscController::setAllNormalized(const float u[ESC_NUM_MOTORS]) {
         return false;
     }
     for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-        _motors[i].setNormalizedCommand(u[i]);
+        _motors[i].setNormalizedCommand(u[i], true); // Đầu ra vòng kín: không qua Soft-Ramp
     }
     _last_cmd_ms      = millis();
     _watchdog_enabled = true;

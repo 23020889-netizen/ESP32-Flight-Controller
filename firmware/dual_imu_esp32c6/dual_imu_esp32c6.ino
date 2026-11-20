@@ -64,62 +64,120 @@ const uint32_t PID_INTERVAL_US = 5000; // 200 Hz (5ms) chu kỳ chuẩn PX4
 
 uint32_t lastPrintMs = 0;
 const uint32_t PRINT_INTERVAL_MS = 100; // 10 Hz update cho Serial Telemetry (tránh nghẽn UART)
+static uint8_t printPhase = 0;          // In xoay vòng mỗi lần 1 dòng => không dồn ~600 byte vào UART cùng lúc
+
+// Độ "tươi" dữ liệu IMU: quá ngưỡng coi như mất cảm biến (bản cũ dùng dữ liệu Xsens cũ mãi mãi
+// khi UART đứt, vì has_orientation không bao giờ bị xóa)
+const uint32_t XSENS_STALE_MS = 100;    // Xsens 100 Hz => cho phép mất ~10 gói liên tiếp
+const uint32_t SENSOR_LOSS_DISARM_MS = 300; // Mất toàn bộ IMU khi ARMED quá 300 ms => DISARM
+
+// Giới hạn tốc độ tăng ga tổng (collective). Đầu ra PID giờ ghi thẳng ra ESC (không qua
+// Soft-Ramp), nên bước nhảy ga lớn từ Web/CLI ("set 60") được làm mềm tại đây.
+const float THROTTLE_SLEW_UP_PCT_PER_S = 120.0f;
+static float throttleCmdPct = 0.0f;     // Ga đã qua bộ giới hạn tốc độ, đưa vào Mixer
+
+// Chẩn đoán thời gian thực vòng PID
+static uint32_t pidCount = 0, pidCountWindowMs = 0, pidMaxGapUs = 0, pidMaxGapWindowUs = 0;
+static float pidLoopHz = 0.0f;
+static uint8_t imuSource = 0;           // 0 = mất, 1 = Xsens, 2 = MPU6050
+static uint32_t sensorLostSinceMs = 0;
 
 // ============================================================================
 // 3. SERIAL TELEMETRY PRINTER
 // ============================================================================
+// In KHÔNG CHẶN: mỗi lần gọi chỉ in 1 dòng và chỉ khi bộ đệm TX còn đủ chỗ.
+// Bản cũ in ~600 byte/100 ms bằng Serial.printf liên tiếp: khi bộ đệm UART/USB-CDC đầy,
+// printf CHẶN loop() hàng chục ms => vòng PID 200 Hz bị trễ/giật (dt nhảy, D-term nhiễu).
+static void serialWriteLineNonBlocking(const char* line, size_t len) {
+    if (len == 0) return;
+    const int room = Serial.availableForWrite();
+    if (room < (int)len) return; // Không đủ chỗ: bỏ dòng này, không chờ (bộ đệm TX 1024 B ở setup)
+    Serial.write((const uint8_t*)line, len);
+}
+
 void printTelemetry() {
-    Serial.println("-----------------------------------------------------------------------------------------------------------------");
-    
-    // 1. Dữ liệu MPU-6050 (I2C)
-    if (mpuData.ready) {
-        Serial.printf("[MPU6050] Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f]\n",
-                      mpuData.ax, mpuData.ay, mpuData.az,
-                      mpuData.gx, mpuData.gy, mpuData.gz);
-    } else {
-        Serial.println("[MPU6050] Dang khoi tao hoac mat ket noi I2C...");
+    char line[200];
+    int n = 0;
+    switch (printPhase) {
+        case 0:
+            // Định dạng chuẩn [PX4_EKF] mà Web (WebSerial) và vio_system/imu_stream.py đang parse.
+            // Bản cũ in tag [ATTITUDE] kèm "(Yaw:..)" chen giữa => cả 2 phía không parse được.
+            n = snprintf(line, sizeof(line),
+                         "[PX4_EKF] R:%6.1f° P:%6.1f° Y:%6.1f° | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f] (SRC:%s YAW:%s)\n",
+                         attitudeState.roll, attitudeState.pitch, attitudeState.yaw,
+                         attitudeState.ax, attitudeState.ay, attitudeState.az,
+                         px4Controller.getFilteredGx(), px4Controller.getFilteredGy(), px4Controller.getFilteredGz(),
+                         imuSource == 1 ? "XSENS" : (imuSource == 2 ? "MPU" : "NONE"),
+                         attitudeState.yaw_valid ? "OK" : "INVALID");
+            break;
+        case 1:
+            if (mpuData.ready) {
+                n = snprintf(line, sizeof(line),
+                             "[MPU6050] R:%6.1f° P:%6.1f° Y:%6.1f° | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f]\n",
+                             mpuData.roll, mpuData.pitch, mpuData.yaw,
+                             mpuData.ax, mpuData.ay, mpuData.az,
+                             mpuData.gx, mpuData.gy, mpuData.gz);
+            } else {
+                n = snprintf(line, sizeof(line), "[MPU6050] Dang khoi tao hoac mat ket noi I2C...\n");
+            }
+            break;
+        case 2:
+            if (xsensData.has_orientation || xsensData.has_accel) {
+                n = snprintf(line, sizeof(line),
+                             "[Xsens  ] R:%6.1f° P:%6.1f° Y:%6.1f° | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f] age=%lums err=%lu\n",
+                             xsensData.roll, xsensData.pitch, xsensData.yaw,
+                             xsensData.ax, xsensData.ay, xsensData.az,
+                             xsensData.gx, xsensData.gy, xsensData.gz,
+                             (unsigned long)(millis() - xsensData.last_orient_ms),
+                             (unsigned long)xsensData.checksum_errors);
+            } else {
+                n = snprintf(line, sizeof(line), "[Xsens  ] Dang cho goi tin Xbus tu UART1...\n");
+            }
+            break;
+        case 3: {
+            float p_sp, q_sp, r_sp;
+            px4Controller.getRateSetpoints(p_sp, q_sp, r_sp);
+            n = snprintf(line, sizeof(line),
+                         "[SETPOINT] Att:[R:%.1f P:%.1f Y:%.1f] Thr:%4.1f%%(cmd %4.1f%%) | RateSp:[%.0f,%.0f,%.0f]dps | Loop:%.0fHz max %luus\n",
+                         setpointState.roll_sp, setpointState.pitch_sp, setpointState.yaw_sp,
+                         setpointState.throttle_pct, throttleCmdPct,
+                         p_sp * RAD_TO_DEG, q_sp * RAD_TO_DEG, r_sp * RAD_TO_DEG,
+                         pidLoopHz, (unsigned long)pidMaxGapWindowUs);
+            break;
+        }
+        case 4: {
+            float tau_r, tau_p, tau_y;
+            px4Controller.getTorques(tau_r, tau_p, tau_y);
+            const float* u_norm = px4Controller.getNormalizedMotorOutputs();
+            n = snprintf(line, sizeof(line),
+                         "[ALLOC   ] Tau:[R:%+.3f P:%+.3f Y:%+.3f] I:[%+.3f,%+.3f,%+.3f] | u:[%.2f,%.2f,%.2f,%.2f]\n",
+                         tau_r, tau_p, tau_y,
+                         px4Controller.getRatePidRoll().getI(), px4Controller.getRatePidPitch().getI(),
+                         px4Controller.getRatePidYaw().getI(),
+                         u_norm[0], u_norm[1], u_norm[2], u_norm[3]);
+            break;
+        }
+        default:
+            // Dòng [ESC_QUAD] là dòng cuối chu kỳ: Web (WebSerial) chốt 1 mẫu tại đây
+            n = snprintf(line, sizeof(line),
+                         "[ESC_QUAD] State:%-8s | M1(P7-CCW):%4dus(%4.1f%%) | M2(P6-CCW):%4dus(%4.1f%%) | M3(P5-CW):%4dus(%4.1f%%) | M4(P4-CW):%4dus(%4.1f%%) @ %luHz\n",
+                         quadMotors.getStateStr(),
+                         quadMotors.getMotor(0).getCurrentPulseUs(), quadMotors.getMotor(0).getThrottlePct(),
+                         quadMotors.getMotor(1).getCurrentPulseUs(), quadMotors.getMotor(1).getThrottlePct(),
+                         quadMotors.getMotor(2).getCurrentPulseUs(), quadMotors.getMotor(2).getThrottlePct(),
+                         quadMotors.getMotor(3).getCurrentPulseUs(), quadMotors.getMotor(3).getThrottlePct(),
+                         (unsigned long)quadMotors.getFrequency());
+            break;
     }
-
-    // 2. Dữ liệu Xsens MTi-3 (UART)
-    if (xsensData.has_orientation || xsensData.has_accel) {
-        Serial.printf("[Xsens  ] R:%6.1f° P:%6.1f° Y:%6.1f° | Acc:[%6.2f,%6.2f,%6.2f] | Gyr:[%6.1f,%6.1f,%6.1f]\n",
-                      xsensData.roll, xsensData.pitch, xsensData.yaw,
-                      xsensData.ax,   xsensData.ay,   xsensData.az,
-                      xsensData.gx,   xsensData.gy,   xsensData.gz);
-    } else {
-        Serial.println("[Xsens  ] Dang cho goi tin Xbus tu UART1...");
-    }
-
-    // 3. Góc ước lượng thực tế (Xsens AHRS + MPU6050)
-    Serial.printf("[ATTITUDE] R:%6.1f° P:%6.1f° Y:%6.1f° (Yaw:%s) | Gyr:[%6.1f,%6.1f,%6.1f] (0%% CPU)\n",
-                  attitudeState.roll, attitudeState.pitch, attitudeState.yaw,
-                  attitudeState.yaw_valid ? "VALID" : "INVALID",
-                  attitudeState.gx,   attitudeState.gy,    attitudeState.gz);
-
-    // 4. Trạng thái Setpoint & Allocator
-    float tau_r, tau_p, tau_y;
-    px4Controller.getTorques(tau_r, tau_p, tau_y);
-    const float* u_norm = px4Controller.getNormalizedMotorOutputs();
-    Serial.printf("[SETPOINT] Target:[R:%.1f°, P:%.1f°, Y:%.1f°] Thr:%4.1f%% | GyrFilt:[%6.1f,%6.1f,%6.1f]\n",
-                  setpointState.roll_sp, setpointState.pitch_sp, setpointState.yaw_sp, setpointState.throttle_pct,
-                  px4Controller.getFilteredGx(), px4Controller.getFilteredGy(), px4Controller.getFilteredGz());
-    Serial.printf("[ALLOC   ] Tau:[R:%+.2f, P:%+.2f, Y:%+.2f] | Norm u:[%.2f, %.2f, %.2f, %.2f]\n",
-                  tau_r, tau_p, tau_y, u_norm[0], u_norm[1], u_norm[2], u_norm[3]);
-
-    // 5. Trạng thái điều khiển 4 Động cơ Quadcopter chuẩn PX4 (GPIO 7, 6, 5, 4)
-    Serial.printf("[ESC_QUAD] State:%-8s | M1(P7-CCW):%4dus(%4.1f%%) | M2(P6-CCW):%4dus(%4.1f%%) | M3(P5-CW):%4dus(%4.1f%%) | M4(P4-CW):%4dus(%4.1f%%) @ %dHz\n",
-                  quadMotors.getStateStr(),
-                  quadMotors.getMotor(0).getCurrentPulseUs(), quadMotors.getMotor(0).getThrottlePct(),
-                  quadMotors.getMotor(1).getCurrentPulseUs(), quadMotors.getMotor(1).getThrottlePct(),
-                  quadMotors.getMotor(2).getCurrentPulseUs(), quadMotors.getMotor(2).getThrottlePct(),
-                  quadMotors.getMotor(3).getCurrentPulseUs(), quadMotors.getMotor(3).getThrottlePct(),
-                  quadMotors.getFrequency());
+    printPhase = (printPhase + 1) % 6;
+    if (n > 0) serialWriteLineNonBlocking(line, (size_t)((n < (int)sizeof(line)) ? n : (int)sizeof(line) - 1));
 }
 
 // ============================================================================
 // 4. UNIFIED COMMAND ENGINE (HỖ TRỢ SERIAL CLI + WEB GAMEPAD A124 + WEBSOCKET)
 // ============================================================================
-static int activeTestMotor = 0; // 0 = ALL 4 MOTORS, 1..4 = Motor riêng lẻ
+static const int MANUAL_MIX_ALL = 5; // Lệnh "x m1 m2 m3 m4": điều khiển tay cả 4 motor
+static int activeTestMotor = 0; // 0 = PID (ALL 4 MOTORS), 1..4 = Motor riêng lẻ, 5 = tay cả 4
 static bool safetyLimit60Pct = false;
 
 void executeCommand(String cmd, const char* sourceTag) {
@@ -152,7 +210,9 @@ void executeCommand(String cmd, const char* sourceTag) {
                 if (quadMotors.getState() == ESC_STATE_ARMED) {
                     quadMotors.disarm();
                     px4Controller.reset();
+                    autoTuner.stop();
                     setpointState.throttle_pct = 0.0f;
+                    throttleCmdPct = 0.0f;
                     setpointState.heading_locked = false;
                     Serial.println("[RC] >>> DISARMED!");
                 }
@@ -162,8 +222,13 @@ void executeCommand(String cmd, const char* sourceTag) {
                         Serial.printf("[RC] Tu choi ARM: Can ga phai o muc 0%%! (Hien tai: %.1f%%)\n", thr);
                         return;
                     }
-                    quadMotors.arm();
+                    if (!quadMotors.arm()) {
+                        Serial.println("[RC] ARM bi tu choi: PWM chua san sang");
+                        return;
+                    }
                     px4Controller.reset();
+                    activeTestMotor = 0;   // Bay bằng tay cầm => PID là chủ sở hữu đầu ra ESC
+                    throttleCmdPct = 0.0f;
                     // Khóa hướng Yaw hiện tại đúng 1 lần khi chuyển sang ARMED
                     setpointState.yaw_sp = attitudeState.yaw;
                     setpointState.heading_locked = true;
@@ -201,6 +266,10 @@ void executeCommand(String cmd, const char* sourceTag) {
                 if (!quadMotors.arm()) return;
             }
             setpointState.throttle_pct = 0.0f;
+            // Nhận quyền ghi ESC cho chế độ tay. Bản cũ để activeTestMotor = 0 nên ngay chu kỳ
+            // PID kế tiếp (ga = 0) ghi đè IDLE lên cả 4 motor => lệnh "x" không có tác dụng.
+            activeTestMotor = MANUAL_MIX_ALL;
+            autoTuner.stop();
             float maxCap = safetyLimit60Pct ? 60.0f : 100.0f;
             if (p1 > maxCap) p1 = maxCap;
             if (p2 > maxCap) p2 = maxCap;
@@ -241,8 +310,10 @@ void executeCommand(String cmd, const char* sourceTag) {
     else if (cmd.equalsIgnoreCase("disarm") || cmd.equalsIgnoreCase("stop") || cmd.equalsIgnoreCase("kill") || cmd.equalsIgnoreCase("s")) {
         quadMotors.disarm();
         px4Controller.reset();
+        autoTuner.stop();
         activeTestMotor = 0;
         setpointState.throttle_pct = 0.0f;
+        throttleCmdPct = 0.0f;
         setpointState.heading_locked = false;
         setpointState.rc_stream_active = false;
         snprintf(logBuf, sizeof(logBuf), "[%s] Quad Disarmed & Motors Safe", sourceTag);
@@ -326,7 +397,7 @@ void executeCommand(String cmd, const char* sourceTag) {
         setpointState.pitch_sp = 0.0f;
         setpointState.yaw_sp = attitudeState.yaw;
         setpointState.heading_locked = true;
-        px4Controller.reset();
+        // Không reset PID ở đây: xóa tích phân giữa lúc bay gây giật (chỉ đổi setpoint)
         Serial.printf("[%s] >>> CAN BANG: Dat Roll=0.0°, Pitch=0.0°, Giu nguyen Yaw=%.1f°\n", sourceTag, attitudeState.yaw);
     }
     // 10. Đặt Setpoint góc: sp <roll> <pitch> <yaw>
@@ -509,6 +580,8 @@ void handleWirelessCommands() {
 // 5. MAIN SETUP
 // ============================================================================
 void setup() {
+    // Bộ đệm TX lớn để in telemetry không chặn (HardwareSerial & USB-CDC đều hỗ trợ, gọi trước begin)
+    Serial.setTxBufferSize(1024);
     Serial.begin(115200);
     delay(1000);
 
@@ -554,6 +627,7 @@ void setup() {
 // ============================================================================
 void loop() {
     uint32_t nowUs = micros();
+    uint32_t nowMs = millis();
 
     // 1. Đọc cảm biến thô MPU-6050 qua I2C (~0.5ms)
     mpu6050_read(mpuData);
@@ -561,25 +635,49 @@ void loop() {
     // 2. Đọc cảm biến Xsens MTi-3 qua UART1 non-blocking (~0.1ms)
     xsens_mti_update(xsensData);
 
-    // 3. Dung hợp trạng thái góc siêu nhẹ (State Estimator):
-    //    Tận dụng bộ xử lý AHRS phần cứng có sẵn trên Xsens MTi-3 (100Hz)
-    //    Kết hợp Gyro MPU6050 -> 0% CPU OVERHEAD cho ESP32!
-    if (xsensData.has_orientation) {
+    // 3. Chọn nguồn trạng thái góc (State Estimator nhẹ):
+    //    - Ưu tiên AHRS phần cứng Xsens MTi-3 nếu gói góc còn "tươi" (< 100 ms).
+    //    - Gyro: trộn 85% Xsens + 15% MPU chỉ khi CẢ HAI đều có dữ liệu gyro hợp lệ.
+    //      (Bản cũ trộn theo cờ has_orientation: nếu Xsens không xuất Rate-of-Turn thì gx=0
+    //       => phản hồi vòng trong bị co lại còn 15% => vòng kín gần như hở.)
+    //    - Mất Xsens => tự động rơi về MPU6050 (bản cũ dùng góc Xsens đóng băng mãi mãi).
+    const bool xsOrientFresh = xsensData.has_orientation && (nowMs - xsensData.last_orient_ms) < XSENS_STALE_MS;
+    const bool xsGyroFresh   = xsensData.has_gyro && (nowMs - xsensData.last_gyro_ms) < XSENS_STALE_MS;
+
+    if (xsOrientFresh) {
         attitudeState.roll  = xsensData.roll;
         attitudeState.pitch = xsensData.pitch;
         attitudeState.yaw   = xsensData.yaw;
-        attitudeState.gx    = 0.85f * xsensData.gx + 0.15f * mpuData.gx;
-        attitudeState.gy    = 0.85f * xsensData.gy + 0.15f * mpuData.gy;
-        attitudeState.gz    = 0.85f * xsensData.gz + 0.15f * mpuData.gz;
-        attitudeState.ax    = xsensData.ax;
-        attitudeState.ay    = xsensData.ay;
-        attitudeState.az    = xsensData.az;
+        if (xsGyroFresh && mpuData.ready) {
+            attitudeState.gx = 0.85f * xsensData.gx + 0.15f * mpuData.gx;
+            attitudeState.gy = 0.85f * xsensData.gy + 0.15f * mpuData.gy;
+            attitudeState.gz = 0.85f * xsensData.gz + 0.15f * mpuData.gz;
+        } else if (xsGyroFresh) {
+            attitudeState.gx = xsensData.gx;
+            attitudeState.gy = xsensData.gy;
+            attitudeState.gz = xsensData.gz;
+        } else if (mpuData.ready) {
+            attitudeState.gx = mpuData.gx;
+            attitudeState.gy = mpuData.gy;
+            attitudeState.gz = mpuData.gz;
+        }
+        if (xsensData.has_accel) {
+            attitudeState.ax = xsensData.ax;
+            attitudeState.ay = xsensData.ay;
+            attitudeState.az = xsensData.az;
+        } else if (mpuData.ready) {
+            attitudeState.ax = mpuData.ax;
+            attitudeState.ay = mpuData.ay;
+            attitudeState.az = mpuData.az;
+        }
         attitudeState.yaw_valid = true;
-        attitudeState.sensor_ok = true;
+        attitudeState.sensor_ok = xsGyroFresh || mpuData.ready; // không có gyro => không bay được
+        imuSource = attitudeState.sensor_ok ? 1 : 0;
     } else if (mpuData.ready) {
+        // Nếu vừa chuyển nguồn Xsens -> MPU khi đang ARMED: yaw không còn hợp lệ
         attitudeState.roll  = mpuData.roll;
         attitudeState.pitch = mpuData.pitch;
-        attitudeState.yaw   = 0.0f; // MPU đơn thuần không có Yaw từ Mag/AHRS, ghi rõ invalid
+        attitudeState.yaw   = 0.0f; // MPU đơn thuần không có Yaw tuyệt đối (Mag/AHRS) => invalid
         attitudeState.gx    = mpuData.gx;
         attitudeState.gy    = mpuData.gy;
         attitudeState.gz    = mpuData.gz;
@@ -588,14 +686,33 @@ void loop() {
         attitudeState.az    = mpuData.az;
         attitudeState.yaw_valid = false;
         attitudeState.sensor_ok = true;
+        imuSource = 2;
     } else {
         attitudeState.yaw_valid = false;
         attitudeState.sensor_ok = false;
+        imuSource = 0;
     }
     attitudeState.timestamp_us = nowUs;
 
+    // Failsafe mất IMU: không có phản hồi thì không thể ổn định => DISARM sau 300 ms
+    if (!attitudeState.sensor_ok) {
+        if (sensorLostSinceMs == 0) sensorLostSinceMs = nowMs ? nowMs : 1;
+        if (quadMotors.getState() == ESC_STATE_ARMED && activeTestMotor == 0 &&
+            (nowMs - sensorLostSinceMs) > SENSOR_LOSS_DISARM_MS) {
+            quadMotors.disarm();
+            px4Controller.reset();
+            autoTuner.stop();
+            setpointState.throttle_pct = 0.0f;
+            setpointState.rc_stream_active = false;
+            throttleCmdPct = 0.0f;
+            Serial.println("[FAILSAFE] Mat du lieu IMU > 300ms -> DISARM!");
+            telemetry_wifi_broadcast_msg("[FAILSAFE] Mat du lieu IMU -> DISARM");
+        }
+    } else {
+        sensorLostSinceMs = 0;
+    }
+
     // Failsafe RC Watchdog: Mất tín hiệu RC quá 1.5s CHỈ áp dụng khi đang bay bằng luồng RC streaming từ tay cầm
-    uint32_t nowMs = millis();
     if (quadMotors.getState() == ESC_STATE_ARMED && setpointState.rc_stream_active &&
         (nowMs - setpointState.last_rc_ms > RC_WATCHDOG_TIMEOUT_MS)) {
         setpointState.throttle_pct = 0.0f;
@@ -603,92 +720,115 @@ void loop() {
         Serial.println("[FAILSAFE] Mat tin hieu RC Gamepad > 1.5s -> Ha ga ve 0%!");
     }
 
-    // 4. CHU TRÌNH ĐIỀU KHIỂN BAY THỜI GIAN THỰC PX4 CASCADED PID (200 Hz / 5ms)
-    //    - Vòng ngoài (Outer Angle Loop): Tính tốc độ góc mục tiêu (rad/s)
-    //    - Vòng trong (Inner Rate PID): Tính mô-men Roll, Pitch, Yaw
-    //    - Allocator/Mixer: Phối trộn Throttle + Torque ra lệnh chuẩn hóa u1..u4 [0..1]
+    // 4. CHU TRÌNH ĐIỀU KHIỂN BAY PX4 CASCADED PID (200 Hz / 5ms)
+    //    - Vòng ngoài (Outer Angle P): góc -> tốc độ góc thân mục tiêu (rad/s)
+    //    - Vòng trong (Inner Rate PID): tốc độ góc -> mô-men Roll, Pitch, Yaw
+    //    - Allocator/Mixer: Throttle + Torque -> lệnh chuẩn hóa u1..u4 [0..1]
     if (nowUs - lastPidUs >= PID_INTERVAL_US) {
-        float dt = (float)(nowUs - lastPidUs) * 1e-6f;
+        const uint32_t gapUs = nowUs - lastPidUs;
+        float dt = (float)gapUs * 1e-6f;
         lastPidUs = nowUs;
+
+        // Thống kê tần số & jitter vòng PID (gửi lên Web để phát hiện loop bị chặn)
+        pidCount++;
+        if (gapUs > pidMaxGapUs) pidMaxGapUs = gapUs;
+        if (nowMs - pidCountWindowMs >= 1000) {
+            pidLoopHz = pidCount * 1000.0f / (float)(nowMs - pidCountWindowMs);
+            pidMaxGapWindowUs = pidMaxGapUs;
+            pidCount = 0;
+            pidMaxGapUs = 0;
+            pidCountWindowMs = nowMs;
+        }
 
         bool isArmed = (quadMotors.getState() == ESC_STATE_ARMED);
 
+        // Giới hạn tốc độ TĂNG ga (giảm ga thì tức thời, ưu tiên an toàn)
+        float thrTarget = isArmed ? setpointState.throttle_pct : 0.0f;
+        if (thrTarget > throttleCmdPct) {
+            const float maxStep = THROTTLE_SLEW_UP_PCT_PER_S * (dt > 0.05f ? 0.05f : dt);
+            throttleCmdPct = (thrTarget - throttleCmdPct > maxStep) ? (throttleCmdPct + maxStep) : thrTarget;
+        } else {
+            throttleCmdPct = thrTarget;
+        }
+
         // Nạp Setpoint vào bộ điều khiển
-        px4Controller.setTargetThrottle(setpointState.throttle_pct);
+        px4Controller.setTargetThrottle(throttleCmdPct);
         px4Controller.setTargetAttitude(setpointState.roll_sp, setpointState.pitch_sp, setpointState.yaw_sp);
 
-        // Chạy bộ điều khiển bay
+        // Chạy bộ điều khiển bay (vòng PID chỉ điều khiển khi PID là chủ sở hữu đầu ra)
+        const bool pidOwnsOutput = isArmed && activeTestMotor == 0 && attitudeState.sensor_ok;
         px4Controller.update(attitudeState.roll, attitudeState.pitch, attitudeState.yaw,
                              attitudeState.gx,   attitudeState.gy,    attitudeState.gz,
-                             dt, isArmed, attitudeState.yaw_valid);
+                             dt, pidOwnsOutput, attitudeState.yaw_valid);
 
-        // AUTO-TUNER HOẶC CHẾ ĐỘ BAY TIÊU CHUẨN
+        // AUTO-TUNER (Relay) — chỉ thay mô-men của TRỤC ĐANG TUNE, các trục còn lại vẫn do PID
+        // giữ ổn định. Bản cũ đặt mô-men 2 trục còn lại = 0 => drone trôi/lật trục kia khi tune.
         if (autoTuner.isActive()) {
             TuneAxis ax = autoTuner.getAxis();
-            float rate_meas = 0.0f, angle_abs = 0.0f;
-            if (ax == TUNE_ROLL_RATE)  { rate_meas = attitudeState.gx * DEG_TO_RAD; angle_abs = fabsf(attitudeState.roll); }
-            if (ax == TUNE_PITCH_RATE) { rate_meas = attitudeState.gy * DEG_TO_RAD; angle_abs = fabsf(attitudeState.pitch); }
-            if (ax == TUNE_YAW_RATE)   { rate_meas = attitudeState.gz * DEG_TO_RAD; angle_abs = fabsf(attitudeState.yaw); }
-            if (ax == TUNE_ANGLE_P)    { rate_meas = attitudeState.gx * DEG_TO_RAD; angle_abs = fabsf(attitudeState.roll); }
+            float rate_meas = 0.0f;
+            // Dùng Gyro ĐÃ LỌC (giống vòng trong) để relay không bị nhiễu rung đảo chiều giả
+            if (ax == TUNE_ROLL_RATE || ax == TUNE_ANGLE_P) rate_meas = px4Controller.getFilteredGx() * DEG_TO_RAD;
+            if (ax == TUNE_PITCH_RATE) rate_meas = px4Controller.getFilteredGy() * DEG_TO_RAD;
+            if (ax == TUNE_YAW_RATE)   rate_meas = px4Controller.getFilteredGz() * DEG_TO_RAD;
+            // An toàn: luôn giám sát độ nghiêng lớn nhất Roll/Pitch. Bản cũ dùng |yaw| (hướng la bàn)
+            // khi tune Yaw => abort ngay nếu mũi drone không hướng gần 0°.
+            const float tilt_abs = fmaxf(fabsf(attitudeState.roll), fabsf(attitudeState.pitch));
 
-            // Nếu ga < 2%, ngắt tuner vì không đủ mô-men
-            if (setpointState.throttle_pct < 2.0f) {
+            if (!pidOwnsOutput || setpointState.throttle_pct < 2.0f) {
                 autoTuner.stop(ABORT_LOW_THROTTLE);
             }
 
-            float relay_torque = autoTuner.update(rate_meas, angle_abs, dt);
+            float relay_torque = autoTuner.update(rate_meas, tilt_abs, dt);
 
-            if (isArmed && activeTestMotor == 0) {
-                if (autoTuner.isAborted()) {
+            if (autoTuner.isActive() && pidOwnsOutput && throttleCmdPct >= 2.0f) {
+                float tau_r, tau_p, tau_y;
+                px4Controller.getTorques(tau_r, tau_p, tau_y);
+                if (ax == TUNE_ROLL_RATE || ax == TUNE_ANGLE_P) tau_r = relay_torque;
+                if (ax == TUNE_PITCH_RATE) tau_p = px4Controller.isPitchInverted() ? -relay_torque : relay_torque;
+                if (ax == TUNE_YAW_RATE)   tau_y = relay_torque;
+                float u_tune[4];
+                px4Controller.getMixer().mixNormalized(throttleCmdPct / 100.0f, tau_r, tau_p, tau_y, u_tune);
+                quadMotors.setAllNormalized(u_tune);
+            } else if (pidOwnsOutput) {
+                // Tuner vừa kết thúc/abort: trả quyền lại cho PID ngay trong chu kỳ này
+                // (bản cũ ép IDLE cả 4 motor khi abort => rơi tự do giữa không trung)
+                if (throttleCmdPct < 2.0f) {
                     for (int i = 0; i < ESC_NUM_MOTORS; i++)
                         quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
-                } else if (setpointState.throttle_pct >= 2.0f) {
-                    float tau_r = (ax == TUNE_ROLL_RATE || ax == TUNE_ANGLE_P) ? relay_torque : 0.0f;
-                    float tau_p = (ax == TUNE_PITCH_RATE) ? relay_torque : 0.0f;
-                    float tau_y = (ax == TUNE_YAW_RATE)   ? relay_torque : 0.0f;
-                    float thr   = setpointState.throttle_pct / 100.0f;
-                    float u_tune[4];
-                    px4Controller.getMixer().mixNormalized(thr, tau_r, tau_p, tau_y, u_tune);
-                    quadMotors.setAllNormalized(u_tune);
                 } else {
-                    for (int i = 0; i < ESC_NUM_MOTORS; i++)
-                        quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
+                    quadMotors.setAllNormalized(px4Controller.getNormalizedMotorOutputs());
                 }
             }
-        } else {
-            // OUTPUT SAFETY GATE (Đảm bảo duy nhất 1 Output Owner ghi vào ESC khi ARMED):
-            if (isArmed && activeTestMotor == 0) {
-                if (setpointState.throttle_pct < 2.0f) {
-                    // Ga < 2%: Cả 4 động cơ quay chậm không tải (Idle Spin)
-                    for (int i = 0; i < ESC_NUM_MOTORS; i++) {
-                        quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
-                    }
-                } else {
-                    // Ga >= 2%: Nhận trực tiếp lệnh chuẩn hóa u1..u4 [0..1] từ Allocator/Mixer
-                    // Cả bốn ESC dùng chung dải xung 1000..2000 us.
-                    const float* u_norm = px4Controller.getNormalizedMotorOutputs();
-                    quadMotors.setAllNormalized(u_norm);
+        } else if (pidOwnsOutput) {
+            // OUTPUT SAFETY GATE (duy nhất 1 Output Owner ghi vào ESC khi ARMED)
+            if (throttleCmdPct < 2.0f) {
+                for (int i = 0; i < ESC_NUM_MOTORS; i++) {
+                    quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
                 }
+            } else {
+                quadMotors.setAllNormalized(px4Controller.getNormalizedMotorOutputs());
             }
         }
     }
 
-    // 5. Cập nhật FSM điều tốc OOP cho cả 4 động cơ & Soft Ramp Limiter
+    // 5. Cập nhật FSM điều tốc OOP cho cả 4 động cơ & Soft Ramp Limiter (chế độ tay)
     quadMotors.update();
 
     // 6. Xử lý lệnh điều khiển nhận từ Web Browser qua WebSocket & Serial CLI
     handleWirelessCommands();
     handleSerialCommands();
 
-    // 7. Đóng gói & Phát Telemetry không dây cho Web 3D HITL Testbed Monitor (25 Hz)
+    // 7. Đóng gói & Phát Telemetry không dây cho Web 3D HITL Testbed Monitor (50 Hz)
     TelemetryPacket pkt;
+    memset(&pkt, 0, sizeof(pkt));
+    pkt.t_ms = nowMs;
     pkt.roll = attitudeState.roll;
     pkt.pitch = attitudeState.pitch;
     pkt.yaw = attitudeState.yaw;
     pkt.ax = attitudeState.ax;
     pkt.ay = attitudeState.ay;
     pkt.az = attitudeState.az;
-    pkt.gx = px4Controller.getFilteredGx();
+    pkt.gx = px4Controller.getFilteredGx();   // Gyro đã lọc = đúng tín hiệu vòng trong đang dùng
     pkt.gy = px4Controller.getFilteredGy();
     pkt.gz = px4Controller.getFilteredGz();
 
@@ -708,7 +848,6 @@ void loop() {
     pkt.state_str = quadMotors.getStateStr();
     pkt.frequency_hz = quadMotors.getFrequency();
 
-    // Telemetry bổ sung theo kiến trúc tái cấu trúc
     pkt.sp_roll     = setpointState.roll_sp;
     pkt.sp_pitch    = setpointState.pitch_sp;
     pkt.sp_yaw      = setpointState.yaw_sp;
@@ -718,15 +857,28 @@ void loop() {
     for (int i = 0; i < 4; i++) {
         pkt.u_norm[i] = u_out[i];
     }
+    float p_sp, q_sp, r_sp;
+    px4Controller.getRateSetpoints(p_sp, q_sp, r_sp);
+    pkt.rate_sp[0] = p_sp * RAD_TO_DEG;
+    pkt.rate_sp[1] = q_sp * RAD_TO_DEG;
+    pkt.rate_sp[2] = r_sp * RAD_TO_DEG;
+    pkt.pid_i[0] = px4Controller.getRatePidRoll().getI();
+    pkt.pid_i[1] = px4Controller.getRatePidPitch().getI();
+    pkt.pid_i[2] = px4Controller.getRatePidYaw().getI();
+    pkt.loop_hz = pidLoopHz;
+    pkt.loop_max_us = pidMaxGapWindowUs;
+    pkt.imu_src = imuSource;
+    pkt.xs_age_ms = xsensData.has_orientation ? (nowMs - xsensData.last_orient_ms) : 0xFFFFFFFFu;
+    pkt.xs_err = xsensData.checksum_errors;
     pkt.yaw_valid = attitudeState.yaw_valid;
     pkt.rc_sequence = acceptedRcSequence;
     pkt.pwm_outputs_ready = quadMotors.outputsReady();
 
     telemetry_wifi_update(pkt);
 
-    // 8. In dữ liệu định kỳ qua Serial (10 Hz / 100ms)
+    // 8. In dữ liệu định kỳ qua Serial (mỗi 100 ms in 6 dòng xoay vòng, không chặn)
     nowMs = millis();
-    if (nowMs - lastPrintMs >= PRINT_INTERVAL_MS) {
+    if (nowMs - lastPrintMs >= PRINT_INTERVAL_MS / 6) {
         lastPrintMs = nowMs;
         printTelemetry();
     }

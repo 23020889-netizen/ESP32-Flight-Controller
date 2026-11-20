@@ -14,6 +14,10 @@ struct XsensData {
     bool has_accel;
     bool has_gyro;
     uint32_t last_packet_ms;
+    uint32_t last_orient_ms;  // Thời điểm nhận góc Euler/Quaternion gần nhất
+    uint32_t last_gyro_ms;    // Thời điểm nhận Rate-of-Turn gần nhất
+    uint32_t packet_count;    // Số gói MTData2 hợp lệ (checksum OK)
+    uint32_t checksum_errors; // Số gói lỗi checksum (chẩn đoán đường truyền UART)
 };
 
 // Khởi tạo cổng UART1 giao tiếp Xsens MTi-3

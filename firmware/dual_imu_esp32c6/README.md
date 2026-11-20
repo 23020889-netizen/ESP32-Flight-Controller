@@ -11,6 +11,10 @@
 
 ---
 
+> **Cập nhật (rà soát PID/IMU/telemetry):** xem [`docs/PID_IMU_AUDIT_FIXES.md`](../../docs/PID_IMU_AUDIT_FIXES.md) —
+> anti-windup theo quyền Mixer, chuyển Euler→body rate, đầu ra PID không qua Soft-Ramp, chọn nguồn IMU theo độ tươi
+> + failsafe mất IMU, MPU6050 ±1000 dps/±8 g, WebSocket không chặn, JSON an toàn NaN. Kiểm thử: `tests/host_firmware/run.sh`.
+
 ## 📌 1. Sơ Đồ Khối Kiến Trúc Toàn Diện (System Architecture)
 
 ```mermaid

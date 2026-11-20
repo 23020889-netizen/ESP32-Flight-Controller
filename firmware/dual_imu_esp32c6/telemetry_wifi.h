@@ -36,6 +36,16 @@ struct TelemetryPacket {
     bool  yaw_valid;        // Trạng thái hợp lệ của cảm biến góc Yaw
     uint32_t rc_sequence;   // Bộ đếm gói RC hợp lệ đã được ESP chấp nhận
     bool pwm_outputs_ready; // Cả bốn PWM pin đã attach thành công
+
+    // 5. Chẩn đoán vòng điều khiển & nguồn IMU (bổ sung khi sửa lỗi truyền IMU)
+    uint32_t t_ms;          // Thời điểm lấy mẫu trên ESP32 (ms) - Web tính đúng tần số/độ trễ
+    float rate_sp[3];       // Tốc độ góc mục tiêu vòng ngoài -> vòng trong [p,q,r] (deg/s)
+    float pid_i[3];         // Thành phần tích phân vòng trong [roll,pitch,yaw]
+    float loop_hz;          // Tần số thực của vòng PID (Hz)
+    uint32_t loop_max_us;   // Thời gian dài nhất giữa 2 lần chạy PID trong 1s gần nhất (µs)
+    uint8_t imu_src;        // 0 = mất IMU, 1 = Xsens (+MPU gyro), 2 = MPU6050 dự phòng
+    uint32_t xs_age_ms;     // Tuổi gói góc Xsens gần nhất (ms)
+    uint32_t xs_err;        // Số gói Xbus lỗi checksum
 };
 
 /**

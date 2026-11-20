@@ -33,17 +33,22 @@ public:
     PX4_RatePID();
 
     void init(float kp, float ki, float kd, float i_max, float d_cutoff_hz, float loop_rate_hz);
-    void setGains(float kp, float ki, float kd, float i_max = 0.3f);
+    void setGains(float kp, float ki, float kd);
+    void setGains(float kp, float ki, float kd, float i_max);
     void setLoopRate(float loop_rate_hz);
 
     /**
-     * @brief Tính toán ngõ ra mô-men [-1.0, 1.0]
+     * @brief Tính toán ngõ ra mô-men [-out_limit, +out_limit]
      * @param rate_sp Tốc độ góc mục tiêu (rad/s)
      * @param rate_meas Tốc độ góc đo được từ IMU (rad/s)
      * @param dt Khoảng thời gian chu kỳ (giây)
-     * @param allow_integral Cho phép tích phân hay không
+     * @param allow_integral Cho phép tích phân hay không (false => xả tích phân về 0)
+     * @param out_limit Giới hạn mô-men thực tế mà Mixer chấp nhận (dùng cho anti-windup)
+     *
+     * Anti-windup kiểu "conditional integration" (clamping): khi đầu ra đã bão hòa
+     * và sai số còn đẩy tiếp cùng chiều bão hòa thì đóng băng tích phân.
      */
-    float update(float rate_sp, float rate_meas, float dt, bool allow_integral);
+    float update(float rate_sp, float rate_meas, float dt, bool allow_integral, float out_limit = 1.0f);
 
     void reset();
 
@@ -51,6 +56,7 @@ public:
     float getP() const { return _p_out; }
     float getI() const { return _integral; }
     float getD() const { return _d_out; }
+    bool  isSaturated() const { return _saturated; }
     const PidGains& getGains() const { return _gains; }
 
 private:
@@ -59,8 +65,11 @@ private:
     float _last_rate_meas;
     float _p_out;
     float _d_out;
+    float _d_cutoff_hz;
+    float _loop_rate_hz;
     LowPassFilter1p _d_lpf;
     bool  _first_run;
+    bool  _saturated;
 };
 
 /**
@@ -73,13 +82,21 @@ public:
 
     void setAngleGains(float roll_p, float pitch_p, float yaw_p);
     void setMaxRates(float max_roll_rate_rad, float max_pitch_rate_rad, float max_yaw_rate_rad);
+    void getAngleGains(float& r, float& p, float& y) const { r = _roll_p; p = _pitch_p; y = _yaw_p; }
 
     /**
-     * @brief Tính toán tốc độ góc mục tiêu
+     * @brief Tính toán tốc độ góc mục tiêu (BODY RATES p,q,r)
      * @param target_euler [Roll, Pitch, Yaw] mục tiêu (Độ)
      * @param actual_euler [Roll, Pitch, Yaw] thực tế từ cảm biến (Độ)
-     * @param rate_sp_out [Roll, Pitch, Yaw] tốc độ góc đầu ra (rad/s)
+     * @param rate_sp_out [p, q, r] tốc độ góc thân mục tiêu (rad/s) cho vòng trong
      * @param yaw_valid Trạng thái hợp lệ của cảm biến góc Yaw
+     *
+     * Vòng ngoài tính đạo hàm góc Euler mong muốn [phi_dot, theta_dot, psi_dot],
+     * sau đó chuyển sang tốc độ góc thân (cùng hệ trục với Gyro) bằng ma trận động học:
+     *   p =  phi_dot                    - sin(theta)          * psi_dot
+     *   q =  cos(phi) * theta_dot       + sin(phi)*cos(theta) * psi_dot
+     *   r = -sin(phi) * theta_dot       + cos(phi)*cos(theta) * psi_dot
+     * Nếu không chuyển đổi, khi drone nghiêng lớn vòng Yaw sẽ "rò" sang Roll/Pitch.
      */
     void update(const float target_euler[3], const float actual_euler[3], float rate_sp_out[3], bool yaw_valid = true);
 
@@ -119,6 +136,13 @@ public:
      * @brief Phối trộn ra xung PWM trực tiếp (tương thích ngược)
      */
     void mix(float throttle, float roll_torque, float pitch_torque, float yaw_torque, uint16_t motor_out_us[4]);
+
+    /**
+     * @brief Giới hạn mô-men Roll/Pitch mà Mixer chấp nhận ở mức ga hiện tại.
+     * Vòng trong dùng giá trị này làm giới hạn đầu ra để anti-windup biết khi nào bị bão hòa.
+     */
+    static float torqueAuthority(float throttle);
+    static float yawAuthority(float throttle) { return torqueAuthority(throttle) * 0.5f; }
 };
 
 /**
@@ -164,7 +188,11 @@ public:
                 float raw_gx, float raw_gy, float raw_gz,
                 float dt, bool is_armed, bool yaw_valid = true);
 
+    // Reset toàn bộ (bộ lọc Gyro + PID). Bộ lọc được nạp lại bằng mẫu Gyro gần nhất
+    // để không sinh xung quá độ khi ARM.
     void reset();
+    // Chỉ reset trạng thái điều khiển (tích phân, D, setpoint), GIỮ bộ lọc Gyro đang chạy
+    void resetControllers();
 
     // Getters cho giám sát và Telemetry
     float getFilteredGx() const { return _filtered_gx; }
@@ -230,6 +258,7 @@ private:
     float    _motor_norm[4];
     uint16_t _motor_outputs_us[4];
     bool     _invert_pitch;
+    float    _last_raw_g[3];
 };
 
 // Instance toàn cục

@@ -57,7 +57,10 @@ public:
 
     void writePulseUs(uint16_t pulse_us);
     void setTargetPulseUs(uint16_t pulse_us);
-    void setNormalizedCommand(float u);
+    // immediate=true: ghi thẳng ra PWM, BỎ QUA Soft-Ramp (dùng cho đầu ra vòng PID).
+    // Soft-Ramp chỉ dành cho chế độ test motor thủ công; nếu đặt trong vòng kín nó
+    // trở thành khâu giới hạn tốc độ (slew-rate) gây trễ pha và dao động.
+    void setNormalizedCommand(float u, bool immediate = false);
     void setTargetThrottlePct(float pct);
     void updateRamp(float dt);
     void stop();
@@ -83,6 +86,7 @@ private:
     uint32_t       _max_duty;
     uint16_t       _current_us;
     uint16_t       _target_us;
+    float          _ramp_us;        // Vị trí ramp dạng float (không bị mất phần lẻ khi loop chạy nhanh)
     float          _throttle_pct;
     bool           _attached;
 

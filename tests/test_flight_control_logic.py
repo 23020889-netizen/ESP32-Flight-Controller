@@ -29,13 +29,13 @@ def wrap_angle_180(angle_deg: float) -> float:
 
 
 class AttitudeController:
-    def __init__(self, kp_roll=6.5, kp_pitch=6.5, kp_yaw=2.8):
+    def __init__(self, kp_roll=3.0, kp_pitch=3.0, kp_yaw=1.5):
         self.kp_roll = kp_roll
         self.kp_pitch = kp_pitch
         self.kp_yaw = kp_yaw
-        self.max_roll_rate_rad = 220.0 * DEG_TO_RAD
-        self.max_pitch_rate_rad = 220.0 * DEG_TO_RAD
-        self.max_yaw_rate_rad = 150.0 * DEG_TO_RAD
+        self.max_roll_rate_rad = 60.0 * DEG_TO_RAD
+        self.max_pitch_rate_rad = 60.0 * DEG_TO_RAD
+        self.max_yaw_rate_rad = 45.0 * DEG_TO_RAD
 
     def update(self, target_euler, actual_euler, yaw_valid=True):
         err_roll_rad = (target_euler[0] - actual_euler[0]) * DEG_TO_RAD
@@ -53,7 +53,7 @@ class AttitudeController:
 
 
 class RatePID:
-    def __init__(self, kp=0.15, ki=0.20, kd=0.003, i_max=0.30):
+    def __init__(self, kp=0.06, ki=0.03, kd=0.0, i_max=0.10):
         self.kp = kp
         self.ki = ki
         self.kd = kd
@@ -226,7 +226,7 @@ class TestFlightControlRebuild(unittest.TestCase):
         self.assertEqual(rates_noyaw[2], 0.0)
 
     def test_rate_pid(self):
-        pid = RatePID(kp=0.15, ki=0.20, kd=0.003, i_max=0.30)
+        pid = RatePID(kp=0.06, ki=0.03, kd=0.0, i_max=0.10)
         # Error = 1.0 rad/s
         out = pid.update(rate_sp=1.0, rate_meas=0.0, dt=0.005, allow_integral=True)
         self.assertGreater(out, 0.0)
@@ -234,8 +234,8 @@ class TestFlightControlRebuild(unittest.TestCase):
         # Anti-windup check
         for _ in range(500):
             pid.update(rate_sp=10.0, rate_meas=0.0, dt=0.005, allow_integral=True)
-        self.assertLessEqual(pid.integral, 0.30)
-        self.assertGreaterEqual(pid.integral, -0.30)
+        self.assertLessEqual(pid.integral, 0.10)
+        self.assertGreaterEqual(pid.integral, -0.10)
 
     def test_quad_x_mixer_geometry(self):
         mixer = QuadXMixer()

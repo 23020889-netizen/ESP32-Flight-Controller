@@ -15,7 +15,7 @@
 #define MOTOR4_PIN               4  // Front-Right (CW  - Phải)
 
 #define ESC_DEFAULT_FREQ_HZ      50       // 50 Hz tiêu chuẩn
-#define ESC_PX4_FREQ_HZ          400      // 400 Hz chuẩn PX4 Multirotor
+#define ESC_PX4_FREQ_HZ          50       // Giữ cố định 50 Hz cho ESC vàng 30A tiêu chuẩn
 #define ESC_RESOLUTION_BITS      14       // Độ phân giải 14-bit (16384 nấc)
 
 // Cả 4 ESC dùng chung dải xung chuẩn 1000..2000 µs (Section 1 & 7 Rebuild Guide):

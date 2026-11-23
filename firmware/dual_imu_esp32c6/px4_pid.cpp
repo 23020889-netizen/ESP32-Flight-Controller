@@ -10,8 +10,8 @@ PX4_FlightController px4Controller;
 PX4_RatePID::PX4_RatePID()
     : _integral(0.0f), _last_rate_meas(0.0f),
       _p_out(0.0f), _d_out(0.0f), _first_run(true) {
-    // Hệ số chuẩn thận trọng cho đơn vị rad/s (an toàn, chống vọt lố/rung lắc)
-    _gains = { 0.09f, 0.06f, 0.0015f, 0.12f };
+    // Hệ số chuẩn thận trọng cho đơn vị rad/s (phù hợp ESC 50Hz, không dùng D-term để chống khuếch đại nhiễu)
+    _gains = { 0.06f, 0.03f, 0.0f, 0.10f };
 }
 
 void PX4_RatePID::init(float kp, float ki, float kd, float i_max, float d_cutoff_hz, float loop_rate_hz) {
@@ -88,10 +88,10 @@ void PX4_RatePID::reset() {
 // 2. PX4 ATTITUDE CONTROL (OUTER LOOP) - TÍNH TOÁN RA RADIAN/S
 // ============================================================================
 PX4_AttitudeControl::PX4_AttitudeControl()
-    : _roll_p(4.5f), _pitch_p(4.5f), _yaw_p(2.0f) {
-    _max_roll_rate_rad  = 100.0f * DEG_TO_RAD; // Giới hạn 100 deg/s để phản ứng êm ái
-    _max_pitch_rate_rad = 100.0f * DEG_TO_RAD; // Giới hạn 100 deg/s
-    _max_yaw_rate_rad   = 60.0f * DEG_TO_RAD;  // Giới hạn 60 deg/s
+    : _roll_p(3.0f), _pitch_p(3.0f), _yaw_p(1.5f) {
+    _max_roll_rate_rad  = 60.0f * DEG_TO_RAD;  // Giới hạn 60 deg/s phù hợp ESC 50Hz
+    _max_pitch_rate_rad = 60.0f * DEG_TO_RAD;  // Giới hạn 60 deg/s
+    _max_yaw_rate_rad   = 45.0f * DEG_TO_RAD;  // Giới hạn 45 deg/s
 }
 
 void PX4_AttitudeControl::setAngleGains(float roll_p, float pitch_p, float yaw_p) {
@@ -239,19 +239,19 @@ void PX4_FlightController::init(float loop_freq_hz) {
     _gyro_filter_y.setCutoffFrequency(loop_freq_hz, 30.0f);
     _gyro_filter_z.setCutoffFrequency(loop_freq_hz, 30.0f);
 
-    // Cài đặt Inner Rate PID loops (Đơn vị rad/s) - Bộ số thận trọng an toàn:
+    // Cài đặt Inner Rate PID loops (Đơn vị rad/s) - Tối ưu cho cơ cấu chấp hành ESC 50Hz:
     // Roll & Pitch: Kp, Ki, Kd, i_max, d_cutoff, loop_freq
-    _rate_pid_roll.init (0.09f, 0.06f, 0.0015f, 0.12f, 20.0f, loop_freq_hz);
-    _rate_pid_pitch.init(0.09f, 0.06f, 0.0015f, 0.12f, 20.0f, loop_freq_hz);
+    _rate_pid_roll.init (0.06f, 0.03f, 0.0f, 0.10f, 10.0f, loop_freq_hz);
+    _rate_pid_pitch.init(0.06f, 0.03f, 0.0f, 0.10f, 10.0f, loop_freq_hz);
 
     // Yaw
-    _rate_pid_yaw.init  (0.12f, 0.03f, 0.0f,    0.10f, 20.0f, loop_freq_hz);
+    _rate_pid_yaw.init  (0.10f, 0.02f, 0.0f, 0.08f, 10.0f, loop_freq_hz);
 
     // Vòng ngoài (angle)
-    _att_control.setAngleGains(4.5f, 4.5f, 2.0f);
+    _att_control.setAngleGains(3.0f, 3.0f, 1.5f);
 
-    // Đặt giới hạn tốc độ góc thấp cho lần bay đầu (gọi sau init)
-    _att_control.setMaxRates(100.0f * DEG_TO_RAD, 100.0f * DEG_TO_RAD, 60.0f * DEG_TO_RAD);
+    // Đặt giới hạn tốc độ góc thấp phù hợp ESC 50Hz (gọi sau init)
+    _att_control.setMaxRates(60.0f * DEG_TO_RAD, 60.0f * DEG_TO_RAD, 45.0f * DEG_TO_RAD);
 
     reset();
 }
@@ -350,7 +350,7 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
     _att_control.update(target_att, actual_att, _rate_sp_rad, yaw_valid);
 
     // 3. VÒNG TRONG (Inner Angular Rate PID-Loop): Tính mô-men điều khiển
-    bool allow_integral = (_target_throttle >= 0.10f); // Chỉ cho phép tích phân khi ga >= 10%
+    bool allow_integral = (_target_throttle >= 0.25f); // Chỉ cho phép tích phân khi ga >= 25% (gần ngưỡng hover)
     _tau[0] = _rate_pid_roll.update(_rate_sp_rad[0], actual_gx_rad, dt, allow_integral);
     _tau[1] = _rate_pid_pitch.update(_rate_sp_rad[1], actual_gy_rad, dt, allow_integral);
     if (_invert_pitch) _tau[1] = -_tau[1];

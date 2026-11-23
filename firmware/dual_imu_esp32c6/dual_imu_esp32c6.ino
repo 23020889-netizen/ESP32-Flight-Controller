@@ -428,7 +428,7 @@ void executeCommand(String cmd, const char* sourceTag) {
                     if (ax == TUNE_PITCH_RATE) px4Controller.setRatePidPitch(kp, ki, kd);
                     if (ax == TUNE_YAW_RATE)   px4Controller.setRatePidYaw(kp, ki, kd);
                     if (ax == TUNE_ANGLE_P) {
-                        px4Controller.setAngleGains(r.angle_p, r.angle_p, 2.8f);
+                        px4Controller.setAngleGains(r.angle_p, r.angle_p, 1.5f);
                     }
                     Serial.printf("[%s] [TUNE] DA AP DUNG (%s) → %s: Kp=%.4f Ki=%.4f Kd=%.5f | Angle_P=%.2f\n",
                                   sourceTag, smooth ? "SMOOTH" : "STANDARD", r.axis_name, kp, ki, kd, r.angle_p);
@@ -441,7 +441,7 @@ void executeCommand(String cmd, const char* sourceTag) {
             if (r.valid) {
                 Serial.println("\n// ================== PX4_PID.CPP COPY-PASTE GAINS ==================");
                 Serial.printf("// Truc: %s (Tu=%.3fs, Ku=%.4f)\n", r.axis_name, r.tu, r.ku);
-                Serial.printf("  _rate_pid_%s.init(%.4ff, %.4ff, %.5ff, 0.30f, 20.0f, loop_freq_hz);\n",
+                Serial.printf("  _rate_pid_%s.init(%.4ff, %.4ff, %.5ff, 0.10f, 10.0f, loop_freq_hz);\n",
                               r.axis_name, r.kp, r.ki, r.kd);
                 Serial.printf("// Ban smooth (khuyen nghi neu con rung): init(%.4ff, %.4ff, %.5ff...)\n",
                               r.kp_smooth, r.ki_smooth, r.kd_smooth);
@@ -478,6 +478,10 @@ void executeCommand(String cmd, const char* sourceTag) {
                       sourceTag, attitudeState.roll, attitudeState.pitch, attitudeState.yaw);
     } else if (cmd.startsWith("freq ") || cmd.startsWith("FREQ ")) {
         uint32_t f = (uint32_t)cmd.substring(5).toInt();
+        if (f != 50) {
+            Serial.println("[FREQ] ESC chi chiu 50Hz -> tu choi");
+            return;
+        }
         quadMotors.setFrequency(f);
     } else if (cmd.equalsIgnoreCase("status")) {
         Serial.println("\n============== BANG TRANG THAI CHI TIET 4 DONG CO ==============");
@@ -568,9 +572,9 @@ void loop() {
         attitudeState.roll  = xsensData.roll;
         attitudeState.pitch = xsensData.pitch;
         attitudeState.yaw   = xsensData.yaw; // Xác định duy nhất từ Xsens MTi-3
-        attitudeState.gx    = 0.85f * xsensData.gx + 0.15f * mpuData.gx;
-        attitudeState.gy    = 0.85f * xsensData.gy + 0.15f * mpuData.gy;
-        attitudeState.gz    = 0.85f * xsensData.gz + 0.15f * mpuData.gz;
+        attitudeState.gx    = xsensData.gx;  // Dùng thuần nhất 1 nguồn Gyro từ Xsens MTi-3
+        attitudeState.gy    = xsensData.gy;
+        attitudeState.gz    = xsensData.gz;
         attitudeState.ax    = xsensData.ax;
         attitudeState.ay    = xsensData.ay;
         attitudeState.az    = xsensData.az;
@@ -613,9 +617,18 @@ void loop() {
 
         bool isArmed = (quadMotors.getState() == ESC_STATE_ARMED);
 
-        // FAILSAFE TỰ NGẮT KHI NGHIÊNG QUÁ 60 ĐỘ (CRASH / FLIP DETECT)
+        // FAILSAFE TỰ NGẮT KHI MẤT CẢM BIẾN HOẶC NGHIÊNG QUÁ 60 ĐỘ (CRASH / SENSOR LOSS)
         if (isArmed && activeTestMotor == 0) {
-            if (fabsf(attitudeState.roll) > 60.0f || fabsf(attitudeState.pitch) > 60.0f) {
+            if (!attitudeState.sensor_ok) {
+                quadMotors.disarm();
+                px4Controller.reset();
+                autoTuner.stop();
+                setpointState.throttle_pct = 0.0f;
+                setpointState.rc_stream_active = false;
+                isArmed = false;
+                Serial.println("[FAILSAFE] Mat tin hieu cam bien IMU -> AUTO DISARM!");
+                telemetry_wifi_broadcast_msg("[FAILSAFE] Sensor lost -> AUTO DISARM");
+            } else if (fabsf(attitudeState.roll) > 60.0f || fabsf(attitudeState.pitch) > 60.0f) {
                 quadMotors.disarm();
                 px4Controller.reset();
                 autoTuner.stop();
@@ -738,10 +751,12 @@ void loop() {
 
     telemetry_wifi_update(pkt);
 
-    // 8. In dữ liệu định kỳ qua Serial (10 Hz / 100ms)
+    // 8. In dữ liệu định kỳ qua Serial (Chỉ in khi DISARMED để không block UART/CPU khi bay)
     nowMs = millis();
     if (nowMs - lastPrintMs >= PRINT_INTERVAL_MS) {
         lastPrintMs = nowMs;
-        printTelemetry();
+        if (quadMotors.getState() != ESC_STATE_ARMED) {
+            printTelemetry();
+        }
     }
 }

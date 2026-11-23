@@ -15,10 +15,10 @@ class DroneModelLoader {
       targetSpan: 2.65,
       rotationY: Math.PI,
       propellerNames: [
-        "PropCounterClockwiseFront_low", // M1 FR (CCW)
-        "PropCounterClockwiseBack_low",  // M2 RL (CCW)
-        "PropClockwiseFront_low",        // M3 FL (CW)
-        "PropClockwiseBack_low"          // M4 RR (CW)
+        "PropClockwiseFront_low",        // M1 FL (Trước-Trái, CCW)
+        "PropClockwiseBack_low",         // M2 RR (Sau-Phải, CCW)
+        "PropCounterClockwiseBack_low",  // M3 RL (Sau-Trái, CW)
+        "PropCounterClockwiseFront_low"  // M4 FR (Trước-Phải, CW)
       ],
       spinAxis: "y",
       hasBakedIsilabLivery: true
@@ -29,10 +29,10 @@ class DroneModelLoader {
       targetSpan: 2.60,
       rotationY: Math.PI,
       propellerNames: [
-        "Propeller1", // M1 FR
-        "Propeller4", // M2 RL
-        "Propeller2", // M3 FL
-        "Propeller3"  // M4 RR
+        "Propeller2", // M1 FL
+        "Propeller3", // M2 RR
+        "Propeller4", // M3 RL
+        "Propeller1"  // M4 FR
       ],
       spinAxis: "z",
       badgeOffset: { y: 0.14, z: -0.05, rx: -Math.PI / 2, scale: 0.42 }
@@ -43,10 +43,10 @@ class DroneModelLoader {
       targetSpan: 2.50,
       rotationY: Math.PI,
       propellerNames: [
-        "Rotor_FR", // M1 FR
-        "Rotor_BL", // M2 RL
-        "Rotor_FL", // M3 FL
-        "Rotor_BR"  // M4 RR
+        "Rotor_FL", // M1 FL
+        "Rotor_BR", // M2 RR
+        "Rotor_BL", // M3 RL
+        "Rotor_FR"  // M4 FR
       ],
       spinAxis: "y",
       badgeOffset: { y: 0.08, z: -0.12, rx: -Math.PI / 2, scale: 0.38 }
@@ -57,10 +57,10 @@ class DroneModelLoader {
       targetSpan: 2.55,
       rotationY: Math.PI / 2,
       propellerNames: [
-        "Circle.002",
-        "Circle.003",
-        "Circle.004",
-        "Circle.005"
+        "Circle.004", // M1 FL
+        "Circle.005", // M2 RR
+        "Circle.003", // M3 RL
+        "Circle.002"  // M4 FR
       ],
       spinAxis: "z",
       badgeOffset: { y: 0.12, z: 0, rx: -Math.PI / 2, scale: 0.35 }
@@ -260,19 +260,19 @@ class DroneModelLoader {
   }
 
   /**
-   * Gắn 4 vòng LED định danh màu sắc 4 kênh Motor:
-   * M1 FR (Trước Phải): Cyan (#32ade6)
-   * M2 RL (Sau Trái):   Green (#30d158)
-   * M3 FL (Trước Trái): Amber (#ffd60a)
-   * M4 RR (Sau Phải):   Purple (#bf5af2)
+   * Gắn 4 vòng LED định danh màu sắc 4 kênh Motor chuẩn hình học chữ Z:
+   * M1 FL (Trước Trái): Cyan (#32ade6)
+   * M2 RR (Sau Phải):   Green (#30d158)
+   * M3 RL (Sau Trái):   Amber (#ffd60a)
+   * M4 FR (Trước Phải): Purple (#bf5af2)
    */
   static attachFourMotorLedRings(wrapper) {
     const armRadius = 1.05;
     const ledSpecs = [
-      { x:  armRadius * 0.707, z: -armRadius * 0.707, color: 0x32ade6 }, // M1 FR
-      { x: -armRadius * 0.707, z:  armRadius * 0.707, color: 0x30d158 }, // M2 RL
-      { x: -armRadius * 0.707, z: -armRadius * 0.707, color: 0xffd60a }, // M3 FL
-      { x:  armRadius * 0.707, z:  armRadius * 0.707, color: 0xbf5af2 }  // M4 RR
+      { x: -armRadius * 0.707, z: -armRadius * 0.707, color: 0x32ade6 }, // M1 FL (Trước-Trái - Cyan)
+      { x:  armRadius * 0.707, z:  armRadius * 0.707, color: 0x30d158 }, // M2 RR (Sau-Phải   - Green)
+      { x: -armRadius * 0.707, z:  armRadius * 0.707, color: 0xffd60a }, // M3 RL (Sau-Trái   - Amber)
+      { x:  armRadius * 0.707, z: -armRadius * 0.707, color: 0xbf5af2 }  // M4 FR (Trước-Phải - Purple)
     ];
 
     ledSpecs.forEach((spec) => {

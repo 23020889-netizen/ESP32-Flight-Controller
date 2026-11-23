@@ -22,11 +22,11 @@
 #define ESC_PULSE_DISARM_US      1000     // Xung ngắt an toàn (0% ga)
 #define ESC_PULSE_MIN_US         1000     // Xung tối thiểu (0.0% Throttle)
 #define ESC_PULSE_MAX_US         2000     // Xung tối đa (100.0% Throttle)
-#define ESC_PULSE_IDLE_US        1050     // Xung quay chậm không tải (Idle Spin ~ 5%)
+#define ESC_PULSE_IDLE_US        1080     // Xung quay chậm không tải (Idle Spin ~ 8% - 1080us đảm bảo A2212 luôn quay ổn định)
 
 #define ESC_ARMING_TIME_MS       0        // Mở khóa ARM tức thì
 #define ESC_WATCHDOG_TIMEOUT_MS  3000     // Failsafe: ngắt ga nếu mất lệnh > 3s
-#define ESC_SLEW_RATE_US_PER_SEC 2500     // Soft Ramp: 2500 µs/s
+#define ESC_SLEW_RATE_US_PER_SEC 20000    // Soft Ramp: 20000 µs/s (triệt tiêu trễ pha 40ms, giúp vòng PID phản ứng tức thì)
 
 // ============================================================================
 // 2. ENUMS

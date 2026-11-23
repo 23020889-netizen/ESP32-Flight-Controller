@@ -109,7 +109,7 @@ class QuadXMixer:
             return [0.0, 0.0, 0.0, 0.0]
 
         # Authority limit based on throttle
-        max_authority = max(0.06, min(0.35, throttle * 0.70))
+        max_authority = max(0.08, min(0.35, throttle * 0.70))
         roll_torque = max(-max_authority, min(max_authority, roll_torque))
         pitch_torque = max(-max_authority, min(max_authority, pitch_torque))
         yaw_torque = max(-max_authority * 0.5, min(max_authority * 0.5, yaw_torque))
@@ -124,7 +124,7 @@ class QuadXMixer:
         # Desaturation with priority for roll & pitch
         max_val = max(u)
         min_val = min(u)
-        min_floor = 0.02
+        min_floor = 0.08
         span = max_val - min_val
 
         if span > (1.0 - min_floor):

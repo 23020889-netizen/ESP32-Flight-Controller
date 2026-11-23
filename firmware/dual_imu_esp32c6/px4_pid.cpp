@@ -148,7 +148,7 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
 
     // Giới hạn mô-men Roll/Pitch/Yaw theo tỷ lệ mức ga để chống dập tắt động cơ khi ở mức ga thấp
     float max_authority = throttle * 0.70f;
-    if (max_authority < 0.06f) max_authority = 0.06f;
+    if (max_authority < 0.08f) max_authority = 0.08f;
     if (max_authority > 0.35f) max_authority = 0.35f;
 
     roll_torque  = constrain(roll_torque,  -max_authority, max_authority);
@@ -161,10 +161,11 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
     //   M1,M3 (LEFT): T + (âm) → GIẢM → Cánh trái hạ, cánh phải nâng → Cân bằng ✓
     //   M2,M4 (RIGHT): T - (âm) → TĂNG → Nâng cánh phải về vị trí level ✓
     //
-    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R + P + Y   ← LEFT: +R (đã sửa từ -R)
-    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R - P + Y   ← RIGHT: -R (đã sửa từ +R)
-    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R - P - Y   ← LEFT: +R ✓ (giữ nguyên)
-    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R + P - Y   ← RIGHT: -R ✓ (giữ nguyên)
+    // LƯU Ý QUAN TRỌNG VỀ THỨ TỰ CẮM DÂY MOTOR (KIỂU CHỮ "Z", KHÔNG PHẢI VÒNG TRÒN):
+    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R + P + Y   ← Trước-Trái (CCW)
+    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R - P + Y   ← Sau-Phải   (CCW)
+    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R - P - Y   ← Sau-Trái   (CW)
+    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R + P - Y   ← Trước-Phải (CW)
     float m[4];
     m[0] = throttle + roll_torque + pitch_torque + yaw_torque;
     m[1] = throttle - roll_torque - pitch_torque + yaw_torque;
@@ -179,7 +180,7 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
         if (m[i] < min_val) min_val = m[i];
     }
 
-    const float min_floor = 0.02f; // Sàn ga tối thiểu 2% để cánh luôn quay ổn định khi có lệnh ga
+    const float min_floor = 0.08f; // Sàn ga tối thiểu 8% (~1080 us) để motor luôn quay, chống ngắt tắt động cơ khi nghiêng ở ga thấp
     float span = max_val - min_val;
     if (span > (1.0f - min_floor)) {
         float scale = (1.0f - min_floor) / span;
@@ -266,7 +267,7 @@ void PX4_FlightController::lockCurrentHeading(float current_yaw_deg) {
 }
 
 void PX4_FlightController::setTargetThrottle(float throttle_pct) {
-    _target_throttle = constrain(throttle_pct / 100.0f, 0.0f, 1.0f);
+    _target_throttle = constrain(throttle_pct / 100.0f, 0.0f, 0.65f); // Giới hạn ga an toàn tối đa 65% cho pin 4S
 }
 
 

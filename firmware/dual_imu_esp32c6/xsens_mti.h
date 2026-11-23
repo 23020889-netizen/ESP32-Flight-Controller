@@ -14,6 +14,8 @@ struct XsensData {
     bool has_accel;
     bool has_gyro;
     uint32_t last_packet_ms;
+    uint32_t last_orient_ms;  // Thời điểm nhận góc Euler/Quaternion gần nhất (kiểm tra mất Xsens)
+    uint32_t last_gyro_ms;    // Thời điểm nhận Rate-of-Turn gần nhất
 };
 
 // Khởi tạo cổng UART1 giao tiếp Xsens MTi-3

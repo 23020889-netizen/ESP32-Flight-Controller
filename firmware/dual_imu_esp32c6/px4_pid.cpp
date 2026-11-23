@@ -224,7 +224,7 @@ void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, f
 PX4_FlightController::PX4_FlightController()
     : _target_roll(0.0f), _target_pitch(0.0f), _target_yaw(0.0f), _target_throttle(0.0f),
       _filtered_gx(0.0f), _filtered_gy(0.0f), _filtered_gz(0.0f),
-      _invert_pitch(false) {
+      _invert_pitch(false), _invert_yaw(false), _yaw_torque_enabled(true), _yaw_rate_ff(0.0f) {
     _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
     _tau[0] = 0.0f; _tau[1] = 0.0f; _tau[2] = 0.0f;
     for (int i = 0; i < 4; i++) {
@@ -244,8 +244,10 @@ void PX4_FlightController::init(float loop_freq_hz) {
     _rate_pid_roll.init (0.06f, 0.03f, 0.0f, 0.10f, 10.0f, loop_freq_hz);
     _rate_pid_pitch.init(0.06f, 0.03f, 0.0f, 0.10f, 10.0f, loop_freq_hz);
 
-    // Yaw
-    _rate_pid_yaw.init  (0.10f, 0.02f, 0.0f, 0.08f, 10.0f, loop_freq_hz);
+    // Yaw: mô-men Yaw do chênh lệch lực cản cánh quạt yếu hơn Roll/Pitch nhiều lần, nên cần hệ số
+    // lớn hơn (bản cũ Kp=0.10, Ki=0.02, i_max=0.08 => mô-men tối đa ~0.08, không thắng nổi ma sát
+    // ổ trục giá thử => drone không xoay). Băng thông Yaw thấp (< 2 Hz) nên ESC 50 Hz không gây mất ổn định.
+    _rate_pid_yaw.init  (0.20f, 0.10f, 0.0f, 0.15f, 10.0f, loop_freq_hz);
 
     // Vòng ngoài (angle)
     _att_control.setAngleGains(3.0f, 3.0f, 1.5f);
@@ -299,6 +301,7 @@ void PX4_FlightController::reset() {
 
     _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
     _tau[0] = 0.0f; _tau[1] = 0.0f; _tau[2] = 0.0f;
+    _yaw_rate_ff = 0.0f;
 
     for (int i = 0; i < 4; i++) {
         _motor_norm[i] = 0.0f;
@@ -349,12 +352,25 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
 
     _att_control.update(target_att, actual_att, _rate_sp_rad, yaw_valid);
 
+    // Feed-forward tốc độ Yaw từ cần gạt: drone bắt đầu xoay NGAY khi gạt cần, không phải chờ
+    // sai số góc tích lũy đủ lớn. Khi Yaw không hợp lệ, đây là chế độ rate thuần (vẫn điều khiển được).
+    {
+        const float yaw_max = _att_control.getMaxYawRateRad();
+        _rate_sp_rad[2] = constrain(_rate_sp_rad[2] + _yaw_rate_ff, -yaw_max, yaw_max);
+    }
+
     // 3. VÒNG TRONG (Inner Angular Rate PID-Loop): Tính mô-men điều khiển
     bool allow_integral = (_target_throttle >= 0.25f); // Chỉ cho phép tích phân khi ga >= 25% (gần ngưỡng hover)
     _tau[0] = _rate_pid_roll.update(_rate_sp_rad[0], actual_gx_rad, dt, allow_integral);
     _tau[1] = _rate_pid_pitch.update(_rate_sp_rad[1], actual_gy_rad, dt, allow_integral);
     if (_invert_pitch) _tau[1] = -_tau[1];
-    _tau[2] = _rate_pid_yaw.update(_rate_sp_rad[2],  actual_gz_rad, dt, allow_integral);
+    if (_yaw_torque_enabled) {
+        _tau[2] = _rate_pid_yaw.update(_rate_sp_rad[2],  actual_gz_rad, dt, allow_integral);
+        if (_invert_yaw) _tau[2] = -_tau[2];
+    } else {
+        _rate_pid_yaw.reset();
+        _tau[2] = 0.0f;
+    }
 
     // 4. BỘ PHỐI TRỘN (Mixer / Allocator): Phân bổ mô-men và ga ra 4 kênh chuẩn hóa [0..1]
     _mixer.mixNormalized(_target_throttle, _tau[0], _tau[1], _tau[2], _motor_norm);
@@ -363,4 +379,23 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
     for (int i = 0; i < 4; i++) {
         _motor_outputs_us[i] = ESC_PULSE_MIN_US + (uint16_t)(_motor_norm[i] * (float)(ESC_PULSE_MAX_US - ESC_PULSE_MIN_US));
     }
+}
+
+// ============================================================================
+// 5. YAW SETPOINT SHAPING (cần gạt = tốc độ xoay)
+// ============================================================================
+static float wrap180f(float a) {
+    if (isnan(a) || isinf(a)) return 0.0f;
+    while (a > 180.0f)  a -= 360.0f;
+    while (a < -180.0f) a += 360.0f;
+    return a;
+}
+
+float yawSetpointStep(float yaw_sp_deg, float rate_cmd_dps, float yaw_deg, float dt, float max_lead_deg) {
+    if (isnan(rate_cmd_dps) || isinf(rate_cmd_dps) || !(dt > 0.0f) || dt > 0.1f) return wrap180f(yaw_sp_deg);
+    float sp = yaw_sp_deg + rate_cmd_dps * dt;
+    const float lead = wrap180f(sp - yaw_deg);
+    if (lead >  max_lead_deg) sp = yaw_deg + max_lead_deg;
+    if (lead < -max_lead_deg) sp = yaw_deg - max_lead_deg;
+    return wrap180f(sp);
 }

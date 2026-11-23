@@ -64,6 +64,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
             current_xsens.yaw   = raw_y;
             current_xsens.has_orientation = true;
             current_xsens.last_packet_ms = millis();
+            current_xsens.last_orient_ms = current_xsens.last_packet_ms;
         }
         // 2. Quaternion (0x2010): q0, q1, q2, q3 -> Chuyển sang Euler nếu cấu hình Quat
         else if (typeId == 0x2010 && dataLen >= 16) {
@@ -92,6 +93,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
             current_xsens.yaw   = raw_y;
             current_xsens.has_orientation = true;
             current_xsens.last_packet_ms = millis();
+            current_xsens.last_orient_ms = current_xsens.last_packet_ms;
         }
         // 3. Gia tốc Calibrated Acceleration (0x4020, 0x4030, 0x4040, 0x4010) (m/s^2)
         else if ((typeId == 0x4020 || typeId == 0x4030 || typeId == 0x4040 || typeId == 0x4010) && dataLen >= 12) {
@@ -120,6 +122,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
             current_xsens.gz = (opt_invert_z ? -raw_gz : raw_gz);
             current_xsens.has_gyro = true;
             current_xsens.last_packet_ms = millis();
+            current_xsens.last_gyro_ms = current_xsens.last_packet_ms;
         }
     }
 }

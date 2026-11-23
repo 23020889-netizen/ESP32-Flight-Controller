@@ -73,6 +73,7 @@ public:
 
     void setAngleGains(float roll_p, float pitch_p, float yaw_p);
     void setMaxRates(float max_roll_rate_rad, float max_pitch_rate_rad, float max_yaw_rate_rad);
+    float getMaxYawRateRad() const { return _max_yaw_rate_rad; }
 
     /**
      * @brief Tính toán tốc độ góc mục tiêu
@@ -138,6 +139,18 @@ public:
     void setPitchInversion(bool invert) { _invert_pitch = invert; }
     bool isPitchInverted() const { return _invert_pitch; }
     void togglePitchInversion() { _invert_pitch = !_invert_pitch; } // Khóa hướng Yaw hiện tại khi Arm
+
+    // ---- YAW ----
+    // Đảo dấu cơ cấu chấp hành Yaw (chiều quay thực tế của cặp motor CCW/CW so với trục Z của Xsens).
+    // Xác định bằng lệnh "yaw check" trên giá thử, KHÔNG suy ra từ nhãn M1..M4.
+    void setYawInversion(bool invert) { if (invert != _invert_yaw) _rate_pid_yaw.reset(); _invert_yaw = invert; }
+    bool isYawInverted() const { return _invert_yaw; }
+    // Feed-forward tốc độ Yaw từ cần gạt (rad/s), cộng vào rate setpoint của vòng trong.
+    // Cần Yaw = lệnh TỐC ĐỘ xoay; vòng ngoài chỉ giữ hướng (heading hold).
+    void setYawRateFeedforward(float yaw_rate_rad) { _yaw_rate_ff = isnan(yaw_rate_rad) ? 0.0f : yaw_rate_rad; }
+    // Ngắt mô-men Yaw (bảo vệ khi phát hiện Yaw quay mất kiểm soát)
+    void setYawTorqueEnabled(bool en) { if (!en) _rate_pid_yaw.reset(); _yaw_torque_enabled = en; }
+    bool isYawTorqueEnabled() const { return _yaw_torque_enabled; }
     void setTargetThrottle(float throttle_pct);     // 0.0 .. 100.0%
 
     // Chế độ test thủ công được quản lý trực tiếp qua quadMotors (QuadEscController)
@@ -230,6 +243,43 @@ private:
     float    _motor_norm[4];
     uint16_t _motor_outputs_us[4];
     bool     _invert_pitch;
+    bool     _invert_yaw;
+    bool     _yaw_torque_enabled;
+    float    _yaw_rate_ff;
+};
+
+/**
+ * @brief Tích phân mốc hướng Yaw từ lệnh tốc độ cần gạt (chạy trong vòng 200 Hz).
+ * - yaw_sp += rate_cmd * dt  (theo THỜI GIAN, không phụ thuộc tần suất gói RC)
+ * - Giới hạn mốc không chạy trước hướng thực quá max_lead_deg, tránh sai số tích lũy vượt ±180°
+ *   (khi đó đường ngắn nhất đổi chiều và drone xoay ngược).
+ * @return yaw_sp mới trong [-180, 180] (độ)
+ */
+float yawSetpointStep(float yaw_sp_deg, float rate_cmd_dps, float yaw_deg, float dt, float max_lead_deg);
+
+/**
+ * @brief Bộ tạo mốc Yaw từ cần gạt (giống chế độ Stabilized của PX4):
+ * - Đang gạt cần: mốc chạy theo lệnh tốc độ (yawSetpointStep), dẫn trước tối đa max_lead_deg.
+ * - Vừa nhả cần (hoặc mất gói RC): KHÓA hướng tại góc Yaw thực tế lúc đó. Nếu giữ mốc đang dẫn
+ *   trước, drone sẽ tự xoay tiếp thêm tới max_lead_deg sau khi đã nhả cần.
+ */
+class YawStickShaper {
+public:
+    YawStickShaper() : _was_active(false) {}
+    float update(float yaw_sp_deg, float rate_cmd_dps, float yaw_deg, float dt, float max_lead_deg) {
+        const bool active = fabsf(rate_cmd_dps) > 0.0f;
+        float sp = yaw_sp_deg;
+        if (active) {
+            sp = yawSetpointStep(yaw_sp_deg, rate_cmd_dps, yaw_deg, dt, max_lead_deg);
+        } else if (_was_active) {
+            sp = yaw_deg;   // Khóa hướng tại vị trí nhả cần
+        }
+        _was_active = active;
+        return sp;
+    }
+    void reset() { _was_active = false; }
+private:
+    bool _was_active;
 };
 
 // Instance toàn cục

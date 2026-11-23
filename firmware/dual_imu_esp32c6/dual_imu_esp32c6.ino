@@ -613,6 +613,20 @@ void loop() {
 
         bool isArmed = (quadMotors.getState() == ESC_STATE_ARMED);
 
+        // FAILSAFE TỰ NGẮT KHI NGHIÊNG QUÁ 60 ĐỘ (CRASH / FLIP DETECT)
+        if (isArmed && activeTestMotor == 0) {
+            if (fabsf(attitudeState.roll) > 60.0f || fabsf(attitudeState.pitch) > 60.0f) {
+                quadMotors.disarm();
+                px4Controller.reset();
+                autoTuner.stop();
+                setpointState.throttle_pct = 0.0f;
+                setpointState.rc_stream_active = false;
+                isArmed = false;
+                Serial.printf("[FAILSAFE] Nghieng qua 60 deg (R:%.1f, P:%.1f) -> AUTO DISARM!\n", attitudeState.roll, attitudeState.pitch);
+                telemetry_wifi_broadcast_msg("[FAILSAFE] Flip/Tilt > 60 deg -> AUTO DISARM");
+            }
+        }
+
         // Nạp Setpoint vào bộ điều khiển
         px4Controller.setTargetThrottle(setpointState.throttle_pct);
         px4Controller.setTargetAttitude(setpointState.roll_sp, setpointState.pitch_sp, setpointState.yaw_sp);

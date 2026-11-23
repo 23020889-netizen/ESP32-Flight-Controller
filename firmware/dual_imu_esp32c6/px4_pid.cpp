@@ -10,8 +10,8 @@ PX4_FlightController px4Controller;
 PX4_RatePID::PX4_RatePID()
     : _integral(0.0f), _last_rate_meas(0.0f),
       _p_out(0.0f), _d_out(0.0f), _first_run(true) {
-    // Hệ số chuẩn PX4 cho đơn vị rad/s
-    _gains = { 0.15f, 0.20f, 0.003f, 0.30f };
+    // Hệ số chuẩn thận trọng cho đơn vị rad/s (an toàn, chống vọt lố/rung lắc)
+    _gains = { 0.09f, 0.06f, 0.0015f, 0.12f };
 }
 
 void PX4_RatePID::init(float kp, float ki, float kd, float i_max, float d_cutoff_hz, float loop_rate_hz) {
@@ -25,7 +25,9 @@ void PX4_RatePID::setGains(float kp, float ki, float kd, float i_max) {
     _gains.kp = kp;
     _gains.ki = ki;
     _gains.kd = kd;
-    _gains.i_max = i_max;
+    if (i_max > 0.0f) {
+        _gains.i_max = i_max;
+    }
 }
 
 void PX4_RatePID::setLoopRate(float loop_rate_hz) {
@@ -86,10 +88,10 @@ void PX4_RatePID::reset() {
 // 2. PX4 ATTITUDE CONTROL (OUTER LOOP) - TÍNH TOÁN RA RADIAN/S
 // ============================================================================
 PX4_AttitudeControl::PX4_AttitudeControl()
-    : _roll_p(6.5f), _pitch_p(6.5f), _yaw_p(2.8f) {
-    _max_roll_rate_rad  = 220.0f * DEG_TO_RAD; // ~3.84 rad/s
-    _max_pitch_rate_rad = 220.0f * DEG_TO_RAD; // ~3.84 rad/s
-    _max_yaw_rate_rad   = 150.0f * DEG_TO_RAD; // ~2.62 rad/s
+    : _roll_p(4.5f), _pitch_p(4.5f), _yaw_p(2.0f) {
+    _max_roll_rate_rad  = 100.0f * DEG_TO_RAD; // Giới hạn 100 deg/s để phản ứng êm ái
+    _max_pitch_rate_rad = 100.0f * DEG_TO_RAD; // Giới hạn 100 deg/s
+    _max_yaw_rate_rad   = 60.0f * DEG_TO_RAD;  // Giới hạn 60 deg/s
 }
 
 void PX4_AttitudeControl::setAngleGains(float roll_p, float pitch_p, float yaw_p) {
@@ -236,16 +238,19 @@ void PX4_FlightController::init(float loop_freq_hz) {
     _gyro_filter_y.setCutoffFrequency(loop_freq_hz, 30.0f);
     _gyro_filter_z.setCutoffFrequency(loop_freq_hz, 30.0f);
 
-    // Cài đặt Inner Rate PID loops (Đơn vị rad/s)
-    // Trục Roll & Pitch: Kp=0.15, Ki=0.20, Kd=0.003
-    _rate_pid_roll.init(0.15f, 0.20f, 0.003f, 0.30f, 20.0f, loop_freq_hz);
-    _rate_pid_pitch.init(0.15f, 0.20f, 0.003f, 0.30f, 20.0f, loop_freq_hz);
+    // Cài đặt Inner Rate PID loops (Đơn vị rad/s) - Bộ số thận trọng an toàn:
+    // Roll & Pitch: Kp, Ki, Kd, i_max, d_cutoff, loop_freq
+    _rate_pid_roll.init (0.09f, 0.06f, 0.0015f, 0.12f, 20.0f, loop_freq_hz);
+    _rate_pid_pitch.init(0.09f, 0.06f, 0.0015f, 0.12f, 20.0f, loop_freq_hz);
 
-    // Trục Yaw: Kp=0.20, Ki=0.10, Kd=0.000
-    _rate_pid_yaw.init(0.20f, 0.10f, 0.000f, 0.25f, 20.0f, loop_freq_hz);
+    // Yaw
+    _rate_pid_yaw.init  (0.12f, 0.03f, 0.0f,    0.10f, 20.0f, loop_freq_hz);
 
-    // Cài đặt Outer Angle Control: Roll_P=6.5, Pitch_P=6.5, Yaw_P=2.8
-    _att_control.setAngleGains(6.5f, 6.5f, 2.8f);
+    // Vòng ngoài (angle)
+    _att_control.setAngleGains(4.5f, 4.5f, 2.0f);
+
+    // Đặt giới hạn tốc độ góc thấp cho lần bay đầu (gọi sau init)
+    _att_control.setMaxRates(100.0f * DEG_TO_RAD, 100.0f * DEG_TO_RAD, 60.0f * DEG_TO_RAD);
 
     reset();
 }

@@ -561,13 +561,13 @@ void loop() {
     // 2. Đọc cảm biến Xsens MTi-3 qua UART1 non-blocking (~0.1ms)
     xsens_mti_update(xsensData);
 
-    // 3. Dung hợp trạng thái góc siêu nhẹ (State Estimator):
-    //    Tận dụng bộ xử lý AHRS phần cứng có sẵn trên Xsens MTi-3 (100Hz)
-    //    Kết hợp Gyro MPU6050 -> 0% CPU OVERHEAD cho ESP32!
+    // 3. Ước lượng trạng thái góc (State Estimator):
+    //    Theo yêu cầu: KHÔNG can thiệp PID.
+    //    Góc YAW xác định DUY NHẤT từ phần cứng AHRS Xsens MTi-3 (100Hz), TUYỆT ĐỐI không dùng Yaw của MPU6050.
     if (xsensData.has_orientation) {
         attitudeState.roll  = xsensData.roll;
         attitudeState.pitch = xsensData.pitch;
-        attitudeState.yaw   = xsensData.yaw;
+        attitudeState.yaw   = xsensData.yaw; // Xác định duy nhất từ Xsens MTi-3
         attitudeState.gx    = 0.85f * xsensData.gx + 0.15f * mpuData.gx;
         attitudeState.gy    = 0.85f * xsensData.gy + 0.15f * mpuData.gy;
         attitudeState.gz    = 0.85f * xsensData.gz + 0.15f * mpuData.gz;
@@ -579,14 +579,14 @@ void loop() {
     } else if (mpuData.ready) {
         attitudeState.roll  = mpuData.roll;
         attitudeState.pitch = mpuData.pitch;
-        attitudeState.yaw   = 0.0f; // MPU đơn thuần không có Yaw từ Mag/AHRS, ghi rõ invalid
+        attitudeState.yaw   = 0.0f; // MPU không có Yaw từ Mag/AHRS => Không dùng Yaw của MPU
         attitudeState.gx    = mpuData.gx;
         attitudeState.gy    = mpuData.gy;
         attitudeState.gz    = mpuData.gz;
         attitudeState.ax    = mpuData.ax;
         attitudeState.ay    = mpuData.ay;
         attitudeState.az    = mpuData.az;
-        attitudeState.yaw_valid = false;
+        attitudeState.yaw_valid = false; // Đánh dấu Yaw không hợp lệ nếu mất Xsens
         attitudeState.sensor_ok = true;
     } else {
         attitudeState.yaw_valid = false;
@@ -612,6 +612,20 @@ void loop() {
         lastPidUs = nowUs;
 
         bool isArmed = (quadMotors.getState() == ESC_STATE_ARMED);
+
+        // FAILSAFE TỰ NGẮT KHI NGHIÊNG QUÁ 60 ĐỘ (CRASH / FLIP DETECT)
+        if (isArmed && activeTestMotor == 0) {
+            if (fabsf(attitudeState.roll) > 60.0f || fabsf(attitudeState.pitch) > 60.0f) {
+                quadMotors.disarm();
+                px4Controller.reset();
+                autoTuner.stop();
+                setpointState.throttle_pct = 0.0f;
+                setpointState.rc_stream_active = false;
+                isArmed = false;
+                Serial.printf("[FAILSAFE] Nghieng qua 60 deg (R:%.1f, P:%.1f) -> AUTO DISARM!\n", attitudeState.roll, attitudeState.pitch);
+                telemetry_wifi_broadcast_msg("[FAILSAFE] Flip/Tilt > 60 deg -> AUTO DISARM");
+            }
+        }
 
         // Nạp Setpoint vào bộ điều khiển
         px4Controller.setTargetThrottle(setpointState.throttle_pct);

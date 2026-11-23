@@ -33,7 +33,7 @@ public:
     PX4_RatePID();
 
     void init(float kp, float ki, float kd, float i_max, float d_cutoff_hz, float loop_rate_hz);
-    void setGains(float kp, float ki, float kd, float i_max = 0.3f);
+    void setGains(float kp, float ki, float kd, float i_max = -1.0f);
     void setLoopRate(float loop_rate_hz);
 
     /**

@@ -145,6 +145,17 @@ static void loadPidGainsIfSaved() {
     }
 }
 
+static void clearSavedPidGains() {
+    if (fcPrefs.begin("fc", false)) {
+        fcPrefs.remove("r_kp"); fcPrefs.remove("r_ki"); fcPrefs.remove("r_kd");
+        fcPrefs.remove("p_kp"); fcPrefs.remove("p_ki"); fcPrefs.remove("p_kd");
+        fcPrefs.remove("y_kp"); fcPrefs.remove("y_ki"); fcPrefs.remove("y_kd");
+        fcPrefs.remove("a_rp"); fcPrefs.remove("a_pp"); fcPrefs.remove("a_yp");
+        fcPrefs.end();
+        Serial.println("[NVS] Da xoa bo he so PID khoi Flash NVS (khoi phuc he so mac dinh).");
+    }
+}
+
 const uint32_t RC_WATCHDOG_TIMEOUT_MS = 1500; // Failsafe timeout khi mất sóng RC quá 1.5s
 uint32_t acceptedRcSequence = 0;
 
@@ -504,6 +515,13 @@ void executeCommand(String cmd, const char* sourceTag) {
             savePidGains();
             Serial.printf("[%s] Cap nhat Outer Angle P: Roll_P=%.2f, Pitch_P=%.2f, Yaw_P=%.2f (da luu NVS)\n", sourceTag, rp, pp, yp);
         }
+    } else if (cmd.equalsIgnoreCase("pid reset") || cmd.equalsIgnoreCase("tune reset") || cmd.equalsIgnoreCase("reset pid")) {
+        clearSavedPidGains();
+        px4Controller.setRatePidRoll(0.06f, 0.03f, 0.0f);
+        px4Controller.setRatePidPitch(0.06f, 0.03f, 0.0f);
+        px4Controller.setRatePidYaw(0.20f, 0.10f, 0.0f);
+        px4Controller.setAngleGains(3.0f, 3.0f, 1.5f);
+        Serial.printf("[%s] [PID] Da reset he so ve mac dinh an toan (Rate Roll/Pitch: 0.06/0.03/0, Yaw: 0.20/0.10/0, Angle: 3.0/3.0/1.5) & xoa NVS Flash.\n", sourceTag);
     // 12. Auto-Tuner commands: tune roll/pitch/yaw/angle/stop/apply/save
     } else if (cmd.startsWith("tune ") || cmd.startsWith("TUNE ")) {
         String sub = cmd.substring(5);

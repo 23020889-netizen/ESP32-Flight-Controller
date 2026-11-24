@@ -615,6 +615,10 @@ void setup() {
     // 2. Khởi tạo Xsens MTi-3 qua UART1 (RX=GPIO 2, TX=GPIO 3)
     xsens_mti_init(XSENS_RX_PIN, XSENS_TX_PIN, XSENS_BAUDRATE);
     xsens_mti_set_axis_inversion(true, false, true);
+    // Yaw theo chiều LA BÀN: xoay CÙNG chiều kim đồng hồ (nhìn từ trên) => Yaw TĂNG, gz dương.
+    // Khớp với mô hình 3D trên Web (quay model theo -yaw). Không đảo thì Yaw giảm khi xoay
+    // cùng chiều kim đồng hồ và drone mô phỏng quay ngược drone thật (xác minh 2026-11-24).
+    xsens_mti_set_yaw_inversion(true);
 
     // 3. Khởi tạo hệ thống OOP điều khiển 4 động cơ Quadcopter:
     //    M1: GPIO 7 (CCW) - (Min: 1000 us, Max: 2000 us)

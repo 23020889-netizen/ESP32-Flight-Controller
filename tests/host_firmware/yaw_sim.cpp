@@ -7,6 +7,7 @@
 
 uint32_t g_fake_millis = 0;
 FakeSerial Serial;
+std::deque<uint8_t> g_fake_uart_rx;
 
 // Hằng số giống dual_imu_esp32c6.ino
 static const float YAW_STICK_FULL_SCALE   = 45.0f;
@@ -64,8 +65,8 @@ static Trace simulate(const Scenario& sc, double T) {
         // ---- ESC 50 Hz + motor + khung ----
         esc_t += dt; if (esc_t >= 0.02) { esc_t -= 0.02; for (int i = 0; i < 4; i++) hold[i] = u[i]; }
         for (int i = 0; i < 4; i++) motor[i] += (hold[i] - motor[i]) * (dt / 0.04);
-        // Vật lý đã xác minh: cặp cánh CW (M3,M4) nhanh hơn => thân xoay CCW => Yaw tăng (xem frame_sim.cpp)
-        double tyaw = (motor[2] + motor[3] - motor[0] - motor[1]) / 4.0;
+        // Vật lý đã xác minh: cặp cánh CCW (M1,M2) nhanh hơn => thân xoay CW => Yaw (chiều la bàn) tăng
+        double tyaw = (motor[0] + motor[1] - motor[2] - motor[3]) / 4.0;
         double acc = sc.sign * sc.k_yaw * tyaw - 0.3 * r;
         if (fabs(r) < 1e-3 && fabs(acc) < sc.fric) { r = 0; acc = 0; }
         else acc -= sc.fric * (r > 0 ? 1 : (r < 0 ? -1 : (acc > 0 ? 1 : -1)));

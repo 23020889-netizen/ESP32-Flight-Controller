@@ -4,16 +4,18 @@
 //               M3 GPIO5 Sau-Trái   CW  | M2 GPIO6 Sau-Phải   CCW   (nhìn từ trên, đầu hướng lên)
 //   B1: nghiêng cánh PHẢI hạ xuống  -> Roll  dương, gx dương
 //   B2: NGÓC đầu lên                -> Pitch âm,    gy âm
-//   B3: xoay CÙNG chiều kim đồng hồ  -> Yaw giảm (gz âm)   (nhìn từ trên)
+//   B3: xoay CÙNG chiều kim đồng hồ  -> Yaw giảm (gz âm) với dữ liệu thô; người dùng yêu cầu đảo dấu Yaw
+//       (xsens_mti_set_yaw_inversion(true)) => nay xoay CÙNG chiều kim đồng hồ -> Yaw TĂNG (gz dương)
 // Suy ra (lực đẩy & phản mô-men cánh quạt):
 //   roll_acc  ∝ (trái - phải)      = (M1+M3) - (M2+M4)   : motor trái tăng -> cánh phải hạ -> Roll +
 //   pitch_acc ∝ (sau - trước)      = (M2+M3) - (M1+M4)   : motor trước tăng -> ngóc đầu -> Pitch âm
-//   yaw_acc   ∝ (CW - CCW)         = (M3+M4) - (M1+M2)   : cặp CCW quay nhanh -> thân xoay CW -> Yaw giảm
+//   yaw_acc   ∝ (CCW - CW)         = (M1+M2) - (M3+M4)   : cặp CCW quay nhanh -> thân xoay CW -> Yaw tăng
 #include "Arduino.h"
 #include "../../firmware/dual_imu_esp32c6/px4_pid.h"
 
 uint32_t g_fake_millis = 0;
 FakeSerial Serial;
+std::deque<uint8_t> g_fake_uart_rx;
 static int g_fail = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { g_fail++; printf("  [FAIL] " __VA_ARGS__); } \
                               else { printf("  [ OK ] " __VA_ARGS__); } printf("\n"); } while (0)
@@ -22,7 +24,7 @@ struct Acc { double roll, pitch, yaw; };
 static Acc physics(const double m[4]) {       // m[0..3] = M1..M4
     return { ((m[0] + m[2]) - (m[1] + m[3])) / 4.0,
              ((m[1] + m[2]) - (m[0] + m[3])) / 4.0,
-             ((m[2] + m[3]) - (m[0] + m[1])) / 4.0 };
+             ((m[0] + m[1]) - (m[2] + m[3])) / 4.0 };
 }
 
 int main() {

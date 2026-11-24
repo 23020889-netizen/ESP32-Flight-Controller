@@ -161,21 +161,22 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
     // Quy ước dấu cảm biến Xsens (đã xác minh):
     //   Roll  + : cánh PHẢI hạ xuống         => motor TRÁI (M1,M3) tăng tạo Roll +
     //   Pitch + : CHÚC đầu xuống (ngóc = âm)  => motor SAU  (M2,M3) tăng tạo Pitch +
-    //   Yaw   + : xoay NGƯỢC chiều kim đồng hồ nhìn từ trên (xoay CW => Yaw giảm)
-    //             => cặp cánh CW (M3,M4) tăng: phản mô-men làm thân xoay CCW => Yaw +
+    //   Yaw   + : xoay CÙNG chiều kim đồng hồ nhìn từ trên (chiều la bàn; firmware đảo dấu Yaw của
+    //             Xsens bằng xsens_mti_set_yaw_inversion(true))
+    //             => cặp cánh CCW (M1,M2) tăng: phản mô-men làm thân xoay CW => Yaw +
     // Mỗi mô-men dương do PID xuất ra PHẢI tạo gia tốc góc dương trên đúng trục cảm biến (hồi tiếp âm).
-    // Bản cũ đặt +P cho motor TRƯỚC và +Y cho cặp CCW => vòng Pitch và Yaw là HỒI TIẾP DƯƠNG
-    // (Pitch tự lật tới ngưỡng failsafe 60°, Yaw xoay sai chiều / không giữ được hướng).
+    // Bản cũ đặt +P cho motor TRƯỚC => vòng Pitch HỒI TIẾP DƯƠNG (tự lật tới ngưỡng failsafe 60°).
+    // Cột Yaw phải đổi dấu CÙNG LÚC với dấu Yaw của cảm biến, nếu không vòng Yaw thành hồi tiếp dương.
     //
-    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R - P - Y
-    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R + P - Y
-    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R + P + Y
-    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R - P + Y
+    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R - P + Y
+    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R + P + Y
+    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R + P - Y
+    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R - P - Y
     float m[4];
-    m[0] = throttle + roll_torque - pitch_torque - yaw_torque;
-    m[1] = throttle - roll_torque + pitch_torque - yaw_torque;
-    m[2] = throttle + roll_torque + pitch_torque + yaw_torque;
-    m[3] = throttle - roll_torque - pitch_torque + yaw_torque;
+    m[0] = throttle + roll_torque - pitch_torque + yaw_torque;
+    m[1] = throttle - roll_torque + pitch_torque + yaw_torque;
+    m[2] = throttle + roll_torque + pitch_torque - yaw_torque;
+    m[3] = throttle - roll_torque - pitch_torque - yaw_torque;
 
     // Thuật toán Desaturation chuẩn PX4: Co giãn bảo toàn hình học mô-men (Dynamic Scale & Shift)
     float max_val = m[0];

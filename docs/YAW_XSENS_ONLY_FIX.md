@@ -101,6 +101,36 @@ M3 (Sau-Trái,   CW)  = T + R + P + Y
 M4 (Trước-Phải, CW)  = T − R − P + Y
 ```
 
-- **Quy ước cảm biến giữ nguyên:** Roll+ cánh phải hạ, Pitch+ chúc đầu, Yaw+ ngược chiều kim đồng hồ. Do đó hiển thị Web, telemetry và VIO không đổi.
+- **Quy ước cảm biến:** Roll+ cánh phải hạ, Pitch+ chúc đầu. Yaw: xem mục 7 (đã đổi sang chiều la bàn).
 - **Khóa NVS đổi thành `yaw_inv2`:** dấu Yaw đã lưu bằng `yaw check`/`invert yaw` trước bản sửa này được đo với Mixer cũ, nên bị bỏ qua.
 - **Sau khi nạp firmware:** chạy lại `yaw check`. Kết quả mong đợi là **THUAN**.
+
+## 7. Đảo dấu Yaw theo chiều la bàn (2026-11-24)
+
+Sau khi nạp bản mục 6, người dùng báo trên khung thật:
+- Xoay drone **cùng chiều kim đồng hồ** thì góc Yaw **giảm**.
+- Mô hình 3D trên Web quay **ngược chiều** drone thật.
+
+Nguyên nhân: Xsens xuất Yaw theo chuẩn ENU (tăng khi xoay ngược chiều kim đồng hồ). Còn mô hình 3D quay model theo `-yaw` (`three_dimensional_scene_manager.js`), tức là giả định Yaw tăng theo chiều kim đồng hồ (chiều la bàn).
+
+Cách sửa:
+- **Cảm biến:** `xsens_mti_set_yaw_inversion(true)` trong `setup()` đảo dấu **góc Yaw và Gyro Z cùng lúc**. Từ nay xoay cùng chiều kim đồng hồ → Yaw **tăng**, gz **dương**, và mô hình 3D quay cùng chiều drone thật.
+  - Roll, Pitch và gia tốc không đổi.
+- **Mixer:** cột Yaw đổi dấu theo, để vòng Yaw vẫn là hồi tiếp âm. Mô-men Yaw dương làm tăng cặp cánh CCW (M1, M2), phản mô-men làm thân xoay CW, tức Yaw tăng.
+
+```
+M1 (Trước-Trái, CCW) = T + R − P + Y
+M2 (Sau-Phải,   CCW) = T − R + P + Y
+M3 (Sau-Trái,   CW)  = T + R + P − Y
+M4 (Trước-Phải, CW)  = T − R − P − Y
+```
+
+Hệ quả:
+- **Cần Yaw:** gạt sang phải (Web gửi giá trị dương) → drone quay **phải** (cùng chiều kim đồng hồ).
+- **Kết quả `yaw check` đã lưu (`yaw_inv2`) vẫn đúng:** cảm biến và cơ cấu chấp hành cùng đổi dấu, nên dấu vòng kín không đổi. Kết quả mong đợi vẫn là **THUAN**.
+- **Log CSV cũ** (ví dụ `IMU_Telemetry_Log_20261102_231104.csv`) được ghi theo dấu Yaw cũ. Khi phát lại, Yaw sẽ quay ngược so với bản ghi mới.
+- **Khi tích hợp VIO/giữ vị trí sau này:** quy ước Roll+/Pitch+ (FLU) kèm Yaw+ theo chiều kim đồng hồ không phải hệ trục thuận phải. Cần chuyển đổi rõ ràng khi đưa IMU vào VIO.
+
+Kiểm thử: `tests/host_firmware/xsens_sign_test.cpp` đưa gói Xbus thật qua driver `xsens_mti.cpp`.
+- Chưa đảo: Yaw 0 → −20° khi xoay cùng chiều kim đồng hồ (đúng lỗi đã báo).
+- Đã đảo: Yaw 0 → +20°, gz +28.6°/s, mô hình 3D quay cùng chiều kim đồng hồ.

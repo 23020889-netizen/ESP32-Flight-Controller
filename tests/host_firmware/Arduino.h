@@ -40,3 +40,17 @@ public:
     using std::string::string;
     String(const std::string& s) : std::string(s) {}
 };
+
+// UART giả lập cho kiểm thử driver Xsens: test nạp byte vào g_fake_uart_rx
+#include <deque>
+#define SERIAL_8N1 0
+static inline void delay(uint32_t) {}
+extern std::deque<uint8_t> g_fake_uart_rx;
+class HardwareSerial {
+public:
+    explicit HardwareSerial(int) {}
+    void begin(unsigned long, uint32_t = 0, int8_t = -1, int8_t = -1) {}
+    size_t write(const uint8_t*, size_t n) { return n; }
+    int available() { return (int)g_fake_uart_rx.size(); }
+    int read() { if (g_fake_uart_rx.empty()) return -1; int b = g_fake_uart_rx.front(); g_fake_uart_rx.pop_front(); return b; }
+};

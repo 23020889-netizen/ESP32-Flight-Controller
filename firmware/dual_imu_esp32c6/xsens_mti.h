@@ -24,6 +24,9 @@ bool xsens_mti_init(uint8_t rx_pin = 2, uint8_t tx_pin = 3, uint32_t baudrate = 
 // Cấu hình đổi dấu trục để khớp hệ quy chiếu với MPU-6050
 void xsens_mti_set_axis_inversion(bool invert_x = true, bool invert_y = false, bool invert_z = true);
 
+// Đảo dấu trục Yaw (góc Yaw và Gyro Z cùng lúc để luôn khớp nhau)
+void xsens_mti_set_yaw_inversion(bool invert_yaw);
+
 // Hàm máy trạng thái FSM đọc luồng byte UART non-blocking
 bool xsens_mti_update(XsensData &data);
 

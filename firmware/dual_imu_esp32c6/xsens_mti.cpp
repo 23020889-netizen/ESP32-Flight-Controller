@@ -7,6 +7,9 @@ static HardwareSerial XsensUart(1);
 static bool opt_invert_x = true;
 static bool opt_invert_y = false;
 static bool opt_invert_z = true;
+// Đảo dấu riêng trục YAW (góc Yaw + Gyro Z). Không dùng opt_invert_z vì cờ đó còn điều khiển
+// việc chuẩn hóa Roll ±180° và dấu gia tốc az.
+static bool opt_invert_yaw = false;
 
 static XsensData current_xsens = {0};
 
@@ -61,7 +64,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
             }
 
             current_xsens.pitch = (opt_invert_y ? -raw_p : raw_p);
-            current_xsens.yaw   = raw_y;
+            current_xsens.yaw   = (opt_invert_yaw ? -raw_y : raw_y);
             current_xsens.has_orientation = true;
             current_xsens.last_packet_ms = millis();
             current_xsens.last_orient_ms = current_xsens.last_packet_ms;
@@ -90,7 +93,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
             }
 
             current_xsens.pitch = (opt_invert_y ? -raw_p : raw_p);
-            current_xsens.yaw   = raw_y;
+            current_xsens.yaw   = (opt_invert_yaw ? -raw_y : raw_y);
             current_xsens.has_orientation = true;
             current_xsens.last_packet_ms = millis();
             current_xsens.last_orient_ms = current_xsens.last_packet_ms;
@@ -120,6 +123,7 @@ static void parseMTData2Payload(const uint8_t *payload, uint16_t len) {
             current_xsens.gx = (opt_invert_x ? -raw_gx : raw_gx);
             current_xsens.gy = (opt_invert_y ? -raw_gy : raw_gy);
             current_xsens.gz = (opt_invert_z ? -raw_gz : raw_gz);
+            if (opt_invert_yaw) current_xsens.gz = -current_xsens.gz;   // Giữ gz cùng chiều với góc Yaw
             current_xsens.has_gyro = true;
             current_xsens.last_packet_ms = millis();
             current_xsens.last_gyro_ms = current_xsens.last_packet_ms;
@@ -139,6 +143,12 @@ bool xsens_mti_init(uint8_t rx_pin, uint8_t tx_pin, uint32_t baudrate) {
 
     Serial.printf("[XSENS] Da khoi tao UART1 (RX=%d, TX=%d, Baud=%d)\n", rx_pin, tx_pin, baudrate);
     return true;
+}
+
+void xsens_mti_set_yaw_inversion(bool invert_yaw) {
+    opt_invert_yaw = invert_yaw;
+    Serial.printf("[XSENS] Dao dau Yaw (goc + gz): %d -> Yaw %s khi xoay cung chieu kim dong ho\n",
+                  invert_yaw, invert_yaw ? "TANG" : "GIAM");
 }
 
 void xsens_mti_set_axis_inversion(bool invert_x, bool invert_y, bool invert_z) {

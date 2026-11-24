@@ -98,11 +98,12 @@ class RatePID:
 
 class QuadXMixer:
     """
-    Quad-X Mixer conforming to physical Z-pattern layout:
-    Motor 1: Front-Left  (CCW) -> u[0] = T + tau_roll + tau_pitch + tau_yaw
-    Motor 2: Rear-Right  (CCW) -> u[1] = T - tau_roll - tau_pitch + tau_yaw
-    Motor 3: Rear-Left   (CW)  -> u[2] = T + tau_roll - tau_pitch - tau_yaw
-    Motor 4: Front-Right (CW)  -> u[3] = T - tau_roll + tau_pitch - tau_yaw
+    Quad-X Mixer conforming to the physical layout VERIFIED on the real frame (2026-11-24):
+    Sensor convention: Roll+ = right wing down, Pitch+ = nose down, Yaw+ = counter-clockwise (top view)
+    Motor 1: Front-Left  (CCW) -> u[0] = T + tau_roll - tau_pitch - tau_yaw
+    Motor 2: Rear-Right  (CCW) -> u[1] = T - tau_roll + tau_pitch - tau_yaw
+    Motor 3: Rear-Left   (CW)  -> u[2] = T + tau_roll + tau_pitch + tau_yaw
+    Motor 4: Front-Right (CW)  -> u[3] = T - tau_roll - tau_pitch + tau_yaw
     """
     def mix(self, throttle: float, roll_torque: float, pitch_torque: float, yaw_torque: float):
         if throttle < 0.02:
@@ -115,10 +116,10 @@ class QuadXMixer:
         yaw_torque = max(-max_authority * 0.5, min(max_authority * 0.5, yaw_torque))
 
         u = [
-            throttle + roll_torque + pitch_torque + yaw_torque,
-            throttle - roll_torque - pitch_torque + yaw_torque,
             throttle + roll_torque - pitch_torque - yaw_torque,
             throttle - roll_torque + pitch_torque - yaw_torque,
+            throttle + roll_torque + pitch_torque + yaw_torque,
+            throttle - roll_torque - pitch_torque + yaw_torque,
         ]
 
         # Desaturation with priority for roll & pitch
@@ -241,24 +242,26 @@ class TestFlightControlRebuild(unittest.TestCase):
         mixer = QuadXMixer()
         thr = 0.50
 
-        # Positive roll torque (roll right command -> left motors M1, M3 increase, right motors M2, M4 decrease)
-        # u[0] = T + tau_r + tau_p + tau_y (M1: FL)
-        # u[1] = T - tau_r - tau_p + tau_y (M2: RR)
-        # u[2] = T + tau_r - tau_p - tau_y (M3: RL)
-        # u[3] = T - tau_r + tau_p - tau_y (M4: FR)
+        # Positive roll torque (right wing down -> left motors M1, M3 increase, right motors M2, M4 decrease)
+        # u[0] = T + tau_r - tau_p - tau_y (M1: FL)
+        # u[1] = T - tau_r + tau_p - tau_y (M2: RR)
+        # u[2] = T + tau_r + tau_p + tau_y (M3: RL)
+        # u[3] = T - tau_r - tau_p + tau_y (M4: FR)
         u_roll = mixer.mix(throttle=thr, roll_torque=0.10, pitch_torque=0.0, yaw_torque=0.0)
         self.assertGreater(u_roll[0], u_roll[3]) # M1 (FL) > M4 (FR)
         self.assertGreater(u_roll[2], u_roll[1]) # M3 (RL) > M2 (RR)
 
-        # Positive pitch torque (M1, M4 front increase; M2, M3 rear decrease)
+        # Positive pitch torque = nose DOWN (verified: nose up reads negative pitch)
+        # -> rear motors M2, M3 increase; front M1, M4 decrease
         u_pitch = mixer.mix(throttle=thr, roll_torque=0.0, pitch_torque=0.10, yaw_torque=0.0)
-        self.assertGreater(u_pitch[0], u_pitch[2]) # M1 (FL) > M3 (RL)
-        self.assertGreater(u_pitch[3], u_pitch[1]) # M4 (FR) > M2 (RR)
+        self.assertGreater(u_pitch[2], u_pitch[0]) # M3 (RL) > M1 (FL)
+        self.assertGreater(u_pitch[1], u_pitch[3]) # M2 (RR) > M4 (FR)
 
-        # Positive yaw torque (CCW motors M1, M2 increase; CW motors M3, M4 decrease)
+        # Positive yaw torque = counter-clockwise body rotation (verified: clockwise reads yaw decreasing)
+        # -> CW props M3, M4 increase (reaction torque turns the body CCW); CCW props M1, M2 decrease
         u_yaw = mixer.mix(throttle=thr, roll_torque=0.0, pitch_torque=0.0, yaw_torque=0.10)
-        self.assertGreater(u_yaw[0], u_yaw[2]) # M1 (CCW) > M3 (CW)
-        self.assertGreater(u_yaw[1], u_yaw[3]) # M2 (CCW) > M4 (CW)
+        self.assertGreater(u_yaw[2], u_yaw[0]) # M3 (CW) > M1 (CCW)
+        self.assertGreater(u_yaw[3], u_yaw[1]) # M4 (CW) > M2 (CCW)
 
     def test_mixer_saturation(self):
         mixer = QuadXMixer()

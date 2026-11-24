@@ -96,10 +96,11 @@ const uint32_t YAW_CHECK_PUSH_MS    = 1500;
 const float    YAW_CHECK_MIN_DPS    = 6.0f;   // |gz| trung bình tối thiểu để kết luận
 
 static Preferences fcPrefs;   // Lưu dấu Yaw vào NVS để không phải kiểm tra lại sau mỗi lần khởi động
+// Khóa "yaw_inv2": giá trị "yaw_inv" cũ được đo với Mixer CŨ (dấu Yaw ngược) nên không dùng lại.
 
 static void saveYawInversion(bool inv) {
     if (fcPrefs.begin("fc", false)) {
-        fcPrefs.putBool("yaw_inv", inv);
+        fcPrefs.putBool("yaw_inv2", inv);
         fcPrefs.end();
     }
 }
@@ -625,7 +626,7 @@ void setup() {
     // 4. Khởi tạo Bộ điều khiển bay PX4 Multicopter Cascaded PID (200Hz Loop)
     px4Controller.init(200.0f);
     if (fcPrefs.begin("fc", true)) {
-        px4Controller.setYawInversion(fcPrefs.getBool("yaw_inv", false));
+        px4Controller.setYawInversion(fcPrefs.getBool("yaw_inv2", false));
         fcPrefs.end();
     }
     Serial.printf("[SETUP] Dau mo-men Yaw: %s (doi bang lenh 'yaw check' hoac 'invert yaw')\n",

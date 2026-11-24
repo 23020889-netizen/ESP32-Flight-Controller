@@ -37,10 +37,10 @@ flowchart TD
     end
 
     subgraph ACTUATORS["3. Động Cơ Quadcopter (400 Hz / 50 Hz PWM)"]
-        M1["Motor 1: GPIO 7 (CCW - Trước Phải) = T - R + P + Y"]
-        M2["Motor 2: GPIO 6 (CCW - Sau Trái)   = T + R - P + Y"]
-        M3["Motor 3: GPIO 5 (CW  - Trước Trái)  = T + R + P - Y"]
-        M4["Motor 4: GPIO 4 (CW  - Sau Phải)   = T - R - P - Y"]
+        M1["Motor 1: GPIO 7 (CCW - Trước Trái) = T + R - P - Y"]
+        M2["Motor 2: GPIO 6 (CCW - Sau Phải)   = T - R + P - Y"]
+        M3["Motor 3: GPIO 5 (CW  - Sau Trái)   = T + R + P + Y"]
+        M4["Motor 4: GPIO 4 (CW  - Trước Phải) = T - R - P + Y"]
     end
 
     subgraph GROUND["4. Giao Diện & Giám Sát Mặt Đất"]
@@ -82,12 +82,23 @@ flowchart TD
    - Lọc thông thấp bậc 1 ($30\,\text{Hz}$) riêng cho thành phần $D$ để ngăn khuếch đại nhiễu trắng.
    - Bộ tích phân $I$: Tích hợp **Anti-Windup Clamping** ($\le \pm 0.3$) và tự động ngắt/reset khi mức ga ở dưới ngưỡng khởi động ($< 10\%$) để chống lật xe khi đang ở trên mặt đất.
 3. **Bộ Phối Trộn Động Cơ Quad-X & Chống Bão Hòa (Mixer Desaturation)**:
-   - Phân bổ lực chuẩn hình học:
+   - Bố trí động cơ **đã xác minh trên khung thật** (nhìn từ trên, đầu drone hướng lên):
+     ```
+              ĐẦU (mũi)
+       M1 · GPIO 7          M4 · GPIO 4
+       Trước-Trái  CCW      Trước-Phải  CW
+       M3 · GPIO 5          M2 · GPIO 6
+       Sau-Trái    CW       Sau-Phải    CCW
+              ĐUÔI
+     ```
+   - Quy ước dấu cảm biến Xsens (đã xác minh): **Roll +** = cánh phải hạ; **Pitch +** = chúc đầu (ngóc đầu là âm);
+     **Yaw +** = xoay ngược chiều kim đồng hồ nhìn từ trên (xoay cùng chiều kim đồng hồ thì Yaw giảm).
+   - Phân bổ lực (mỗi mô-men dương tạo gia tốc góc dương trên đúng trục cảm biến):
      $$\begin{aligned}
-     M_1 (\text{FR, CCW}) &= \text{Throttle} - \tau_{\text{roll}} + \tau_{\text{pitch}} + \tau_{\text{yaw}} \\
-     M_2 (\text{RL, CCW}) &= \text{Throttle} + \tau_{\text{roll}} - \tau_{\text{pitch}} + \tau_{\text{yaw}} \\
-     M_3 (\text{FL, CW})  &= \text{Throttle} + \tau_{\text{roll}} + \tau_{\text{pitch}} - \tau_{\text{yaw}} \\
-     M_4 (\text{RR, CW})  &= \text{Throttle} - \tau_{\text{roll}} - \tau_{\text{pitch}} - \tau_{\text{yaw}}
+     M_1 (\text{FL, CCW}) &= \text{Throttle} + \tau_{\text{roll}} - \tau_{\text{pitch}} - \tau_{\text{yaw}} \\
+     M_2 (\text{RR, CCW}) &= \text{Throttle} - \tau_{\text{roll}} + \tau_{\text{pitch}} - \tau_{\text{yaw}} \\
+     M_3 (\text{RL, CW})  &= \text{Throttle} + \tau_{\text{roll}} + \tau_{\text{pitch}} + \tau_{\text{yaw}} \\
+     M_4 (\text{FR, CW})  &= \text{Throttle} - \tau_{\text{roll}} - \tau_{\text{pitch}} + \tau_{\text{yaw}}
      \end{aligned}$$
    - Thuật toán **Desaturation / Air-Mode**: Khi một động cơ chạm trần ($> 100\%$) hoặc chạm sàn ($< 5\%$), dịch chuyển đều toàn bộ mức ga của 4 động cơ để giữ nguyên chênh lệch mô-men Roll/Pitch, đảm bảo drone không bị lật mất kiểm soát khi tăng ga đột ngột.
 

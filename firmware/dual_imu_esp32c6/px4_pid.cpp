@@ -155,22 +155,27 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
     pitch_torque = constrain(pitch_torque, -max_authority, max_authority);
     yaw_torque   = constrain(yaw_torque,   -max_authority * 0.5f, max_authority * 0.5f);
 
-    // Cấu hình Quad-X theo bố trí vật lý thực tế (M1,M3=TRÁI; M2,M4=PHẢI):
-    // Quy tắc Roll: LEFT motor = +R, RIGHT motor = -R
-    // Khi drone ngả PHẢI (roll_torque < 0 để kéo về trái):
-    //   M1,M3 (LEFT): T + (âm) → GIẢM → Cánh trái hạ, cánh phải nâng → Cân bằng ✓
-    //   M2,M4 (RIGHT): T - (âm) → TĂNG → Nâng cánh phải về vị trí level ✓
+    // Cấu hình Quad-X theo bố trí vật lý ĐÃ XÁC MINH trên khung thật (2026-11-24), nhìn từ trên, đầu hướng lên:
+    //      M1 GPIO7 Trước-Trái CCW    M4 GPIO4 Trước-Phải CW
+    //      M3 GPIO5 Sau-Trái   CW     M2 GPIO6 Sau-Phải   CCW
+    // Quy ước dấu cảm biến Xsens (đã xác minh):
+    //   Roll  + : cánh PHẢI hạ xuống         => motor TRÁI (M1,M3) tăng tạo Roll +
+    //   Pitch + : CHÚC đầu xuống (ngóc = âm)  => motor SAU  (M2,M3) tăng tạo Pitch +
+    //   Yaw   + : xoay NGƯỢC chiều kim đồng hồ nhìn từ trên (xoay CW => Yaw giảm)
+    //             => cặp cánh CW (M3,M4) tăng: phản mô-men làm thân xoay CCW => Yaw +
+    // Mỗi mô-men dương do PID xuất ra PHẢI tạo gia tốc góc dương trên đúng trục cảm biến (hồi tiếp âm).
+    // Bản cũ đặt +P cho motor TRƯỚC và +Y cho cặp CCW => vòng Pitch và Yaw là HỒI TIẾP DƯƠNG
+    // (Pitch tự lật tới ngưỡng failsafe 60°, Yaw xoay sai chiều / không giữ được hướng).
     //
-    // LƯU Ý QUAN TRỌNG VỀ THỨ TỰ CẮM DÂY MOTOR (KIỂU CHỮ "Z", KHÔNG PHẢI VÒNG TRÒN):
-    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R + P + Y   ← Trước-Trái (CCW)
-    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R - P + Y   ← Sau-Phải   (CCW)
-    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R - P - Y   ← Sau-Trái   (CW)
-    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R + P - Y   ← Trước-Phải (CW)
+    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R - P - Y
+    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R + P - Y
+    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R + P + Y
+    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R - P + Y
     float m[4];
-    m[0] = throttle + roll_torque + pitch_torque + yaw_torque;
-    m[1] = throttle - roll_torque - pitch_torque + yaw_torque;
-    m[2] = throttle + roll_torque - pitch_torque - yaw_torque;
-    m[3] = throttle - roll_torque + pitch_torque - yaw_torque;
+    m[0] = throttle + roll_torque - pitch_torque - yaw_torque;
+    m[1] = throttle - roll_torque + pitch_torque - yaw_torque;
+    m[2] = throttle + roll_torque + pitch_torque + yaw_torque;
+    m[3] = throttle - roll_torque - pitch_torque + yaw_torque;
 
     // Thuật toán Desaturation chuẩn PX4: Co giãn bảo toàn hình học mô-men (Dynamic Scale & Shift)
     float max_val = m[0];

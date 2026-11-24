@@ -67,3 +67,40 @@ Kết quả:
 | Mất gói RC | Dừng xoay |
 | Khung yếu/mạnh (k_yaw 12..60) | Đáp ứng tắt dần |
 | Dấu ngược + `invert yaw` | Điều khiển đúng |
+
+## 6. Sửa dấu Pitch & Yaw của Mixer (xác minh trên khung thật, 2026-11-24)
+
+Câu trả lời xác minh trên khung thật:
+
+| Hạng mục | Kết quả trên khung thật |
+|---|---|
+| Bố trí động cơ (nhìn từ trên, đầu hướng lên) | M1 GPIO7 Trước-Trái CCW · M4 GPIO4 Trước-Phải CW · M3 GPIO5 Sau-Trái CW · M2 GPIO6 Sau-Phải CCW |
+| Nghiêng cánh phải hạ xuống | Roll **+**, gx **+** |
+| Ngóc đầu lên | Pitch **−**, gy **−** |
+| Xoay cùng chiều kim đồng hồ (nhìn từ trên) | Yaw **giảm** |
+| `invert pitch` | không dùng |
+
+Đối chiếu với Mixer cũ:
+
+| Trục | Mixer cũ khi mô-men dương | Kết quả vật lý | Hướng PID cần | Kết luận |
+|---|---|---|---|---|
+| Roll | tăng motor trái (M1, M3) | cánh phải hạ → Roll + | Roll + | ✅ đúng |
+| Pitch | tăng motor trước (M1, M4) | ngóc đầu → Pitch − | Pitch + | ❌ hồi tiếp dương |
+| Yaw | tăng cặp CCW (M1, M2) | thân xoay CW → Yaw giảm | Yaw tăng | ❌ hồi tiếp dương |
+
+Mô phỏng 3 trục với vật lý trên (`tests/host_firmware/frame_sim.cpp`):
+- **Mixer cũ:** Pitch tự lật tới −60.8° và chạm failsafe 60°. Yaw xoay ngược chiều (−37.8° thay vì về +20°).
+- **Mixer mới:** cả 3 trục về đúng mốc.
+
+Mixer mới (`px4_pid.cpp`):
+
+```
+M1 (Trước-Trái, CCW) = T + R − P − Y
+M2 (Sau-Phải,   CCW) = T − R + P − Y
+M3 (Sau-Trái,   CW)  = T + R + P + Y
+M4 (Trước-Phải, CW)  = T − R − P + Y
+```
+
+- **Quy ước cảm biến giữ nguyên:** Roll+ cánh phải hạ, Pitch+ chúc đầu, Yaw+ ngược chiều kim đồng hồ. Do đó hiển thị Web, telemetry và VIO không đổi.
+- **Khóa NVS đổi thành `yaw_inv2`:** dấu Yaw đã lưu bằng `yaw check`/`invert yaw` trước bản sửa này được đo với Mixer cũ, nên bị bỏ qua.
+- **Sau khi nạp firmware:** chạy lại `yaw check`. Kết quả mong đợi là **THUAN**.

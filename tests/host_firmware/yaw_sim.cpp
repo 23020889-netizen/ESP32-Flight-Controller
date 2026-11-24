@@ -23,7 +23,7 @@ static double wrap180(double a) { while (a > 180) a -= 360; while (a < -180) a +
 struct Scenario {
     double k_yaw = 25.0;      // rad/s^2 cho 1.0 mô-men Yaw chuẩn hóa
     double fric = 2.0;        // ma sát tĩnh/động (rad/s^2)
-    double sign = +1.0;       // dấu thật của cơ cấu chấp hành (+tau => +gz)
+    double sign = +1.0;       // +1 = đúng vật lý đã xác minh trên khung; -1 = giả định khung bị đảo
     bool   fw_invert = false; // cờ "invert yaw" trong firmware
     double thr = 40.0;
     double (*stick)(double t) = nullptr;   // cần Yaw (-45..45) theo thời gian
@@ -64,7 +64,8 @@ static Trace simulate(const Scenario& sc, double T) {
         // ---- ESC 50 Hz + motor + khung ----
         esc_t += dt; if (esc_t >= 0.02) { esc_t -= 0.02; for (int i = 0; i < 4; i++) hold[i] = u[i]; }
         for (int i = 0; i < 4; i++) motor[i] += (hold[i] - motor[i]) * (dt / 0.04);
-        double tyaw = (motor[0] + motor[1] - motor[2] - motor[3]) / 4.0;
+        // Vật lý đã xác minh: cặp cánh CW (M3,M4) nhanh hơn => thân xoay CCW => Yaw tăng (xem frame_sim.cpp)
+        double tyaw = (motor[2] + motor[3] - motor[0] - motor[1]) / 4.0;
         double acc = sc.sign * sc.k_yaw * tyaw - 0.3 * r;
         if (fabs(r) < 1e-3 && fabs(acc) < sc.fric) { r = 0; acc = 0; }
         else acc -= sc.fric * (r > 0 ? 1 : (r < 0 ? -1 : (acc > 0 ? 1 : -1)));

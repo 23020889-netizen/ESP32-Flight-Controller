@@ -152,6 +152,7 @@ public:
     void setYawTorqueEnabled(bool en) { if (!en) _rate_pid_yaw.reset(); _yaw_torque_enabled = en; }
     bool isYawTorqueEnabled() const { return _yaw_torque_enabled; }
     void setTargetThrottle(float throttle_pct);     // 0.0 .. 100.0%
+    void setThrottleSlewRate(float slew_per_sec);   // vd 2.0f = từ 0% lên 100% trong 0.5s
 
     // Chế độ test thủ công được quản lý trực tiếp qua quadMotors (QuadEscController)
 
@@ -217,6 +218,8 @@ private:
     float _target_pitch;
     float _target_yaw;
     float _target_throttle; // 0.0 .. 1.0
+    float _target_throttle_raw;     // Giá trị thô người dùng vừa ra lệnh (chưa làm mượt)
+    float _throttle_slew_per_sec;   // Tốc độ tăng/giảm ga tối đa (đơn vị 0..1 mỗi giây)
 
     // Bộ lọc thông thấp bậc 2 Butterworth cho con quay hồi chuyển Gyro
     LowPassFilter2p _gyro_filter_x;

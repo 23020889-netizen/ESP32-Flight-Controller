@@ -229,6 +229,7 @@ void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, f
 // ============================================================================
 PX4_FlightController::PX4_FlightController()
     : _target_roll(0.0f), _target_pitch(0.0f), _target_yaw(0.0f), _target_throttle(0.0f),
+      _target_throttle_raw(0.0f), _throttle_slew_per_sec(2.0f),
       _filtered_gx(0.0f), _filtered_gy(0.0f), _filtered_gz(0.0f),
       _invert_pitch(false), _invert_yaw(false), _yaw_torque_enabled(true), _yaw_rate_ff(0.0f) {
     _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
@@ -275,7 +276,14 @@ void PX4_FlightController::lockCurrentHeading(float current_yaw_deg) {
 }
 
 void PX4_FlightController::setTargetThrottle(float throttle_pct) {
-    _target_throttle = constrain(throttle_pct / 100.0f, 0.0f, 0.65f); // Giới hạn ga an toàn tối đa 65% cho pin 4S
+    // Chỉ lưu yêu cầu của người dùng; việc làm mượt diễn ra trong update(), TRƯỚC khi vào mixer
+    _target_throttle_raw = constrain(throttle_pct / 100.0f, 0.0f, 0.65f); // Giới hạn ga an toàn tối đa 65% cho pin 4S
+}
+
+void PX4_FlightController::setThrottleSlewRate(float slew_per_sec) {
+    if (slew_per_sec > 0.0f) {
+        _throttle_slew_per_sec = slew_per_sec;
+    }
 }
 
 
@@ -304,6 +312,9 @@ void PX4_FlightController::reset() {
     _rate_pid_pitch.reset();
     _rate_pid_yaw.reset();
     _att_control.reset();
+
+    _target_throttle = 0.0f;
+    _target_throttle_raw = 0.0f;
 
     _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
     _tau[0] = 0.0f; _tau[1] = 0.0f; _tau[2] = 0.0f;
@@ -337,6 +348,21 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
         }
         return;
     }
+
+    // ===== THÊM: LÀM MƯỢT SETPOINT GA (Throttle Slew Limiter) =====
+    // Đây là bước khắc phục chính cho hiện tượng mất ổn định khi đẩy ga đột ngột:
+    // làm mượt NGAY TẠI setpoint (một giá trị scalar duy nhất) trước khi mixer dùng nó để
+    // tính max_authority và phân bổ cho 4 động cơ, tránh méo lệch tỷ lệ mô-men giữa các cánh.
+    {
+        float max_step = _throttle_slew_per_sec * dt;
+        float diff = _target_throttle_raw - _target_throttle;
+        if (fabsf(diff) <= max_step) {
+            _target_throttle = _target_throttle_raw;
+        } else {
+            _target_throttle += (diff > 0.0f) ? max_step : -max_step;
+        }
+    }
+    // ===== HẾT PHẦN THÊM =====
 
     // Nếu Armed nhưng mức ga < 2%: Giữ động cơ ở mức Idle Spin an toàn, không tích phân PID
     if (_target_throttle < 0.02f) {

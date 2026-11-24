@@ -8,7 +8,7 @@
 //       (xsens_mti_set_yaw_inversion(true)) => nay xoay CÙNG chiều kim đồng hồ -> Yaw TĂNG (gz dương)
 // Suy ra (lực đẩy & phản mô-men cánh quạt):
 //   roll_acc  ∝ (trái - phải)      = (M1+M3) - (M2+M4)   : motor trái tăng -> cánh phải hạ -> Roll +
-//   pitch_acc ∝ (sau - trước)      = (M2+M3) - (M1+M4)   : motor trước tăng -> ngóc đầu -> Pitch âm
+//   pitch_acc ∝ (trước - sau)      = (M1+M4) - (M2+M3)   : motor trước tăng -> nâng đầu -> Pitch +
 //   yaw_acc   ∝ (CCW - CW)         = (M1+M2) - (M3+M4)   : cặp CCW quay nhanh -> thân xoay CW -> Yaw tăng
 #include "Arduino.h"
 #include "../../firmware/dual_imu_esp32c6/px4_pid.h"
@@ -23,7 +23,7 @@ static int g_fail = 0;
 struct Acc { double roll, pitch, yaw; };
 static Acc physics(const double m[4]) {       // m[0..3] = M1..M4
     return { ((m[0] + m[2]) - (m[1] + m[3])) / 4.0,
-             ((m[1] + m[2]) - (m[0] + m[3])) / 4.0,
+             ((m[0] + m[3]) - (m[1] + m[2])) / 4.0,
              ((m[0] + m[1]) - (m[2] + m[3])) / 4.0 };
 }
 

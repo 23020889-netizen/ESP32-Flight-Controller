@@ -37,10 +37,10 @@ flowchart TD
     end
 
     subgraph ACTUATORS["3. Động Cơ Quadcopter (400 Hz / 50 Hz PWM)"]
-        M1["Motor 1: GPIO 7 (CCW - Trước Trái) = T + R - P + Y"]
-        M2["Motor 2: GPIO 6 (CCW - Sau Phải)   = T - R + P + Y"]
-        M3["Motor 3: GPIO 5 (CW  - Sau Trái)   = T + R + P - Y"]
-        M4["Motor 4: GPIO 4 (CW  - Trước Phải) = T - R - P - Y"]
+        M1["Motor 1: GPIO 7 (CCW - Trước Trái) = T + R + P + Y"]
+        M2["Motor 2: GPIO 6 (CCW - Sau Phải)   = T - R - P + Y"]
+        M3["Motor 3: GPIO 5 (CW  - Sau Trái)   = T + R - P - Y"]
+        M4["Motor 4: GPIO 4 (CW  - Trước Phải) = T - R + P - Y"]
     end
 
     subgraph GROUND["4. Giao Diện & Giám Sát Mặt Đất"]

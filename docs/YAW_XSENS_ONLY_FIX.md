@@ -119,10 +119,10 @@ Cách sửa:
 - **Mixer:** cột Yaw đổi dấu theo, để vòng Yaw vẫn là hồi tiếp âm. Mô-men Yaw dương làm tăng cặp cánh CCW (M1, M2), phản mô-men làm thân xoay CW, tức Yaw tăng.
 
 ```
-M1 (Trước-Trái, CCW) = T + R − P + Y
-M2 (Sau-Phải,   CCW) = T − R + P + Y
-M3 (Sau-Trái,   CW)  = T + R + P − Y
-M4 (Trước-Phải, CW)  = T − R − P − Y
+M1 (Trước-Trái, CCW) = T + R + P + Y
+M2 (Sau-Phải,   CCW) = T − R − P + Y
+M3 (Sau-Trái,   CW)  = T + R − P − Y
+M4 (Trước-Phải, CW)  = T − R + P − Y
 ```
 
 Hệ quả:

@@ -23,7 +23,7 @@ static int g_fail = 0;
 struct Acc { double roll, pitch, yaw; };
 static Acc physics(const double m[4]) {       // m[0..3] = M1..M4
     return { ((m[0] + m[2]) - (m[1] + m[3])) / 4.0,
-             ((m[1] + m[2]) - (m[0] + m[3])) / 4.0,
+             ((m[0] + m[3]) - (m[1] + m[2])) / 4.0,
              ((m[0] + m[1]) - (m[2] + m[3])) / 4.0 };
 }
 

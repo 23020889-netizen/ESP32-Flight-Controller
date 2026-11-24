@@ -254,6 +254,16 @@ button.act {
   background: var(--gl-elevated);
   color: var(--tx-sec);
   font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-pid-view.active {
+  background: rgba(48, 209, 88, 0.22);
+  color: #30d158;
+  border-color: rgba(48, 209, 88, 0.6);
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(48, 209, 88, 0.35);
 }
 
 .btn-thr,

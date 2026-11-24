@@ -33,14 +33,15 @@ class ThreeDimensionalSceneManager {
 
     this.droneGroup = new THREE.Group();
     this.scene.add(this.droneGroup);
-    this.setDroneModel("glb_cesium");
+    this.elapsedTime = 0;
+    this.setDroneModel("sci_fi_bubble");
     this.bindCameraOrbitEvents();
     this.handleContainerResize();
   }
 
   /**
    * Switches the active 3D Quadcopter model at runtime.
-   * @param {string} modelType Identifier ("glb_cesium", "glb_annelida", "glb_laser", "glb_s9").
+   * @param {string} modelType Identifier ("sci_fi_bubble", "glb_cesium", "glb_annelida", "glb_laser", "glb_s9").
    */
   setDroneModel(modelType) {
     DroneModelLoader.loadQuadcopterModel(
@@ -48,7 +49,8 @@ class ThreeDimensionalSceneManager {
       (propellers) => {
         this.propellerNodes = propellers;
       },
-      modelType
+      modelType,
+      this.renderer
     );
   }
 
@@ -98,14 +100,27 @@ class ThreeDimensionalSceneManager {
     this.targetQuaternion.setFromEuler(this.eulerAngles);
     // Tăng tốc độ slerp lên 32 để mô hình 3D xoay mượt mà 60 FPS, không có độ trễ quán tính giả
     this.droneGroup.quaternion.slerp(this.targetQuaternion, Math.min(1, deltaSeconds * 32));
-    this.propellerNodes.forEach((propeller, index) => {
-      const spinDelta = this.spinDirections[index] * (sample.m[index] || 0) * deltaSeconds * 0.08;
-      if (propeller.userData && propeller.userData.spinAxis === "z") {
-        propeller.rotateZ(spinDelta);
-      } else {
-        propeller.rotateY(spinDelta);
-      }
-    });
+
+    // Cập nhật hoạt ảnh turbine, blur disc và luồng plasma cho mô hình Sci-Fi Bubble Quad-X
+    if (this.droneGroup.userData && this.droneGroup.userData.sciFiQuad) {
+      this.elapsedTime = (this.elapsedTime || 0) + deltaSeconds;
+      const isArmed = (sample.armed !== undefined) ? !!sample.armed : (sample.m && sample.m.some((v) => v > 10));
+      this.droneGroup.userData.sciFiQuad.update(
+        deltaSeconds,
+        sample.m || [0, 0, 0, 0],
+        isArmed,
+        this.elapsedTime
+      );
+    } else {
+      this.propellerNodes.forEach((propeller, index) => {
+        const spinDelta = this.spinDirections[index] * (sample.m[index] || 0) * deltaSeconds * 0.08;
+        if (propeller.userData && propeller.userData.spinAxis === "z") {
+          propeller.rotateZ(spinDelta);
+        } else {
+          propeller.rotateY(spinDelta);
+        }
+      });
+    }
     this.camera.position.set(
       this.cameraDistance * Math.sin(this.azimuthRadians) * Math.cos(this.elevationRadians),
       this.cameraDistance * Math.sin(this.elevationRadians),

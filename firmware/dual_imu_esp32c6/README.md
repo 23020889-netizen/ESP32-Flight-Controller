@@ -37,10 +37,10 @@ flowchart TD
     end
 
     subgraph ACTUATORS["3. Động Cơ Quadcopter (400 Hz / 50 Hz PWM)"]
-        M1["Motor 1: GPIO 7 (CCW - Trước Phải) = T - R + P + Y"]
-        M2["Motor 2: GPIO 6 (CCW - Sau Trái)   = T + R - P + Y"]
-        M3["Motor 3: GPIO 5 (CW  - Trước Trái)  = T + R + P - Y"]
-        M4["Motor 4: GPIO 4 (CW  - Sau Phải)   = T - R - P - Y"]
+        M1["Motor 1: GPIO 7 (CCW - Trước Trái) = T + R + P + Y"]
+        M2["Motor 2: GPIO 6 (CCW - Sau Phải)   = T - R - P + Y"]
+        M3["Motor 3: GPIO 5 (CW  - Sau Trái)   = T + R - P - Y"]
+        M4["Motor 4: GPIO 4 (CW  - Trước Phải) = T - R + P - Y"]
     end
 
     subgraph GROUND["4. Giao Diện & Giám Sát Mặt Đất"]
@@ -82,12 +82,24 @@ flowchart TD
    - Lọc thông thấp bậc 1 ($30\,\text{Hz}$) riêng cho thành phần $D$ để ngăn khuếch đại nhiễu trắng.
    - Bộ tích phân $I$: Tích hợp **Anti-Windup Clamping** ($\le \pm 0.3$) và tự động ngắt/reset khi mức ga ở dưới ngưỡng khởi động ($< 10\%$) để chống lật xe khi đang ở trên mặt đất.
 3. **Bộ Phối Trộn Động Cơ Quad-X & Chống Bão Hòa (Mixer Desaturation)**:
-   - Phân bổ lực chuẩn hình học:
+   - Bố trí động cơ **đã xác minh trên khung thật** (nhìn từ trên, đầu drone hướng lên):
+     ```
+              ĐẦU (mũi)
+       M1 · GPIO 7          M4 · GPIO 4
+       Trước-Trái  CCW      Trước-Phải  CW
+       M3 · GPIO 5          M2 · GPIO 6
+       Sau-Trái    CW       Sau-Phải    CCW
+              ĐUÔI
+     ```
+   - Quy ước dấu cảm biến Xsens (đã xác minh): **Roll +** = cánh phải hạ; **Pitch +** = chúc đầu (ngóc đầu là âm);
+     **Yaw +** = xoay **cùng** chiều kim đồng hồ nhìn từ trên (chiều la bàn; firmware đảo dấu Yaw thô của Xsens
+     bằng `xsens_mti_set_yaw_inversion(true)` để Yaw và mô hình 3D trên Web quay cùng chiều drone thật).
+   - Phân bổ lực (mỗi mô-men dương tạo gia tốc góc dương trên đúng trục cảm biến):
      $$\begin{aligned}
-     M_1 (\text{FR, CCW}) &= \text{Throttle} - \tau_{\text{roll}} + \tau_{\text{pitch}} + \tau_{\text{yaw}} \\
-     M_2 (\text{RL, CCW}) &= \text{Throttle} + \tau_{\text{roll}} - \tau_{\text{pitch}} + \tau_{\text{yaw}} \\
-     M_3 (\text{FL, CW})  &= \text{Throttle} + \tau_{\text{roll}} + \tau_{\text{pitch}} - \tau_{\text{yaw}} \\
-     M_4 (\text{RR, CW})  &= \text{Throttle} - \tau_{\text{roll}} - \tau_{\text{pitch}} - \tau_{\text{yaw}}
+     M_1 (\text{FL, CCW}) &= \text{Throttle} + \tau_{\text{roll}} - \tau_{\text{pitch}} + \tau_{\text{yaw}} \\
+     M_2 (\text{RR, CCW}) &= \text{Throttle} - \tau_{\text{roll}} + \tau_{\text{pitch}} + \tau_{\text{yaw}} \\
+     M_3 (\text{RL, CW})  &= \text{Throttle} + \tau_{\text{roll}} + \tau_{\text{pitch}} - \tau_{\text{yaw}} \\
+     M_4 (\text{FR, CW})  &= \text{Throttle} - \tau_{\text{roll}} - \tau_{\text{pitch}} - \tau_{\text{yaw}}
      \end{aligned}$$
    - Thuật toán **Desaturation / Air-Mode**: Khi một động cơ chạm trần ($> 100\%$) hoặc chạm sàn ($< 5\%$), dịch chuyển đều toàn bộ mức ga của 4 động cơ để giữ nguyên chênh lệch mô-men Roll/Pitch, đảm bảo drone không bị lật mất kiểm soát khi tăng ga đột ngột.
 
@@ -95,8 +107,21 @@ flowchart TD
 
 ## 📌 3. Bảng Tham Số Mặc Định (Tuning Parameters)
 
+Giá trị trong `PidDefaults` (`px4_pid.h`), chọn bằng mô phỏng `tests/host_firmware/stand_sim.cpp` cho ESC 50 Hz.
+Chi tiết và quy trình chỉnh trên giá thử: [`docs/PID_TUNING_50HZ_ESC.md`](../../docs/PID_TUNING_50HZ_ESC.md).
+
 | Vòng Điều Khiển | Trục | $K_p$ | $K_i$ | $K_d$ | Giới hạn |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Outer Angle P** | Roll | `4.0` | - | - | Max $\pm 60^\circ/\text{s}$ |
+| **Outer Angle P** | Pitch | `4.0` | - | - | Max $\pm 60^\circ/\text{s}$ |
+| **Outer Angle P** | Yaw | `1.5` | - | - | Max $\pm 45^\circ/\text{s}$ |
+| **Inner Rate PID**| Roll | `0.040` | `0.080` | `0.0010` (lọc D 30 Hz) | I-Max $\pm 0.20$ |
+| **Inner Rate PID**| Pitch | `0.040` | `0.080` | `0.0010` (lọc D 30 Hz) | I-Max $\pm 0.20$ |
+| **Inner Rate PID**| Yaw | `0.20` | `0.10` | `0.0` | I-Max $\pm 0.15$ |
+| **Tích phân** | Roll/Pitch/Yaw | bật khi ga $\ge 15\%$ | anti-windup theo giới hạn Mixer | - | - |
+| **Gyro Filter**   | X, Y, Z | Cutoff = $30.0\,\text{Hz}$ | Butterworth Bậc 2 | - | $f_s = 200\,\text{Hz}$ |
+
+--- | :--- | :--- | :--- | :--- | :--- |
 | **Outer Angle P** | Roll | `6.50` | - | - | Max $\pm 220^\circ/\text{s}$ |
 | **Outer Angle P** | Pitch | `6.50` | - | - | Max $\pm 220^\circ/\text{s}$ |
 | **Outer Angle P** | Yaw | `2.80` | - | - | Max $\pm 150^\circ/\text{s}$ |

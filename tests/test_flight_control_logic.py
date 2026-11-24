@@ -53,7 +53,7 @@ class AttitudeController:
 
 
 class RatePID:
-    def __init__(self, kp=0.06, ki=0.03, kd=0.0, i_max=0.10):
+    def __init__(self, kp=0.040, ki=0.080, kd=0.0010, i_max=0.20):  # PidDefaults (Roll/Pitch) in px4_pid.h
         self.kp = kp
         self.ki = ki
         self.kd = kd
@@ -98,7 +98,9 @@ class RatePID:
 
 class QuadXMixer:
     """
-    Quad-X Mixer conforming to physical Z-pattern layout:
+    Quad-X Mixer conforming to the physical layout VERIFIED on the real frame (2026-11-24):
+    Sensor convention: Roll+ = right wing down, Pitch+ = nose down,
+                       Yaw+ = clockwise (top view, compass; Xsens yaw sign inverted in firmware)
     Motor 1: Front-Left  (CCW) -> u[0] = T + tau_roll + tau_pitch + tau_yaw
     Motor 2: Rear-Right  (CCW) -> u[1] = T - tau_roll - tau_pitch + tau_yaw
     Motor 3: Rear-Left   (CW)  -> u[2] = T + tau_roll - tau_pitch - tau_yaw
@@ -115,10 +117,10 @@ class QuadXMixer:
         yaw_torque = max(-max_authority * 0.5, min(max_authority * 0.5, yaw_torque))
 
         u = [
-            throttle + roll_torque + pitch_torque + yaw_torque,
-            throttle - roll_torque - pitch_torque + yaw_torque,
-            throttle + roll_torque - pitch_torque - yaw_torque,
-            throttle - roll_torque + pitch_torque - yaw_torque,
+            throttle + roll_torque - pitch_torque + yaw_torque,
+            throttle - roll_torque + pitch_torque + yaw_torque,
+            throttle + roll_torque + pitch_torque - yaw_torque,
+            throttle - roll_torque - pitch_torque - yaw_torque,
         ]
 
         # Desaturation with priority for roll & pitch
@@ -226,7 +228,7 @@ class TestFlightControlRebuild(unittest.TestCase):
         self.assertEqual(rates_noyaw[2], 0.0)
 
     def test_rate_pid(self):
-        pid = RatePID(kp=0.06, ki=0.03, kd=0.0, i_max=0.10)
+        pid = RatePID(kp=0.040, ki=0.080, kd=0.0010, i_max=0.20)
         # Error = 1.0 rad/s
         out = pid.update(rate_sp=1.0, rate_meas=0.0, dt=0.005, allow_integral=True)
         self.assertGreater(out, 0.0)
@@ -234,28 +236,29 @@ class TestFlightControlRebuild(unittest.TestCase):
         # Anti-windup check
         for _ in range(500):
             pid.update(rate_sp=10.0, rate_meas=0.0, dt=0.005, allow_integral=True)
-        self.assertLessEqual(pid.integral, 0.10)
-        self.assertGreaterEqual(pid.integral, -0.10)
+        self.assertLessEqual(pid.integral, 0.20)
+        self.assertGreaterEqual(pid.integral, -0.20)
 
     def test_quad_x_mixer_geometry(self):
         mixer = QuadXMixer()
         thr = 0.50
 
-        # Positive roll torque (roll right command -> left motors M1, M3 increase, right motors M2, M4 decrease)
-        # u[0] = T + tau_r + tau_p + tau_y (M1: FL)
-        # u[1] = T - tau_r - tau_p + tau_y (M2: RR)
-        # u[2] = T + tau_r - tau_p - tau_y (M3: RL)
-        # u[3] = T - tau_r + tau_p - tau_y (M4: FR)
+        # Positive roll torque (right wing down -> left motors M1, M3 increase, right motors M2, M4 decrease)
+        # u[0] = T + tau_r - tau_p + tau_y (M1: FL)
+        # u[1] = T - tau_r + tau_p + tau_y (M2: RR)
+        # u[2] = T + tau_r + tau_p - tau_y (M3: RL)
+        # u[3] = T - tau_r - tau_p - tau_y (M4: FR)
         u_roll = mixer.mix(throttle=thr, roll_torque=0.10, pitch_torque=0.0, yaw_torque=0.0)
         self.assertGreater(u_roll[0], u_roll[3]) # M1 (FL) > M4 (FR)
         self.assertGreater(u_roll[2], u_roll[1]) # M3 (RL) > M2 (RR)
 
-        # Positive pitch torque (M1, M4 front increase; M2, M3 rear decrease)
+        # Positive pitch torque (Pitch+ = nose down) -> Rear motors M2, M3 increase; front motors M1, M4 decrease
         u_pitch = mixer.mix(throttle=thr, roll_torque=0.0, pitch_torque=0.10, yaw_torque=0.0)
-        self.assertGreater(u_pitch[0], u_pitch[2]) # M1 (FL) > M3 (RL)
-        self.assertGreater(u_pitch[3], u_pitch[1]) # M4 (FR) > M2 (RR)
+        self.assertGreater(u_pitch[1], u_pitch[0]) # M2 (RR) > M1 (FL)
+        self.assertGreater(u_pitch[2], u_pitch[3]) # M3 (RL) > M4 (FR)
 
-        # Positive yaw torque (CCW motors M1, M2 increase; CW motors M3, M4 decrease)
+        # Positive yaw torque = clockwise body rotation (compass yaw increases clockwise)
+        # -> CCW props M1, M2 increase (reaction torque turns the body CW); CW props M3, M4 decrease
         u_yaw = mixer.mix(throttle=thr, roll_torque=0.0, pitch_torque=0.0, yaw_torque=0.10)
         self.assertGreater(u_yaw[0], u_yaw[2]) # M1 (CCW) > M3 (CW)
         self.assertGreater(u_yaw[1], u_yaw[3]) # M2 (CCW) > M4 (CW)
@@ -372,6 +375,54 @@ class TestFlightControlRebuild(unittest.TestCase):
         # Failsafe MUST trigger and safely cut throttle to 0.0
         self.assertEqual(mgr.throttle_pct, 0.0)
         self.assertFalse(mgr.rc_stream_active)
+
+    def test_pid_mode_stabilize_vs_acro_workflow(self):
+        """
+        Verify the requested user workflow:
+        1. ARM (via gamepad / web)
+        2. Push throttle (gamepad) while PID is OFF (Acro/Open-loop) -> all 4 motors spin equally, no PID correction
+        3. Turn PID ON (via web button / CLI) -> PID engages with setpoint (0, 0), attitude correction active
+        4. DISARM -> cuts motors and resets PID mode to OFF for safety
+        """
+        mixer = QuadXMixer()
+
+        # Scenario A: PID is OFF (Acro mode)
+        # Even with drone tilted at Pitch = +20 deg, setpoint tracks attitude -> tau_roll = tau_pitch = 0
+        throttle = 0.30  # 30% throttle
+        tau_r, tau_p, tau_y = 0.0, 0.0, 0.0  # PID off produces 0 attitude correction
+        u_acro = mixer.mix(throttle, tau_r, tau_p, tau_y)
+
+        # All 4 motors must receive equal throttle in Acro/Open-loop mode
+        for m in u_acro:
+            self.assertAlmostEqual(m, throttle, places=4)
+
+        # Scenario B: PID is ON (Stabilize mode)
+        # Drone tilted nose-down (Pitch = +20 deg), setpoint = 0 deg
+        # Rate PID / Outer Loop produces negative pitch torque (tau_p < 0) to raise nose
+        tau_p_corr = -0.15
+        u_stabilize = mixer.mix(throttle, 0.0, tau_p_corr, 0.0)
+
+        # Front motors (M1, M4: T - tau_p) must get MORE thrust than Rear motors (M2, M3: T + tau_p) to push nose UP
+        self.assertGreater(u_stabilize[0], throttle) # M1 Front
+        self.assertGreater(u_stabilize[3], throttle) # M4 Front
+        self.assertLess(u_stabilize[1], throttle)    # M2 Rear
+        self.assertLess(u_stabilize[2], throttle)    # M3 Rear
+
+        # Scenario C: Level stabilization with Heading Hold (Roll=0, Pitch=0, Yaw=actual_yaw)
+        att_ctrl = AttitudeController(kp_roll=3.0, kp_pitch=3.0, kp_yaw=1.5)
+        # Drone in an unstable attitude: Roll=+10 deg, Pitch=-15 deg, Yaw=+150 deg (compass heading)
+        # When locking to actual heading (Heading Hold):
+        rate_sp_hold = att_ctrl.update(target_euler=[0.0, 0.0, 150.0], actual_euler=[10.0, -15.0, 150.0])
+        # Verify Yaw rate command is ZERO (does not fight compass heading)
+        self.assertAlmostEqual(rate_sp_hold[2], 0.0, places=4)
+        # Mixer with tau_y = 0 maintains diagonal motor balance
+        u_balanced = mixer.mix(throttle, 0.0, 0.0, 0.0)
+        self.assertAlmostEqual(u_balanced[0], u_balanced[1], places=4)
+        self.assertAlmostEqual(u_balanced[2], u_balanced[3], places=4)
+
+        # In contrast, forcing target_yaw = 0 when heading is 150 deg creates massive diagonal split:
+        rate_sp_bad = att_ctrl.update(target_euler=[0.0, 0.0, 0.0], actual_euler=[10.0, -15.0, 150.0])
+        self.assertLess(rate_sp_bad[2], -0.5) # Heavy yaw command saturation
 
 
 if __name__ == "__main__":

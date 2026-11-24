@@ -297,6 +297,7 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
              "\"sp_r\":%.1f,\"sp_p\":%.1f,\"sp_y\":%.1f,\"sp_t\":%.1f,"
              "\"tau\":[%.2f,%.2f,%.2f],\"u\":[%.2f,%.2f,%.2f,%.2f],\"yaw_ok\":%d,"
              "\"rc_seq\":%lu,\"sta_connected\":%d,\"sta_ip\":\"%s\",\"pwm_ok\":%d,"
+             "\"pid_en\":%d,"
              "%s}",
              packet.roll, packet.pitch, packet.yaw,
              packet.mpu_roll, packet.mpu_pitch, packet.mpu_yaw,
@@ -313,6 +314,7 @@ void telemetry_wifi_update(const TelemetryPacket& packet) {
              packet.yaw_valid ? 1 : 0, (unsigned long)packet.rc_sequence,
              staConnected ? 1 : 0, staConnected ? WiFi.localIP().toString().c_str() : "",
              packet.pwm_outputs_ready ? 1 : 0,
+             packet.pid_enabled ? 1 : 0,
              tuneBuf);
 
     size_t jsonLen = strlen(jsonMsg);

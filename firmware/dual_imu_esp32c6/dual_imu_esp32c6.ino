@@ -6,6 +6,7 @@
 #include "esc_pwm.h"
 #include "telemetry_wifi.h"
 #include "pid_autotuner.h"
+#include <Preferences.h>
 
 // ============================================================================
 // 1. HARDWARE PIN CONFIGURATION (ESP32-C6)
@@ -52,8 +53,143 @@ struct SetpointState {
     bool  heading_locked;
     uint32_t last_rc_ms;
     bool  rc_stream_active; // true chỉ khi đang bay bằng luồng RC streaming từ tay cầm
+    float yaw_rate_cmd_dps; // Lệnh TỐC ĐỘ xoay Yaw từ cần gạt (deg/s), tích phân theo thời gian ở vòng 200 Hz
 };
-SetpointState setpointState = { 0.0f, 0.0f, 0.0f, 0.0f, false, 0, false };
+SetpointState setpointState = { 0.0f, 0.0f, 0.0f, 0.0f, false, 0, false, 0.0f };
+
+// ============================================================================
+// CHẾ ĐỘ PID (STABILIZE vs ACRO)
+// - pid_enabled = true  (MẶC ĐỊNH khi khởi động và sau mỗi lần DISARM): PID chủ động giữ cân bằng
+// - pid_enabled = false (acro mode):        Setpoint liên tục cập nhật theo góc hiện tại — PID không làm gì
+// Lệnh: "pid on" / "pid off"   (Web nút Bật PID / Tắt PID)
+//
+// Bản trước mặc định TẮT: ARM bằng tay cầm rồi đẩy ga thì Roll/Pitch KHÔNG có mô-men hiệu chỉnh nào
+// => trọng lực/lệch trọng tâm kéo drone lật trước khi kịp bấm "Bật PID". Mọi FC (PX4, Betaflight)
+// đều ổn định ngay từ khi ARM.
+// ============================================================================
+static bool pid_enabled = true;
+static YawStickShaper yawShaper;
+
+// ============================================================================
+// NGUỒN IMU: CHỈ XSENS MTi-3 (không dung hợp với MPU6050)
+// ============================================================================
+// Góc, Gyro và gia tốc cho bộ điều khiển lấy DUY NHẤT từ Xsens. MPU6050 chỉ còn được đọc để
+// hiển thị so sánh trên Web (đặt 0 để bỏ hẳn MPU6050 khỏi vòng loop()).
+#define MPU6050_MONITOR_ENABLED 1
+const uint32_t MPU_MONITOR_INTERVAL_MS = 20;  // Đọc MPU 50 Hz chỉ để giám sát (giảm tải I2C trong loop)
+const uint32_t XSENS_STALE_MS = 100;          // Xsens 100 Hz: quá 100 ms không có gói mới => coi như mất
+
+// ============================================================================
+// ĐIỀU KHIỂN YAW
+// ============================================================================
+// Cần Yaw trên Web gửi ±45 (độ lệch cần). Bản cũ cộng yaw_sp += ysp*0.04 MỖI GÓI RC, mà Web chỉ
+// gửi lại gói mỗi 200 ms khi giữ yên cần => full cần chỉ ~9°/s, sai số góc phải lớn ~25° mới đủ
+// mô-men thắng ma sát => drone "không xoay" vài giây. Nay: cần Yaw = lệnh tốc độ (deg/s), tích phân
+// theo THỜI GIAN trong vòng 200 Hz + feed-forward thẳng vào vòng trong.
+const float    YAW_STICK_FULL_SCALE  = 45.0f;  // Giá trị cần Yaw tối đa Web gửi lên
+const float    YAW_STICK_MAX_RATE_DPS = 45.0f; // Full cần = 45°/s (bằng giới hạn tốc độ Yaw vòng ngoài)
+const float    YAW_SP_MAX_LEAD_DEG   = 10.0f;  // yaw_sp không được chạy trước hướng thực > 10° khi đang gạt cần
+                                               // (chống sai số vượt ±180° rồi đảo chiều xoay)
+const uint32_t YAW_STICK_TIMEOUT_MS  = 450;    // Mất gói RC (heartbeat 200 ms) quá 450 ms => ngừng xoay
+
+// Bảo vệ Yaw quay mất kiểm soát (ví dụ dấu mô-men Yaw sai): |gz| > 120°/s liên tục 0.5 s => ngắt mô-men Yaw
+const float    YAW_RUNAWAY_DPS = 120.0f;
+const uint32_t YAW_RUNAWAY_MS  = 500;
+static uint32_t yawRunawaySinceMs = 0;
+
+// Lệnh "yaw check": áp mô-men Yaw dương hở vòng trên giá thử, đo chiều gz để xác định dấu cơ cấu chấp hành
+enum YawCheckState { YAWCHK_IDLE = 0, YAWCHK_SETTLE, YAWCHK_PUSH };
+static YawCheckState yawCheckState = YAWCHK_IDLE;
+static uint32_t yawCheckStartMs = 0;
+static float    yawCheckSumGz = 0.0f;
+static uint32_t yawCheckSamples = 0;
+const float    YAW_CHECK_TAU        = 0.12f;  // Mô-men Yaw thử (trước giới hạn Mixer)
+const uint32_t YAW_CHECK_SETTLE_MS  = 400;
+const uint32_t YAW_CHECK_PUSH_MS    = 1500;
+const float    YAW_CHECK_MIN_DPS    = 6.0f;   // |gz| trung bình tối thiểu để kết luận
+
+static Preferences fcPrefs;   // Lưu dấu Yaw vào NVS để không phải kiểm tra lại sau mỗi lần khởi động
+// Khóa "yaw_inv2": giá trị "yaw_inv" cũ được đo với Mixer CŨ (dấu Yaw ngược) nên không dùng lại.
+
+static void saveYawInversion(bool inv) {
+    if (fcPrefs.begin("fc", false)) {
+        fcPrefs.putBool("yaw_inv2", inv);
+        fcPrefs.end();
+    }
+}
+
+// Phiên bản định dạng hệ số PID trong NVS. Hệ số lưu bởi firmware cũ (không có "g_ver" hoặc khác
+// PID_NVS_VERSION) bị BỎ QUA khi khởi động: chúng được tune bằng relay cũ (trôi/lật) + luật ZN cổ điển,
+// hoặc trước khi sửa dấu Pitch của Mixer — nạp lại chúng khiến drone lật ở MỌI lần khởi động.
+static const uint8_t PID_NVS_VERSION = 2;
+
+static bool rateGainsSane(float kp, float ki, float kd) {
+    return kp > 0.0f && kp <= 0.15f && ki >= 0.0f && ki <= 1.0f && kd >= 0.0f && kd <= 0.006f;
+}
+static bool yawGainsSane(float kp, float ki, float kd) {
+    return kp > 0.0f && kp <= 0.6f && ki >= 0.0f && ki <= 1.0f && kd >= 0.0f && kd <= 0.01f;
+}
+static bool angleGainsSane(float rp, float pp, float yp) {
+    return rp > 0.0f && rp <= 8.0f && pp > 0.0f && pp <= 8.0f && yp > 0.0f && yp <= 5.0f;
+}
+
+static void savePidGains() {
+    if (fcPrefs.begin("fc", false)) {
+        const PidGains& gr = px4Controller.getRatePidRoll().getGains();
+        const PidGains& gp = px4Controller.getRatePidPitch().getGains();
+        const PidGains& gy = px4Controller.getRatePidYaw().getGains();
+        fcPrefs.putFloat("r_kp", gr.kp); fcPrefs.putFloat("r_ki", gr.ki); fcPrefs.putFloat("r_kd", gr.kd);
+        fcPrefs.putFloat("p_kp", gp.kp); fcPrefs.putFloat("p_ki", gp.ki); fcPrefs.putFloat("p_kd", gp.kd);
+        fcPrefs.putFloat("y_kp", gy.kp); fcPrefs.putFloat("y_ki", gy.ki); fcPrefs.putFloat("y_kd", gy.kd);
+        float rp, pp, yp;
+        px4Controller.getAngleGains(rp, pp, yp);
+        fcPrefs.putFloat("a_rp", rp); fcPrefs.putFloat("a_pp", pp); fcPrefs.putFloat("a_yp", yp);
+        fcPrefs.putUChar("g_ver", PID_NVS_VERSION);
+        fcPrefs.end();
+        Serial.println("[NVS] Da luu toan bo he so PID (Rate + Angle) vao Flash NVS.");
+    }
+}
+
+static void loadPidGainsIfSaved() {
+    if (!fcPrefs.begin("fc", true)) return;
+    if (fcPrefs.isKey("r_kp")) {
+        const uint8_t ver = fcPrefs.getUChar("g_ver", 0);
+        const float r[3] = { fcPrefs.getFloat("r_kp", 0), fcPrefs.getFloat("r_ki", 0), fcPrefs.getFloat("r_kd", 0) };
+        const float pt[3] = { fcPrefs.getFloat("p_kp", 0), fcPrefs.getFloat("p_ki", 0), fcPrefs.getFloat("p_kd", 0) };
+        const float y[3] = { fcPrefs.getFloat("y_kp", 0), fcPrefs.getFloat("y_ki", 0), fcPrefs.getFloat("y_kd", 0) };
+        const bool hasAngle = fcPrefs.isKey("a_rp");
+        const float a[3] = { fcPrefs.getFloat("a_rp", PidDefaults::ANG_RP), fcPrefs.getFloat("a_pp", PidDefaults::ANG_RP),
+                             fcPrefs.getFloat("a_yp", PidDefaults::ANG_Y) };
+        const bool sane = rateGainsSane(r[0], r[1], r[2]) && rateGainsSane(pt[0], pt[1], pt[2]) &&
+                          yawGainsSane(y[0], y[1], y[2]) && angleGainsSane(a[0], a[1], a[2]);
+        if (ver == PID_NVS_VERSION && sane) {
+            px4Controller.setRatePidRoll(r[0], r[1], r[2]);
+            px4Controller.setRatePidPitch(pt[0], pt[1], pt[2]);
+            px4Controller.setRatePidYaw(y[0], y[1], y[2]);
+            if (hasAngle) px4Controller.setAngleGains(a[0], a[1], a[2]);
+            Serial.println("[NVS] Da tu dong nap bo PID da tune tu Flash NVS.");
+        } else {
+            Serial.printf("[NVS] BO QUA he so PID da luu (%s) -> dung mac dinh moi.\n",
+                          ver != PID_NVS_VERSION ? "luu boi firmware cu" : "ngoai vung an toan");
+            Serial.printf("[NVS]   Gia tri cu: Roll %.4f/%.4f/%.5f | Pitch %.4f/%.4f/%.5f | Yaw %.4f/%.4f/%.5f | Angle %.2f/%.2f/%.2f\n",
+                          r[0], r[1], r[2], pt[0], pt[1], pt[2], y[0], y[1], y[2], a[0], a[1], a[2]);
+            Serial.println("[NVS]   Muon dung lai: go 'pid roll/pitch/yaw/angle ...' (se luu theo dinh dang moi).");
+        }
+    }
+    fcPrefs.end();
+}
+
+static void clearSavedPidGains() {
+    if (fcPrefs.begin("fc", false)) {
+        fcPrefs.remove("r_kp"); fcPrefs.remove("r_ki"); fcPrefs.remove("r_kd");
+        fcPrefs.remove("p_kp"); fcPrefs.remove("p_ki"); fcPrefs.remove("p_kd");
+        fcPrefs.remove("y_kp"); fcPrefs.remove("y_ki"); fcPrefs.remove("y_kd");
+        fcPrefs.remove("a_rp"); fcPrefs.remove("a_pp"); fcPrefs.remove("a_yp");
+        fcPrefs.remove("g_ver");
+        fcPrefs.end();
+        Serial.println("[NVS] Da xoa bo he so PID khoi Flash NVS (khoi phuc he so mac dinh).");
+    }
+}
 
 const uint32_t RC_WATCHDOG_TIMEOUT_MS = 1500; // Failsafe timeout khi mất sóng RC quá 1.5s
 uint32_t acceptedRcSequence = 0;
@@ -122,6 +258,57 @@ void printTelemetry() {
 static int activeTestMotor = 0; // 0 = ALL 4 MOTORS, 1..4 = Motor riêng lẻ
 static bool safetyLimit60Pct = false;
 
+// ============================================================================
+// AUTO-TUNE: điều kiện vào + bàn giao mô-men bù trọng lực giữa PID và relay
+// ============================================================================
+const float TUNE_MIN_THROTTLE_PCT   = 15.0f;  // dưới mức này tích phân PID tắt, mô-men điều khiển yếu
+const float TUNE_MAX_START_TILT_DEG = 15.0f;  // phải đang gần thăng bằng mới bắt đầu
+const float TUNE_ABORT_TILT_DEG     = 35.0f;  // vượt => ngắt tune, PID giữ thăng bằng (dưới ngưỡng DISARM 60°)
+
+static float tuneAxisIntegral(TuneAxis ax) {
+    if (ax == TUNE_PITCH_RATE) return px4Controller.getRatePidPitch().getI();
+    if (ax == TUNE_YAW_RATE)   return px4Controller.getRatePidYaw().getI();
+    return px4Controller.getRatePidRoll().getI();   // ROLL và ANGLE_P
+}
+
+static void setTuneAxisIntegral(TuneAxis ax, float v) {
+    if (ax == TUNE_PITCH_RATE)    px4Controller.getRatePidPitch().setIntegral(v);
+    else if (ax == TUNE_YAW_RATE) px4Controller.getRatePidYaw().setIntegral(v);
+    else                          px4Controller.getRatePidRoll().setIntegral(v);
+}
+
+static bool startTuneAxis(TuneAxis ax, float amp, const char* sourceTag) {
+    char msg[160];
+    const float tilt = fmaxf(fabsf(attitudeState.roll), fabsf(attitudeState.pitch));
+    if (quadMotors.getState() != ESC_STATE_ARMED || activeTestMotor != 0) {
+        snprintf(msg, sizeof(msg), "[%s] [TUNE] Tu choi: can ARM o che do PID truoc", sourceTag);
+    } else if (setpointState.throttle_pct < TUNE_MIN_THROTTLE_PCT) {
+        snprintf(msg, sizeof(msg), "[%s] [TUNE] Tu choi: can ga >= %.0f%% (hien %.0f%%)", sourceTag,
+                 TUNE_MIN_THROTTLE_PCT, setpointState.throttle_pct);
+    } else if (tilt > TUNE_MAX_START_TILT_DEG) {
+        snprintf(msg, sizeof(msg), "[%s] [TUNE] Tu choi: drone dang nghieng %.0f deg (> %.0f), cho PID can bang truoc",
+                 sourceTag, tilt, TUNE_MAX_START_TILT_DEG);
+    } else {
+        pid_enabled = true;
+        px4Controller.setPidEnabled(true);
+        setpointState.roll_sp  = 0.0f;
+        setpointState.pitch_sp = 0.0f;
+        setpointState.yaw_sp   = attitudeState.yaw;
+        // KHÔNG xả tích phân: đó chính là mô-men PID đang dùng để bù trọng lực/lệch trọng tâm.
+        // Relay bắt đầu từ mô-men này (bản cũ xả về 0 => vừa vào tune là trục bị trọng lực kéo lật).
+        autoTuner.configure(amp, 8, TUNE_ABORT_TILT_DEG, 0.04f);
+        autoTuner.start(ax, tuneAxisIntegral(ax));
+        snprintf(msg, sizeof(msg), "[%s] [TUNE] Bat dau tune %s (relay toi da %.0f%%, tu thich nghi, ngat o %.0f deg)",
+                 sourceTag, autoTuner.getResult().axis_name, amp * 100.0f, TUNE_ABORT_TILT_DEG);
+        Serial.println(msg);
+        telemetry_wifi_broadcast_msg(msg);
+        return true;
+    }
+    Serial.println(msg);
+    telemetry_wifi_broadcast_msg(msg);
+    return false;
+}
+
 void executeCommand(String cmd, const char* sourceTag) {
     cmd.trim();
     if (cmd.length() == 0) return;
@@ -152,6 +339,9 @@ void executeCommand(String cmd, const char* sourceTag) {
                 if (quadMotors.getState() == ESC_STATE_ARMED) {
                     quadMotors.disarm();
                     px4Controller.reset();
+                    pid_enabled = true;   // Lần ARM sau lại bắt đầu ở chế độ ổn định
+                    px4Controller.setPidEnabled(true);
+                    autoTuner.stop();
                     setpointState.throttle_pct = 0.0f;
                     setpointState.heading_locked = false;
                     Serial.println("[RC] >>> DISARMED!");
@@ -176,13 +366,13 @@ void executeCommand(String cmd, const char* sourceTag) {
                 setpointState.roll_sp = rsp;
                 setpointState.pitch_sp = psp;
 
-                // Xử lý góc Yaw:
-                // Nếu người dùng chủ động gạt cần xoay (|ysp| > 1.0°): dịch chuyển mốc Yaw đặt
-                // Nếu người dùng nhả cần về giữa (|ysp| <= 1.0°): GIỮ NGUYÊN mốc Yaw đã khóa!
+                // Xử lý Yaw: cần gạt = lệnh TỐC ĐỘ xoay (deg/s). Việc dịch mốc yaw_sp được làm theo
+                // thời gian thực trong vòng PID 200 Hz (không phụ thuộc tần suất gói RC).
+                // Nhả cần về giữa (|ysp| <= 1.0): tốc độ = 0 => GIỮ NGUYÊN hướng đã khóa.
                 if (fabsf(ysp) > 1.0f) {
-                    setpointState.yaw_sp += ysp * 0.04f; // Tốc độ xoay thân theo độ gạt cần
-                    while (setpointState.yaw_sp > 180.0f)  setpointState.yaw_sp -= 360.0f;
-                    while (setpointState.yaw_sp < -180.0f) setpointState.yaw_sp += 360.0f;
+                    setpointState.yaw_rate_cmd_dps = constrain(ysp / YAW_STICK_FULL_SCALE, -1.0f, 1.0f) * YAW_STICK_MAX_RATE_DPS;
+                } else {
+                    setpointState.yaw_rate_cmd_dps = 0.0f;
                 }
             }
             setpointState.last_rc_ms = millis();
@@ -242,12 +432,16 @@ void executeCommand(String cmd, const char* sourceTag) {
         quadMotors.disarm();
         px4Controller.reset();
         activeTestMotor = 0;
+        pid_enabled = true;   // Lần ARM sau lại bắt đầu ở chế độ ổn định (STABILIZE)
+        px4Controller.setPidEnabled(true);
+        autoTuner.stop();
         setpointState.throttle_pct = 0.0f;
         setpointState.heading_locked = false;
         setpointState.rc_stream_active = false;
-        snprintf(logBuf, sizeof(logBuf), "[%s] Quad Disarmed & Motors Safe", sourceTag);
+        snprintf(logBuf, sizeof(logBuf), "[%s] Quad Disarmed & Motors Safe | PID -> STABILIZE (mac dinh)", sourceTag);
         telemetry_wifi_broadcast_msg(logBuf);
-        Serial.printf("[%s] >>> DA DISARM! Toan bo 4 dong co ngat ve 0%% an toan.\n", sourceTag);
+        telemetry_wifi_broadcast_msg("{\"pid_enabled\":true}");
+        Serial.printf("[%s] >>> DA DISARM! Toan bo 4 dong co ngat ve 0%% an toan. PID -> STABILIZE.\n", sourceTag);
     }
     // 5. Lệnh giới hạn trần ga 60%
     else if (cmd.equalsIgnoreCase("limit")) {
@@ -320,14 +514,52 @@ void executeCommand(String cmd, const char* sourceTag) {
         px4Controller.togglePitchInversion();
         Serial.printf("[%s] DAO CHIEU TRUC PITCH: Invert = %s\n", sourceTag, px4Controller.isPitchInverted() ? "TRUE (NGUOC)" : "FALSE (THUAN)");
     }
-    // 9. Đặt góc cân bằng
+    // 8b. Dấu mô-men Yaw
+    else if (cmd.equalsIgnoreCase("invert yaw") || cmd.equalsIgnoreCase("inv yaw")) {
+        px4Controller.setYawInversion(!px4Controller.isYawInverted());
+        saveYawInversion(px4Controller.isYawInverted());
+        Serial.printf("[%s] DAO CHIEU MO-MEN YAW: Invert = %s (da luu NVS)\n", sourceTag,
+                      px4Controller.isYawInverted() ? "TRUE (NGUOC)" : "FALSE (THUAN)");
+    }
+    else if (cmd.equalsIgnoreCase("yaw check") || cmd.equalsIgnoreCase("yawcheck")) {
+        if (quadMotors.getState() != ESC_STATE_ARMED || activeTestMotor != 0) {
+            snprintf(logBuf, sizeof(logBuf), "[%s] YAW CHECK: can ARM o che do PID truoc", sourceTag);
+        } else if (setpointState.throttle_pct < 25.0f) {
+            snprintf(logBuf, sizeof(logBuf), "[%s] YAW CHECK: can ga >= 25%% (hien %.0f%%)", sourceTag, setpointState.throttle_pct);
+        } else if (autoTuner.isActive()) {
+            snprintf(logBuf, sizeof(logBuf), "[%s] YAW CHECK: dang auto-tune, dung tune truoc", sourceTag);
+        } else {
+            yawCheckState = YAWCHK_SETTLE;
+            yawCheckStartMs = millis();
+            yawCheckSumGz = 0.0f;
+            yawCheckSamples = 0;
+            px4Controller.setYawTorqueEnabled(true);
+            snprintf(logBuf, sizeof(logBuf), "[%s] YAW CHECK: bat dau (mo-men Yaw +%.2f trong %.1fs)", sourceTag,
+                     YAW_CHECK_TAU, YAW_CHECK_PUSH_MS / 1000.0f);
+        }
+        Serial.println(logBuf);
+        telemetry_wifi_broadcast_msg(logBuf);
+    }
+    // 9. Đặt góc cân bằng: Khóa 2 góc ngang về 0.0°, giữ nguyên hướng Yaw hiện tại và kích hoạt PID ổn định
     else if (cmd.equalsIgnoreCase("level") || cmd.equalsIgnoreCase("balance")) {
-        setpointState.roll_sp = 0.0f;
+        const bool wasEnabled = pid_enabled && px4Controller.isPidEnabled();
+        pid_enabled = true;
+        px4Controller.setPidEnabled(true);
+        activeTestMotor = 0;
+        px4Controller.setYawTorqueEnabled(true);
+        setpointState.roll_sp  = 0.0f;
         setpointState.pitch_sp = 0.0f;
-        setpointState.yaw_sp = attitudeState.yaw;
+        setpointState.yaw_sp   = attitudeState.yaw; // Khóa hướng la bàn thực tế hiện tại, tránh lệch mô-men chéo gây lật
         setpointState.heading_locked = true;
-        px4Controller.reset();
-        Serial.printf("[%s] >>> CAN BANG: Dat Roll=0.0°, Pitch=0.0°, Giu nguyen Yaw=%.1f°\n", sourceTag, attitudeState.yaw);
+        setpointState.yaw_rate_cmd_dps = 0.0f;
+        yawShaper.reset();
+        // Chỉ xả tích phân khi vừa chuyển từ ACRO sang; nếu PID đang chạy thì GIỮ tích phân (đang bù trọng lực),
+        // xả về 0 giữa lúc bay làm drone hụt mô-men và chúi xuống.
+        if (!wasEnabled) px4Controller.resetIntegrators();
+        snprintf(logBuf, sizeof(logBuf), "[%s] [CAN BANG (0,0,0)] Khoa Roll=0°, Pitch=0°, Yaw=%.1f° & Bat PID", sourceTag, setpointState.yaw_sp);
+        Serial.println(logBuf);
+        telemetry_wifi_broadcast_msg(logBuf);
+        telemetry_wifi_broadcast_msg(String("{\"pid_enabled\":true,\"sp_r\":0.0,\"sp_p\":0.0,\"sp_y\":" + String(setpointState.yaw_sp, 1) + "}").c_str());
     }
     // 10. Đặt Setpoint góc: sp <roll> <pitch> <yaw>
     else if (cmd.startsWith("sp ") || cmd.startsWith("SP ") || cmd.startsWith("setpoint ")) {
@@ -349,27 +581,57 @@ void executeCommand(String cmd, const char* sourceTag) {
     else if (cmd.startsWith("pid roll ") || cmd.startsWith("PID ROLL ")) {
         float p, i, d;
         if (sscanf(cmd.c_str() + 9, "%f %f %f", &p, &i, &d) == 3) {
+            if (!rateGainsSane(p, i, d)) {
+                Serial.printf("[%s] Tu choi PID Roll %.4f/%.4f/%.5f: ngoai vung an toan\n", sourceTag, p, i, d);
+                return;
+            }
             px4Controller.setRatePidRoll(p, i, d);
-            Serial.printf("[%s] Cap nhat PID Roll: Kp=%.4f, Ki=%.4f, Kd=%.4f\n", sourceTag, p, i, d);
+            savePidGains();
+            Serial.printf("[%s] Cap nhat PID Roll: Kp=%.4f, Ki=%.4f, Kd=%.4f (da luu NVS)\n", sourceTag, p, i, d);
         }
     } else if (cmd.startsWith("pid pitch ") || cmd.startsWith("PID PITCH ")) {
         float p, i, d;
         if (sscanf(cmd.c_str() + 10, "%f %f %f", &p, &i, &d) == 3) {
+            if (!rateGainsSane(p, i, d)) {
+                Serial.printf("[%s] Tu choi PID Pitch %.4f/%.4f/%.5f: ngoai vung an toan\n", sourceTag, p, i, d);
+                return;
+            }
             px4Controller.setRatePidPitch(p, i, d);
-            Serial.printf("[%s] Cap nhat PID Pitch: Kp=%.4f, Ki=%.4f, Kd=%.4f\n", sourceTag, p, i, d);
+            savePidGains();
+            Serial.printf("[%s] Cap nhat PID Pitch: Kp=%.4f, Ki=%.4f, Kd=%.4f (da luu NVS)\n", sourceTag, p, i, d);
         }
     } else if (cmd.startsWith("pid yaw ") || cmd.startsWith("PID YAW ")) {
         float p, i, d;
         if (sscanf(cmd.c_str() + 8, "%f %f %f", &p, &i, &d) == 3) {
+            if (!yawGainsSane(p, i, d)) {
+                Serial.printf("[%s] Tu choi PID Yaw %.4f/%.4f/%.5f: ngoai vung an toan\n", sourceTag, p, i, d);
+                return;
+            }
             px4Controller.setRatePidYaw(p, i, d);
-            Serial.printf("[%s] Cap nhat PID Yaw: Kp=%.4f, Ki=%.4f, Kd=%.4f\n", sourceTag, p, i, d);
+            savePidGains();
+            Serial.printf("[%s] Cap nhat PID Yaw: Kp=%.4f, Ki=%.4f, Kd=%.4f (da luu NVS)\n", sourceTag, p, i, d);
         }
     } else if (cmd.startsWith("pid angle ") || cmd.startsWith("PID ANGLE ")) {
         float rp, pp, yp;
         if (sscanf(cmd.c_str() + 10, "%f %f %f", &rp, &pp, &yp) == 3) {
+            if (!angleGainsSane(rp, pp, yp)) {
+                Serial.printf("[%s] Tu choi Angle P %.2f/%.2f/%.2f: ngoai vung an toan\n", sourceTag, rp, pp, yp);
+                return;
+            }
             px4Controller.setAngleGains(rp, pp, yp);
-            Serial.printf("[%s] Cap nhat Outer Angle P: Roll_P=%.2f, Pitch_P=%.2f, Yaw_P=%.2f\n", sourceTag, rp, pp, yp);
+            savePidGains();
+            Serial.printf("[%s] Cap nhat Outer Angle P: Roll_P=%.2f, Pitch_P=%.2f, Yaw_P=%.2f (da luu NVS)\n", sourceTag, rp, pp, yp);
         }
+    } else if (cmd.equalsIgnoreCase("pid reset") || cmd.equalsIgnoreCase("tune reset") || cmd.equalsIgnoreCase("reset pid")) {
+        clearSavedPidGains();
+        px4Controller.getRatePidRoll().setGains(PidDefaults::RP_KP, PidDefaults::RP_KI, PidDefaults::RP_KD, PidDefaults::RP_IMAX);
+        px4Controller.getRatePidPitch().setGains(PidDefaults::RP_KP, PidDefaults::RP_KI, PidDefaults::RP_KD, PidDefaults::RP_IMAX);
+        px4Controller.getRatePidYaw().setGains(PidDefaults::Y_KP, PidDefaults::Y_KI, PidDefaults::Y_KD, PidDefaults::Y_IMAX);
+        px4Controller.setAngleGains(PidDefaults::ANG_RP, PidDefaults::ANG_RP, PidDefaults::ANG_Y);
+        Serial.printf("[%s] [PID] Da reset ve mac dinh (Rate Roll/Pitch: %.3f/%.3f/%.4f, Yaw: %.2f/%.2f/%.1f, Angle: %.1f/%.1f/%.1f) & xoa NVS Flash.\n",
+                      sourceTag, PidDefaults::RP_KP, PidDefaults::RP_KI, PidDefaults::RP_KD,
+                      PidDefaults::Y_KP, PidDefaults::Y_KI, PidDefaults::Y_KD,
+                      PidDefaults::ANG_RP, PidDefaults::ANG_RP, PidDefaults::ANG_Y);
     // 12. Auto-Tuner commands: tune roll/pitch/yaw/angle/stop/apply/save
     } else if (cmd.startsWith("tune ") || cmd.startsWith("TUNE ")) {
         String sub = cmd.substring(5);
@@ -377,27 +639,23 @@ void executeCommand(String cmd, const char* sourceTag) {
         sub.toLowerCase();
 
         if (sub.startsWith("roll")) {
-            float amp = 0.15f;
+            float amp = 0.10f; // Mặc định 10% cho kiểm thử bàn an toàn
             int spaceIdx = sub.indexOf(' ');
             if (spaceIdx > 0) {
                 float val = sub.substring(spaceIdx + 1).toFloat();
                 if (val > 0.0f) amp = (val > 1.0f) ? (val / 100.0f) : val;
             }
-            amp = constrain(amp, 0.05f, 0.30f);
-            autoTuner.configure(amp, 8, 25.0f, 0.04f);
-            autoTuner.start(TUNE_ROLL_RATE);
-            Serial.printf("[%s] [TUNE] Bat dau tune Roll Rate PID | amp=%.2f (%.0f%%)\n", sourceTag, amp, amp * 100.0f);
+            amp = constrain(amp, 0.04f, 0.25f);
+            startTuneAxis(TUNE_ROLL_RATE, amp, sourceTag);
         } else if (sub.startsWith("pitch")) {
-            float amp = 0.15f;
+            float amp = 0.10f; // Mặc định 10% cho kiểm thử bàn an toàn
             int spaceIdx = sub.indexOf(' ');
             if (spaceIdx > 0) {
                 float val = sub.substring(spaceIdx + 1).toFloat();
                 if (val > 0.0f) amp = (val > 1.0f) ? (val / 100.0f) : val;
             }
-            amp = constrain(amp, 0.05f, 0.30f);
-            autoTuner.configure(amp, 8, 25.0f, 0.04f);
-            autoTuner.start(TUNE_PITCH_RATE);
-            Serial.printf("[%s] [TUNE] Bat dau tune Pitch Rate PID | amp=%.2f (%.0f%%)\n", sourceTag, amp, amp * 100.0f);
+            amp = constrain(amp, 0.04f, 0.25f);
+            startTuneAxis(TUNE_PITCH_RATE, amp, sourceTag);
         } else if (sub.startsWith("yaw")) {
             float amp = 0.10f;
             int spaceIdx = sub.indexOf(' ');
@@ -406,15 +664,14 @@ void executeCommand(String cmd, const char* sourceTag) {
                 if (val > 0.0f) amp = (val > 1.0f) ? (val / 100.0f) : val;
             }
             amp = constrain(amp, 0.05f, 0.25f);
-            autoTuner.configure(amp, 8, 25.0f, 0.04f);
-            autoTuner.start(TUNE_YAW_RATE);
-            Serial.printf("[%s] [TUNE] Bat dau tune Yaw Rate PID | amp=%.2f (%.0f%%)\n", sourceTag, amp, amp * 100.0f);
+            startTuneAxis(TUNE_YAW_RATE, amp, sourceTag);
         } else if (sub.startsWith("angle")) {
-            autoTuner.start(TUNE_ANGLE_P);
-            Serial.printf("[%s] [TUNE] Bat dau danh gia Angle P\n", sourceTag);
+            startTuneAxis(TUNE_ANGLE_P, 0.10f, sourceTag);
         } else if (sub.startsWith("stop")) {
             autoTuner.stop();
-            Serial.printf("[%s] [TUNE] Da dung tune\n", sourceTag);
+            snprintf(logBuf, sizeof(logBuf), "[%s] [TUNE] Da dung tune", sourceTag);
+            Serial.println(logBuf);
+            telemetry_wifi_broadcast_msg(logBuf);
         } else if (sub.startsWith("apply")) {
             bool smooth = (sub.indexOf("50") >= 0 || sub.indexOf("smooth") >= 0 || sub.indexOf("half") >= 0);
             if (autoTuner.isDone()) {
@@ -430,7 +687,8 @@ void executeCommand(String cmd, const char* sourceTag) {
                     if (ax == TUNE_ANGLE_P) {
                         px4Controller.setAngleGains(r.angle_p, r.angle_p, 1.5f);
                     }
-                    Serial.printf("[%s] [TUNE] DA AP DUNG (%s) → %s: Kp=%.4f Ki=%.4f Kd=%.5f | Angle_P=%.2f\n",
+                    savePidGains();
+                    Serial.printf("[%s] [TUNE] DA AP DUNG (%s) → %s: Kp=%.4f Ki=%.4f Kd=%.5f | Angle_P=%.2f (da luu NVS)\n",
                                   sourceTag, smooth ? "SMOOTH" : "STANDARD", r.axis_name, kp, ki, kd, r.angle_p);
                 }
             } else {
@@ -441,14 +699,41 @@ void executeCommand(String cmd, const char* sourceTag) {
             if (r.valid) {
                 Serial.println("\n// ================== PX4_PID.CPP COPY-PASTE GAINS ==================");
                 Serial.printf("// Truc: %s (Tu=%.3fs, Ku=%.4f)\n", r.axis_name, r.tu, r.ku);
-                Serial.printf("  _rate_pid_%s.init(%.4ff, %.4ff, %.5ff, 0.10f, 10.0f, loop_freq_hz);\n",
-                              r.axis_name, r.kp, r.ki, r.kd);
+                Serial.printf("  _rate_pid_%s.init(%.4ff, %.4ff, %.5ff, %.2ff, %.1ff, loop_freq_hz);\n",
+                              r.axis_name, r.kp, r.ki, r.kd, PidDefaults::RP_IMAX, PidDefaults::RP_DCUT);
                 Serial.printf("// Ban smooth (khuyen nghi neu con rung): init(%.4ff, %.4ff, %.5ff...)\n",
                               r.kp_smooth, r.ki_smooth, r.kd_smooth);
                 Serial.printf("  // Outer Angle P goi y: %.2ff\n", r.angle_p);
                 Serial.println("// ===================================================================\n");
             }
         }
+    } else if (cmd.equalsIgnoreCase("pid on") || cmd.equalsIgnoreCase("pid_on") || cmd.equalsIgnoreCase("stabilize")) {
+        const bool wasEnabled = pid_enabled && px4Controller.isPidEnabled();
+        pid_enabled = true;
+        px4Controller.setPidEnabled(true);
+        activeTestMotor = 0;                     // Thoát bất kỳ test motor thủ công nào
+        px4Controller.setYawTorqueEnabled(true); // Khôi phục mô-men yaw nếu trước đó bị ngắt do quay mất kiểm soát
+        // Khóa 2 góc ngang về 0.0°, giữ nguyên hướng Yaw la bàn thực tế
+        setpointState.roll_sp  = 0.0f;
+        setpointState.pitch_sp = 0.0f;
+        setpointState.yaw_sp   = attitudeState.yaw;
+        setpointState.heading_locked = true;
+        setpointState.yaw_rate_cmd_dps = 0.0f;
+        yawShaper.reset();
+        // Xả tích phân chỉ khi vừa chuyển từ ACRO sang (khi PID đang chạy, tích phân đang bù trọng lực)
+        if (!wasEnabled) px4Controller.resetIntegrators();
+        snprintf(logBuf, sizeof(logBuf), "[%s] [STABILIZE] Kich hoat PID on dinh: Khoa R=0°, P=0°, Y=%.1f°", sourceTag, setpointState.yaw_sp);
+        Serial.println(logBuf);
+        telemetry_wifi_broadcast_msg(logBuf);
+        telemetry_wifi_broadcast_msg(String("{\"pid_enabled\":true,\"sp_r\":0.0,\"sp_p\":0.0,\"sp_y\":" + String(setpointState.yaw_sp, 1) + "}").c_str());
+    } else if (cmd.equalsIgnoreCase("pid off") || cmd.equalsIgnoreCase("pid_off") || cmd.equalsIgnoreCase("acro")) {
+        pid_enabled = false;
+        px4Controller.setPidEnabled(false);
+        // Acro: setpoint sẽ được cập nhật theo góc thực trong vòng PID (xem loop bên dưới)
+        snprintf(logBuf, sizeof(logBuf), "[%s] [PID OFF] ACRO: Setpoint theo goc hien tai, PID khong hieu chinh", sourceTag);
+        Serial.println(logBuf);
+        telemetry_wifi_broadcast_msg(logBuf);
+        telemetry_wifi_broadcast_msg("{\"pid_enabled\":false}");
     } else if (cmd.equalsIgnoreCase("pid")) {
         const PidGains& gr = px4Controller.getRatePidRoll().getGains();
         const PidGains& gp = px4Controller.getRatePidPitch().getGains();
@@ -457,8 +742,13 @@ void executeCommand(String cmd, const char* sourceTag) {
         Serial.printf("Rate PID Roll  : Kp=%.4f | Ki=%.4f | Kd=%.4f | I_Max=%.2f\n", gr.kp, gr.ki, gr.kd, gr.i_max);
         Serial.printf("Rate PID Pitch : Kp=%.4f | Ki=%.4f | Kd=%.4f | I_Max=%.2f\n", gp.kp, gp.ki, gp.kd, gp.i_max);
         Serial.printf("Rate PID Yaw   : Kp=%.4f | Ki=%.4f | Kd=%.4f | I_Max=%.2f\n", gy.kp, gy.ki, gy.kd, gy.i_max);
-        Serial.printf("Target Setpoint: Roll=%.1f° | Pitch=%.1f° | Yaw=%.1f° | Throttle=%.1f%%\n",
+        Serial.printf("Yaw: Invert=%s | Mo-men Yaw=%s | Lenh can Yaw=%.1f deg/s\n",
+                      px4Controller.isYawInverted() ? "TRUE" : "FALSE",
+                      px4Controller.isYawTorqueEnabled() ? "BAT" : "NGAT (runaway)",
+                      setpointState.yaw_rate_cmd_dps);
+        Serial.printf("Target Setpoint: Roll=%.1f | Pitch=%.1f | Yaw=%.1f | Throttle=%.1f%%\n",
                       setpointState.roll_sp, setpointState.pitch_sp, setpointState.yaw_sp, setpointState.throttle_pct);
+        Serial.printf("PID Mode: %s\n", pid_enabled ? "STABILIZE (ON)" : "ACRO (OFF)");
         Serial.println("==================================================================\n");
     } else if (cmd.equalsIgnoreCase("m stop") || cmd.equalsIgnoreCase("stop all") || cmd.equalsIgnoreCase("test stop") || cmd.equalsIgnoreCase("stop motors")) {
         setpointState.throttle_pct = 0.0f;
@@ -525,13 +815,20 @@ void setup() {
     Serial.println("==================================================================");
 
     // 1. Khởi tạo MPU-6050 qua I2C (GPIO 14, GPIO 15) và đo Zero-Bias
+#if MPU6050_MONITOR_ENABLED
+    // MPU-6050 chỉ dùng để giám sát/so sánh trên Web, KHÔNG tham gia điều khiển
     if (mpu6050_init(MPU_SDA_PIN, MPU_SCL_PIN)) {
         mpu6050_calibrate_gyro(100);
     }
+#endif
 
     // 2. Khởi tạo Xsens MTi-3 qua UART1 (RX=GPIO 2, TX=GPIO 3)
     xsens_mti_init(XSENS_RX_PIN, XSENS_TX_PIN, XSENS_BAUDRATE);
     xsens_mti_set_axis_inversion(true, false, true);
+    // Yaw theo chiều LA BÀN: xoay CÙNG chiều kim đồng hồ (nhìn từ trên) => Yaw TĂNG, gz dương.
+    // Khớp với mô hình 3D trên Web (quay model theo -yaw). Không đảo thì Yaw giảm khi xoay
+    // cùng chiều kim đồng hồ và drone mô phỏng quay ngược drone thật (xác minh 2026-11-24).
+    xsens_mti_set_yaw_inversion(true);
 
     // 3. Khởi tạo hệ thống OOP điều khiển 4 động cơ Quadcopter:
     //    M1: GPIO 7 (CCW) - (Min: 1000 us, Max: 2000 us)
@@ -542,6 +839,21 @@ void setup() {
 
     // 4. Khởi tạo Bộ điều khiển bay PX4 Multicopter Cascaded PID (200Hz Loop)
     px4Controller.init(200.0f);
+    px4Controller.setPidEnabled(true);  // Mặc định ổn định ngay khi ARM
+    loadPidGainsIfSaved();
+    {
+        const PidGains& gr = px4Controller.getRatePidRoll().getGains();
+        const PidGains& gp = px4Controller.getRatePidPitch().getGains();
+        float rp, pp, yp; px4Controller.getAngleGains(rp, pp, yp);
+        Serial.printf("[SETUP] PID dang dung: Roll %.4f/%.4f/%.5f | Pitch %.4f/%.4f/%.5f | Angle %.2f/%.2f/%.2f\n",
+                      gr.kp, gr.ki, gr.kd, gp.kp, gp.ki, gp.kd, rp, pp, yp);
+    }
+    if (fcPrefs.begin("fc", true)) {
+        px4Controller.setYawInversion(fcPrefs.getBool("yaw_inv2", false));
+        fcPrefs.end();
+    }
+    Serial.printf("[SETUP] Dau mo-men Yaw: %s (doi bang lenh 'yaw check' hoac 'invert yaw')\n",
+                  px4Controller.isYawInverted() ? "NGUOC" : "THUAN");
 
     // 5. Khởi tạo WiFi: Tự động kết nối mạng TTDB phòng Lab ("VNU-IS TTDBCLKT" / "Ttdbclkt9")
     //    Đồng thời phát SoftAP "ESP32-UAV-FC" (192.168.4.1) và mở WebSocket Port 81
@@ -559,38 +871,35 @@ void setup() {
 void loop() {
     uint32_t nowUs = micros();
 
-    // 1. Đọc cảm biến thô MPU-6050 qua I2C (~0.5ms)
-    mpu6050_read(mpuData);
-
-    // 2. Đọc cảm biến Xsens MTi-3 qua UART1 non-blocking (~0.1ms)
+    // 1. Đọc cảm biến Xsens MTi-3 qua UART1 non-blocking (~0.1ms) — NGUỒN IMU DUY NHẤT CHO ĐIỀU KHIỂN
     xsens_mti_update(xsensData);
 
-    // 3. Ước lượng trạng thái góc (State Estimator):
-    //    Theo yêu cầu: KHÔNG can thiệp PID.
-    //    Góc YAW xác định DUY NHẤT từ phần cứng AHRS Xsens MTi-3 (100Hz), TUYỆT ĐỐI không dùng Yaw của MPU6050.
-    if (xsensData.has_orientation) {
+#if MPU6050_MONITOR_ENABLED
+    // 2. MPU-6050: CHỈ đọc để hiển thị so sánh trên Web (50 Hz), KHÔNG đi vào bộ điều khiển
+    static uint32_t lastMpuMs = 0;
+    if (millis() - lastMpuMs >= MPU_MONITOR_INTERVAL_MS) {
+        lastMpuMs = millis();
+        mpu6050_read(mpuData);
+    }
+#endif
+
+    // 3. Trạng thái góc cho bộ điều khiển: 100% từ AHRS phần cứng Xsens MTi-3.
+    //    Không dung hợp, không dự phòng bằng MPU6050 (MPU không có Yaw tuyệt đối và trục/độ nhạy
+    //    khác Xsens). Dữ liệu Xsens cũ hơn 100 ms hoặc thiếu Gyro => mất cảm biến => failsafe DISARM.
+    uint32_t nowMs = millis();
+    const bool xsOrientFresh = xsensData.has_orientation && (nowMs - xsensData.last_orient_ms) < XSENS_STALE_MS;
+    const bool xsGyroFresh   = xsensData.has_gyro && (nowMs - xsensData.last_gyro_ms) < XSENS_STALE_MS;
+    if (xsOrientFresh && xsGyroFresh) {
         attitudeState.roll  = xsensData.roll;
         attitudeState.pitch = xsensData.pitch;
-        attitudeState.yaw   = xsensData.yaw; // Xác định duy nhất từ Xsens MTi-3
-        attitudeState.gx    = xsensData.gx;  // Dùng thuần nhất 1 nguồn Gyro từ Xsens MTi-3
+        attitudeState.yaw   = xsensData.yaw;
+        attitudeState.gx    = xsensData.gx;
         attitudeState.gy    = xsensData.gy;
         attitudeState.gz    = xsensData.gz;
         attitudeState.ax    = xsensData.ax;
         attitudeState.ay    = xsensData.ay;
         attitudeState.az    = xsensData.az;
         attitudeState.yaw_valid = true;
-        attitudeState.sensor_ok = true;
-    } else if (mpuData.ready) {
-        attitudeState.roll  = mpuData.roll;
-        attitudeState.pitch = mpuData.pitch;
-        attitudeState.yaw   = 0.0f; // MPU không có Yaw từ Mag/AHRS => Không dùng Yaw của MPU
-        attitudeState.gx    = mpuData.gx;
-        attitudeState.gy    = mpuData.gy;
-        attitudeState.gz    = mpuData.gz;
-        attitudeState.ax    = mpuData.ax;
-        attitudeState.ay    = mpuData.ay;
-        attitudeState.az    = mpuData.az;
-        attitudeState.yaw_valid = false; // Đánh dấu Yaw không hợp lệ nếu mất Xsens
         attitudeState.sensor_ok = true;
     } else {
         attitudeState.yaw_valid = false;
@@ -599,11 +908,11 @@ void loop() {
     attitudeState.timestamp_us = nowUs;
 
     // Failsafe RC Watchdog: Mất tín hiệu RC quá 1.5s CHỈ áp dụng khi đang bay bằng luồng RC streaming từ tay cầm
-    uint32_t nowMs = millis();
     if (quadMotors.getState() == ESC_STATE_ARMED && setpointState.rc_stream_active &&
         (nowMs - setpointState.last_rc_ms > RC_WATCHDOG_TIMEOUT_MS)) {
         setpointState.throttle_pct = 0.0f;
         setpointState.rc_stream_active = false;
+        setpointState.yaw_rate_cmd_dps = 0.0f;
         Serial.println("[FAILSAFE] Mat tin hieu RC Gamepad > 1.5s -> Ha ga ve 0%!");
     }
 
@@ -611,6 +920,7 @@ void loop() {
     //    - Vòng ngoài (Outer Angle Loop): Tính tốc độ góc mục tiêu (rad/s)
     //    - Vòng trong (Inner Rate PID): Tính mô-men Roll, Pitch, Yaw
     //    - Allocator/Mixer: Phối trộn Throttle + Torque ra lệnh chuẩn hóa u1..u4 [0..1]
+    //    - ESC Vàng 30A chạy 50 Hz: lệnh mới được ESC chốt mỗi 20 ms (4 chu kỳ PID)
     if (nowUs - lastPidUs >= PID_INTERVAL_US) {
         float dt = (float)(nowUs - lastPidUs) * 1e-6f;
         lastPidUs = nowUs;
@@ -623,24 +933,68 @@ void loop() {
                 quadMotors.disarm();
                 px4Controller.reset();
                 autoTuner.stop();
+                yawCheckState = YAWCHK_IDLE;
                 setpointState.throttle_pct = 0.0f;
                 setpointState.rc_stream_active = false;
+                setpointState.yaw_rate_cmd_dps = 0.0f;
                 isArmed = false;
-                Serial.println("[FAILSAFE] Mat tin hieu cam bien IMU -> AUTO DISARM!");
-                telemetry_wifi_broadcast_msg("[FAILSAFE] Sensor lost -> AUTO DISARM");
+                Serial.printf("[FAILSAFE] Mat du lieu Xsens (goc:%s gyro:%s) -> AUTO DISARM!\n",
+                              xsOrientFresh ? "OK" : "MAT", xsGyroFresh ? "OK" : "MAT");
+                telemetry_wifi_broadcast_msg("[FAILSAFE] Xsens lost -> AUTO DISARM");
             } else if (fabsf(attitudeState.roll) > 60.0f || fabsf(attitudeState.pitch) > 60.0f) {
                 quadMotors.disarm();
                 px4Controller.reset();
                 autoTuner.stop();
+                yawCheckState = YAWCHK_IDLE;
                 setpointState.throttle_pct = 0.0f;
                 setpointState.rc_stream_active = false;
+                setpointState.yaw_rate_cmd_dps = 0.0f;
                 isArmed = false;
                 Serial.printf("[FAILSAFE] Nghieng qua 60 deg (R:%.1f, P:%.1f) -> AUTO DISARM!\n", attitudeState.roll, attitudeState.pitch);
                 telemetry_wifi_broadcast_msg("[FAILSAFE] Flip/Tilt > 60 deg -> AUTO DISARM");
             }
         }
 
+        // 4a. YAW: cần gạt = tốc độ xoay. Tích phân mốc hướng theo thời gian thực + feed-forward.
+        float yawRateCmd = setpointState.yaw_rate_cmd_dps;
+        if (!isArmed || !setpointState.rc_stream_active ||
+            (nowMs - setpointState.last_rc_ms) > YAW_STICK_TIMEOUT_MS) {
+            yawRateCmd = 0.0f;   // Không có gói RC mới => không tự xoay tiếp
+        }
+        if (isArmed && attitudeState.yaw_valid) {
+            setpointState.yaw_sp = yawShaper.update(setpointState.yaw_sp, yawRateCmd, attitudeState.yaw,
+                                                    dt, YAW_SP_MAX_LEAD_DEG);
+        } else {
+            yawShaper.reset();
+        }
+        px4Controller.setYawRateFeedforward(yawRateCmd * DEG_TO_RAD);
+
+        // 4b. Bảo vệ Yaw quay mất kiểm soát
+        if (isArmed && activeTestMotor == 0 && fabsf(attitudeState.gz) > YAW_RUNAWAY_DPS) {
+            if (yawRunawaySinceMs == 0) yawRunawaySinceMs = nowMs ? nowMs : 1;
+            if (px4Controller.isYawTorqueEnabled() && nowMs - yawRunawaySinceMs > YAW_RUNAWAY_MS) {
+                px4Controller.setYawTorqueEnabled(false);
+                Serial.printf("[FAILSAFE] Yaw quay %.0f deg/s > %.0f -> NGAT mo-men Yaw! Chay 'yaw check'.\n",
+                              attitudeState.gz, YAW_RUNAWAY_DPS);
+                telemetry_wifi_broadcast_msg("[FAILSAFE] Yaw runaway -> yaw torque OFF, run 'yaw check'");
+            }
+        } else {
+            yawRunawaySinceMs = 0;
+        }
+        if (!isArmed && !px4Controller.isYawTorqueEnabled()) {
+            px4Controller.setYawTorqueEnabled(true);   // Bật lại sau khi DISARM
+        }
+
         // Nạp Setpoint vào bộ điều khiển
+        // 4b-extra. ACRO MODE: Khi PID TẮT (pid_enabled = false), liên tục cập nhật setpoint theo góc hiện tại
+        //   => Vòng angle-P luôn thấy error ≈ 0 => PID không xuất mô-men Roll/Pitch nào => drone trôi tự do.
+        //   Người dùng kiểm soát ga bằng tay cầm, nhưng attitude correction bị vô hiệu hoá.
+        //   Khi BẬT PID (lệnh "pid on"): setpoint bị khóa cứng về Roll=0, Pitch=0 (xem executeCommand).
+        if (!pid_enabled && isArmed && activeTestMotor == 0 && !autoTuner.isActive()) {
+            setpointState.roll_sp  = attitudeState.roll;
+            setpointState.pitch_sp = attitudeState.pitch;
+            // Yaw giữ nguyên — vẫn để YawShaper quản lý ở trên
+        }
         px4Controller.setTargetThrottle(setpointState.throttle_pct);
         px4Controller.setTargetAttitude(setpointState.roll_sp, setpointState.pitch_sp, setpointState.yaw_sp);
 
@@ -649,30 +1003,127 @@ void loop() {
                              attitudeState.gx,   attitudeState.gy,    attitudeState.gz,
                              dt, isArmed, attitudeState.yaw_valid);
 
+        // 4c. YAW CHECK: hở vòng riêng trục Yaw (Roll/Pitch vẫn do PID giữ), đo chiều gz để xác định
+        //     dấu cơ cấu chấp hành Yaw thật trên khung (theo Rebuild Guide: không tin nhãn M1..M4).
+        bool yawCheckOwnsOutput = false;
+        if (yawCheckState != YAWCHK_IDLE) {
+            const uint32_t el = nowMs - yawCheckStartMs;
+            const bool ok = isArmed && activeTestMotor == 0 && setpointState.throttle_pct >= 25.0f && !autoTuner.isActive();
+            if (!ok) {
+                yawCheckState = YAWCHK_IDLE;
+                Serial.println("[YAW CHECK] Huy (disarm / ga thap / doi che do)");
+                telemetry_wifi_broadcast_msg("[YAW CHECK] Huy");
+            } else {
+                float tau_r, tau_p, tau_y;
+                px4Controller.getTorques(tau_r, tau_p, tau_y);
+                if (yawCheckState == YAWCHK_SETTLE) {
+                    tau_y = 0.0f;
+                    if (el >= YAW_CHECK_SETTLE_MS) { yawCheckState = YAWCHK_PUSH; yawCheckStartMs = nowMs; }
+                } else {
+                    tau_y = YAW_CHECK_TAU;   // Mô-men THÔ (không qua cờ đảo dấu) => đo dấu thật của cơ cấu chấp hành
+                    if (el > YAW_CHECK_PUSH_MS / 3) { yawCheckSumGz += attitudeState.gz; yawCheckSamples++; }
+                    if (el >= YAW_CHECK_PUSH_MS) {
+                        yawCheckState = YAWCHK_IDLE;
+                        const float meanGz = yawCheckSamples ? yawCheckSumGz / yawCheckSamples : 0.0f;
+                        char msg[128];
+                        if (meanGz > YAW_CHECK_MIN_DPS) {
+                            px4Controller.setYawInversion(false);
+                            saveYawInversion(false);
+                            snprintf(msg, sizeof(msg), "[YAW CHECK] gz=%+.1f deg/s -> dau Yaw THUAN (da luu)", meanGz);
+                        } else if (meanGz < -YAW_CHECK_MIN_DPS) {
+                            px4Controller.setYawInversion(true);
+                            saveYawInversion(true);
+                            snprintf(msg, sizeof(msg), "[YAW CHECK] gz=%+.1f deg/s -> dau Yaw NGUOC, da dao (da luu)", meanGz);
+                        } else {
+                            snprintf(msg, sizeof(msg), "[YAW CHECK] gz=%+.1f deg/s qua nho -> KHONG ket luan (tang ga / giam ma sat)", meanGz);
+                        }
+                        Serial.println(msg);
+                        telemetry_wifi_broadcast_msg(msg);
+                        // Giữ hướng hiện tại và xả tích phân Yaw tích lũy trong lúc thử
+                        setpointState.yaw_sp = attitudeState.yaw;
+                        px4Controller.getRatePidYaw().reset();
+                    }
+                }
+                if (yawCheckState != YAWCHK_IDLE) {
+                    float u_chk[4];
+                    px4Controller.getMixer().mixNormalized(setpointState.throttle_pct / 100.0f, tau_r, tau_p, tau_y, u_chk);
+                    quadMotors.setAllNormalized(u_chk);
+                    yawCheckOwnsOutput = true;
+                }
+            }
+        }
+
         // AUTO-TUNER HOẶC CHẾ ĐỘ BAY TIÊU CHUẨN
-        if (autoTuner.isActive()) {
+        if (yawCheckOwnsOutput) {
+            // Đầu ra ESC do YAW CHECK sở hữu trong chu kỳ này
+        } else if (autoTuner.isActive()) {
             TuneAxis ax = autoTuner.getAxis();
-            float rate_meas = 0.0f, angle_abs = 0.0f;
-            if (ax == TUNE_ROLL_RATE)  { rate_meas = attitudeState.gx * DEG_TO_RAD; angle_abs = fabsf(attitudeState.roll); }
-            if (ax == TUNE_PITCH_RATE) { rate_meas = attitudeState.gy * DEG_TO_RAD; angle_abs = fabsf(attitudeState.pitch); }
-            if (ax == TUNE_YAW_RATE)   { rate_meas = attitudeState.gz * DEG_TO_RAD; angle_abs = fabsf(attitudeState.yaw); }
-            if (ax == TUNE_ANGLE_P)    { rate_meas = attitudeState.gx * DEG_TO_RAD; angle_abs = fabsf(attitudeState.roll); }
+            float rate_meas = 0.0f;
+            if (ax == TUNE_ROLL_RATE)  rate_meas = attitudeState.gx * DEG_TO_RAD;
+            if (ax == TUNE_PITCH_RATE) rate_meas = attitudeState.gy * DEG_TO_RAD;
+            if (ax == TUNE_YAW_RATE)   rate_meas = attitudeState.gz * DEG_TO_RAD;
+            if (ax == TUNE_ANGLE_P)    rate_meas = attitudeState.gx * DEG_TO_RAD;
+            // An toàn: giám sát góc của TRỤC ĐANG TUNE (tránh góc Roll bị kẹp nghiêng trên giá thử làm ngắt oan Pitch)
+            float check_angle = fabsf(attitudeState.pitch);
+            if (ax == TUNE_ROLL_RATE || ax == TUNE_ANGLE_P) check_angle = fabsf(attitudeState.roll);
+            else if (ax == TUNE_PITCH_RATE) check_angle = fabsf(attitudeState.pitch);
+            else check_angle = fmaxf(fabsf(attitudeState.roll), fabsf(attitudeState.pitch));
 
             // Nếu ga < 2%, ngắt tuner vì không đủ mô-men
             if (setpointState.throttle_pct < 2.0f) {
                 autoTuner.stop(ABORT_LOW_THROTTLE);
             }
 
-            float relay_torque = autoTuner.update(rate_meas, angle_abs, dt);
+            // Góc của trục đang tune so với mốc (Yaw: lệch so với hướng lúc bắt đầu tune)
+            float axis_angle = attitudeState.roll;
+            if (ax == TUNE_PITCH_RATE) axis_angle = attitudeState.pitch;
+            if (ax == TUNE_YAW_RATE) {
+                axis_angle = attitudeState.yaw - setpointState.yaw_sp;
+                while (axis_angle > 180.0f)  axis_angle -= 360.0f;
+                while (axis_angle < -180.0f) axis_angle += 360.0f;
+            }
+            // Relay quanh mốc giữ góc + bù lệch (xem PID_AutoTuner::updateWithAngleHold): bản cũ relay
+            // thuần theo tốc độ góc, không có thông tin góc => trục trôi theo trọng lực rồi lật.
+            const float bias_before = autoTuner.getBias();
+            float relay_torque = autoTuner.updateWithAngleHold(rate_meas, axis_angle, check_angle, dt);
+
+            if (!autoTuner.isActive()) {
+                // Kết thúc (xong hoặc bị ngắt): bàn giao mô-men bù trọng lực relay đã học cho tích phân PID,
+                // thay vì xả về 0 (bản cũ) làm drone hụt mô-men và chúi xuống đúng lúc PID nhận lại quyền.
+                setTuneAxisIntegral(ax, bias_before);
+                setpointState.roll_sp  = 0.0f;
+                setpointState.pitch_sp = 0.0f;
+                setpointState.yaw_sp   = attitudeState.yaw;
+                if (autoTuner.isAborted()) {
+                    char tuneMsg[128];
+                    snprintf(tuneMsg, sizeof(tuneMsg), "[TUNE] Ngat (ly do %d) -> PID giu thang bang, R=%.1f P=%.1f",
+                             (int)autoTuner.getAbortReason(), attitudeState.roll, attitudeState.pitch);
+                    Serial.println(tuneMsg);
+                    telemetry_wifi_broadcast_msg(tuneMsg);
+                }
+            }
 
             if (isArmed && activeTestMotor == 0) {
-                if (autoTuner.isAborted()) {
-                    for (int i = 0; i < ESC_NUM_MOTORS; i++)
-                        quadMotors.getMotor(i).setTargetPulseUs(ESC_PULSE_IDLE_US);
+                if (!autoTuner.isActive()) {
+                    // Chu kỳ này: PID nhận lại quyền ngay (không thả trôi)
+                    const float* u_norm = px4Controller.getNormalizedMotorOutputs();
+                    quadMotors.setAllNormalized(u_norm);
                 } else if (setpointState.throttle_pct >= 2.0f) {
-                    float tau_r = (ax == TUNE_ROLL_RATE || ax == TUNE_ANGLE_P) ? relay_torque : 0.0f;
-                    float tau_p = (ax == TUNE_PITCH_RATE) ? relay_torque : 0.0f;
-                    float tau_y = (ax == TUNE_YAW_RATE)   ? relay_torque : 0.0f;
+                    // Lấy mô-men đã tính sẵn từ px4Controller (closed-loop bình thường cho 2 trục không tune)
+                    float tau_r, tau_p, tau_y;
+                    px4Controller.getTorques(tau_r, tau_p, tau_y);
+
+                    // CHỈ GHI ĐÈ trục đang tune bằng tín hiệu relay; 2 trục còn lại giữ nguyên vòng kín
+                    if (ax == TUNE_ROLL_RATE || ax == TUNE_ANGLE_P) tau_r = relay_torque;
+                    if (ax == TUNE_PITCH_RATE) {
+                        tau_p = relay_torque;
+                        if (px4Controller.isPitchInverted()) tau_p = -tau_p;
+                    }
+                    if (ax == TUNE_YAW_RATE) {
+                        tau_y = relay_torque;
+                        if (px4Controller.isYawInverted()) tau_y = -tau_y;
+                    }
+
                     float thr   = setpointState.throttle_pct / 100.0f;
                     float u_tune[4];
                     px4Controller.getMixer().mixNormalized(thr, tau_r, tau_p, tau_y, u_tune);
@@ -748,6 +1199,7 @@ void loop() {
     pkt.yaw_valid = attitudeState.yaw_valid;
     pkt.rc_sequence = acceptedRcSequence;
     pkt.pwm_outputs_ready = quadMotors.outputsReady();
+    pkt.pid_enabled = pid_enabled;
 
     telemetry_wifi_update(pkt);
 

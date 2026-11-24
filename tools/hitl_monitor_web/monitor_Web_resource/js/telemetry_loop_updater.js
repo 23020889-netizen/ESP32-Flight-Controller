@@ -78,6 +78,28 @@ class TelemetryLoopUpdater {
       window.pidAutoTuner.updateFromTelemetry(latestSample);
     }
 
+    // 5. Cập nhật bảng Ghi Nhật Ký Telemetry (CSV Recorder)
+    const recSamples = getElement("recSamples");
+    if (recSamples) {
+      recSamples.textContent = String(controller.telemetryStore.getCsvRecordCount());
+    }
+    const recDuration = getElement("recDuration");
+    if (recDuration) {
+      const durSec = Math.floor(controller.telemetryStore.getCsvRecordingDurationSeconds());
+      const mins = String(Math.floor(durSec / 60)).padStart(2, "0");
+      const secs = String(durSec % 60).padStart(2, "0");
+      recDuration.textContent = `${mins}:${secs}`;
+    }
+
+    // 6. Đồng bộ trạng thái nút Bật/Tắt PID từ telemetry phần cứng
+    if (latestSample.pid_en !== undefined && controller && typeof controller.updatePidButtonUi === "function") {
+      const isEn = (latestSample.pid_en === 1);
+      if (controller.telemetryStore.lastPidEnabled !== isEn) {
+        controller.telemetryStore.lastPidEnabled = isEn;
+        controller.updatePidButtonUi(isEn);
+      }
+    }
+
     latestSample.m.forEach((speed, index) => {
       const pct = Math.max(0, Math.min(100, speed / 10));
       const mb = getElement("mb" + index);

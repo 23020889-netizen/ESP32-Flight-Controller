@@ -36,6 +36,7 @@ struct TelemetryPacket {
     bool  yaw_valid;        // Trạng thái hợp lệ của cảm biến góc Yaw
     uint32_t rc_sequence;   // Bộ đếm gói RC hợp lệ đã được ESP chấp nhận
     bool pwm_outputs_ready; // Cả bốn PWM pin đã attach thành công
+    bool pid_enabled;       // Trạng thái bật/tắt bộ điều khiển PID cân bằng (1: ON, 0: OFF)
 };
 
 /**

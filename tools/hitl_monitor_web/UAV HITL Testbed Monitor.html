@@ -50,7 +50,7 @@
         <div class="chip chip-model" title="Chọn mẫu máy bay 3D khắc chữ ISILAB">
           <label for="selDroneModel">🚁 Mẫu 3D:</label>
           <select id="selDroneModel" aria-label="Chọn mô hình 3D Quadcopter ISILAB">
-            <option value="glb_cesium">ISILAB Cesium-Titanium (PBR)</option>
+            <option value="sci_fi_bubble" selected>🛸 ISILAB Sci-Fi Bubble Quad-X (PBR Vũ Trụ)</option>
             <option value="glb_annelida">ISILAB Phantom-Aero (Trắng)</option>
             <option value="glb_laser">ISILAB Laser-Racer (Khí động học)</option>
             <option value="glb_s9">ISILAB S9-Mini (Gập cánh)</option>
@@ -102,9 +102,9 @@
               <span class="sub-card-title">PX4 SETPOINT (GÓC ĐẶT)</span>
             </div>
             <div class="setpoint-actions">
-              <button type="button" id="btnLevel" class="btn-level">⚖️ Cân Bằng (0°)</button>
+              <button type="button" id="btnLevel" class="btn-level" title="Khôi phục trạng thái ổn định: Đưa cả 3 góc về 0°">⚖️ Ổn Định (0,0,0)</button>
               <button type="button" id="btnInvPitch" class="btn-inv-pitch" title="Đảo chiều trục Pitch">Đảo Pitch</button>
-              <button type="button" id="btnPidView" class="btn-pid-view" title="In thông số PID ra Serial">PID</button>
+              <button type="button" id="btnPidView" class="btn-pid-view" title="Kéo Drone từ mất ổn định về thăng bằng 3 góc = 0°">Bật PID (0°)</button>
             </div>
             <div class="preset-grid-4">
               <button type="button" class="btn-sp" data-sp="-5 0 0">R -5°</button>
@@ -379,13 +379,40 @@
             <div class="vpp-item">Yaw <b id="vy" style="color:var(--c3)">0°</b></div>
           </div>
         </div>
+
+        <!-- GHI NHẬT KÝ TELEMETRY (CSV RECORDER) -->
+        <div class="gl pn" id="pnCsvRecorder">
+          <h2>GHI NHẬT KÝ TELEMETRY<em>CSV RECORDER</em></h2>
+          <div class="sub-card" style="margin-bottom:0">
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; margin-bottom:6px;">
+              <span>Trạng thái: <b id="recStatus" style="color:var(--mu)">Sẵn sàng</b></span>
+              <span>Thời gian: <b id="recDuration" class="mono" style="color:var(--tx)">00:00</b></span>
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; margin-bottom:8px;">
+              <span>Số mẫu đã ghi:</span>
+              <b id="recSamples" class="mono" style="color:var(--c1)">0</b>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+              <button type="button" id="btnRecToggle" style="background:rgba(239, 68, 68, 0.15); color:#ef4444; border:1px solid rgba(239, 68, 68, 0.4); font-weight:700; height:30px;">
+                🔴 Bắt Đầu Ghi
+              </button>
+              <button type="button" id="btnRecExport" style="background:var(--gl-elevated); color:var(--tx); border:1px solid var(--bd); font-weight:600; height:30px;" disabled>
+                💾 Tải File CSV
+              </button>
+            </div>
+            <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+              <button type="button" id="btnRecClear" style="color:var(--mu); font-size:11px; height:22px; padding:0 6px; border:none; background:transparent; cursor:pointer;">
+                🗑️ Xóa bộ đệm
+              </button>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
-  <script src="monitor_Web_resource/assets/quadcopter_drone_glb_base64.js"></script>
   <script src="monitor_Web_resource/assets/default_imu_telemetry_log.js"></script>
   <script src="monitor_Web_resource/js/telemetry_data_store.js"></script>
   <script src="monitor_Web_resource/js/csv_telemetry_replayer.js"></script>

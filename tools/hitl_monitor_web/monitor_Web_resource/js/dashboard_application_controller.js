@@ -105,6 +105,9 @@ class DashboardApplicationController {
     if (btnDisarm) {
       btnDisarm.onclick = () => {
         this.telemetryStore.sendCommand("disarm");
+        // Firmware trở về chế độ ổn định (PID BẬT) sau DISARM; nút đồng bộ lại từ telemetry pid_en
+        this.telemetryStore.lastPidEnabled = true;
+        this.updatePidButtonUi(true);
         const rng = getElement("rngThrottle");
         const lbl = getElement("lblThrottle");
         if (rng) rng.value = 0;
@@ -139,6 +142,8 @@ class DashboardApplicationController {
     if (btnLevel) {
       btnLevel.onclick = () => {
         this.telemetryStore.sendCommand("level");
+        this.telemetryStore.lastPidEnabled = true;
+        this.updatePidButtonUi(true);
       };
     }
 
@@ -152,7 +157,10 @@ class DashboardApplicationController {
     const btnPidView = getElement("btnPidView");
     if (btnPidView) {
       btnPidView.onclick = () => {
-        this.telemetryStore.sendCommand("pid");
+        const nextState = !this.telemetryStore.lastPidEnabled;
+        this.telemetryStore.sendCommand(nextState ? "pid on" : "pid off");
+        this.telemetryStore.lastPidEnabled = nextState;
+        this.updatePidButtonUi(nextState);
       };
     }
 
@@ -240,6 +248,9 @@ class DashboardApplicationController {
           if (lbl) lbl.textContent = "0%";
         });
         this.telemetryStore.sendCommand("manual off");
+        this.telemetryStore.sendCommand("pid on");
+        this.telemetryStore.lastPidEnabled = true;
+        this.updatePidButtonUi(true);
       };
     }
 
@@ -284,6 +295,64 @@ class DashboardApplicationController {
       };
     }
 
+    // 5. ĐIỀU KHIỂN GHI NHẬT KÝ TELEMETRY (CSV RECORDER)
+    const btnRecToggle = getElement("btnRecToggle");
+    const btnRecExport = getElement("btnRecExport");
+    const btnRecClear = getElement("btnRecClear");
+    const recStatus = getElement("recStatus");
+    const recSamples = getElement("recSamples");
+    const recDuration = getElement("recDuration");
+
+    if (btnRecToggle) {
+      btnRecToggle.onclick = () => {
+        if (!this.telemetryStore.isRecordingCsv) {
+          this.telemetryStore.startCsvRecording();
+          btnRecToggle.innerHTML = "⏹️ Dừng Ghi";
+          btnRecToggle.style.background = "rgba(239, 68, 68, 0.28)";
+          btnRecToggle.style.borderColor = "#ef4444";
+          btnRecToggle.style.color = "#ffffff";
+          if (recStatus) recStatus.innerHTML = '<span style="color:#ef4444">● Đang ghi</span>';
+          if (btnRecExport) btnRecExport.disabled = false;
+        } else {
+          this.telemetryStore.stopCsvRecording();
+          btnRecToggle.innerHTML = "🔴 Tiếp Tục Ghi";
+          btnRecToggle.style.background = "rgba(239, 68, 68, 0.15)";
+          btnRecToggle.style.borderColor = "rgba(239, 68, 68, 0.4)";
+          btnRecToggle.style.color = "#ef4444";
+          if (recStatus) recStatus.innerHTML = '<span style="color:#10b981">Đã dừng (Có dữ liệu)</span>';
+          if (btnRecExport) btnRecExport.disabled = false;
+        }
+      };
+    }
+
+    if (btnRecExport) {
+      btnRecExport.onclick = () => {
+        this.telemetryStore.downloadCsvFile();
+      };
+    }
+
+    if (btnRecClear) {
+      btnRecClear.onclick = () => {
+        if (this.telemetryStore.recordedCsvRows.length > 0) {
+          if (confirm("Bạn có chắc chắn muốn xóa bộ đệm nhật ký CSV hiện tại?")) {
+            this.telemetryStore.clearCsvRecords();
+            if (!this.telemetryStore.isRecordingCsv) {
+              if (btnRecToggle) {
+                btnRecToggle.innerHTML = "🔴 Bắt Đầu Ghi";
+                btnRecToggle.style.background = "rgba(239, 68, 68, 0.15)";
+                btnRecToggle.style.borderColor = "rgba(239, 68, 68, 0.4)";
+                btnRecToggle.style.color = "#ef4444";
+              }
+              if (recStatus) recStatus.innerHTML = '<span style="color:var(--mu)">Sẵn sàng</span>';
+              if (btnRecExport) btnRecExport.disabled = true;
+            }
+            if (recSamples) recSamples.textContent = "0";
+            if (recDuration) recDuration.textContent = "00:00";
+          }
+        }
+      };
+    }
+
     const kAx = getElement("kAx");
     if (kAx) kAx.onchange = (event) => { this.sceneManager.axesGroup.visible = event.target.checked; };
     const kBox = getElement("kBox");
@@ -300,22 +369,25 @@ class DashboardApplicationController {
       };
     }
 
-    // Chuyển đổi Mẫu 3D Quadcopter (4 mẫu đều khắc chữ ISILAB trên thân)
+    // Chuyển đổi Mẫu 3D Quadcopter (mặc định Sci-Fi Bubble Quad-X)
     const selDroneModel = getElement("selDroneModel");
     if (selDroneModel) {
       try {
-        const savedModel = localStorage.getItem("uav_3d_model");
-        if (savedModel) {
-          selDroneModel.value = savedModel;
-          this.sceneManager.setDroneModel(savedModel);
+        let savedModel = localStorage.getItem("uav_3d_model");
+        // Nâng cấp tự động nếu trình duyệt lưu cache mẫu con ruồi cũ (glb_cesium)
+        if (!savedModel || savedModel === "glb_cesium" || savedModel === "glb_aero") {
+          savedModel = "sci_fi_bubble";
+          localStorage.setItem("uav_3d_model", "sci_fi_bubble");
         }
-      } catch (_) {}
+        selDroneModel.value = savedModel;
+        this.sceneManager.setDroneModel(savedModel);
+      } catch (_) { }
       selDroneModel.onchange = () => {
-        const chosen = selDroneModel.value || "glb_cesium";
+        const chosen = selDroneModel.value || "sci_fi_bubble";
         this.sceneManager.setDroneModel(chosen);
         try {
           localStorage.setItem("uav_3d_model", chosen);
-        } catch (_) {}
+        } catch (_) { }
       };
     }
 
@@ -332,7 +404,7 @@ class DashboardApplicationController {
       if (btnThemeToggle) btnThemeToggle.textContent = found.label;
       try {
         localStorage.setItem("uav_ui_theme", found.id);
-      } catch (_) {}
+      } catch (_) { }
     };
     try {
       const savedTheme = localStorage.getItem("uav_ui_theme");
@@ -396,7 +468,7 @@ class DashboardApplicationController {
     if (!DashboardApplicationController._dbgFrame) DashboardApplicationController._dbgFrame = 0;
     if (++DashboardApplicationController._dbgFrame % 60 === 0) {
       const activeBtns = (gp.buttons || []).map((b, i) => b.pressed ? i : null).filter(x => x !== null).join(",");
-      console.log(`[GP Debug] id="${id}" isRC=${isRcTransmitter} axes=[${[...gp.axes].map(v=>v.toFixed(3)).join(",")}] btns=[${activeBtns}]`);
+      console.log(`[GP Debug] id="${id}" isRC=${isRcTransmitter} axes=[${[...gp.axes].map(v => v.toFixed(3)).join(",")}] btns=[${activeBtns}]`);
     }
     const deviceName = gp.id ? (isRcTransmitter ? "🎮 RadioMaster (HID)" : (id.length > 16 ? id.substring(0, 16) : id)) : "Đã nhận";
 
@@ -493,10 +565,10 @@ class DashboardApplicationController {
       }
 
       const lblGamepadStatus = document.getElementById("lblGamepadStatus");
-      const lblGamepadArm    = document.getElementById("lblGamepadArm");
-      const lblStickL        = document.getElementById("lblStickL");
-      const lblStickR        = document.getElementById("lblStickR");
-      const lblEspConfirmed  = document.getElementById("lblEspConfirmed");
+      const lblGamepadArm = document.getElementById("lblGamepadArm");
+      const lblStickL = document.getElementById("lblStickL");
+      const lblStickR = document.getElementById("lblStickR");
+      const lblEspConfirmed = document.getElementById("lblEspConfirmed");
 
       // Cổng an toàn kiểm tra kết nối Transport thật (WebSocket hoặc Serial)
       const hasLink = this.telemetryStore.isTransportOpen();
@@ -568,6 +640,8 @@ class DashboardApplicationController {
           lastSentThrottle = 0;
           lastSendTime = performance.now();
           this.telemetryStore.sendCommand("disarm");
+          this.telemetryStore.lastPidEnabled = true;   // Firmware: PID BẬT mặc định sau DISARM
+          this.updatePidButtonUi(true);
           setThrottle(0);
         }
         else if (isArmRequested) {
@@ -596,7 +670,7 @@ class DashboardApplicationController {
         if (justPressed(15)) { activeMotor = 2; baseThrottle = 0; this.telemetryStore.sendCommand("m2"); }
         if (justPressed(13)) { activeMotor = 3; baseThrottle = 0; this.telemetryStore.sendCommand("m3"); }
         if (justPressed(14)) { activeMotor = 4; baseThrottle = 0; this.telemetryStore.sendCommand("m4"); }
-        if (justPressed(3))  { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
+        if (justPressed(3)) { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
 
         // 5. KIỂM TRA ARMED TỪ BẤT KỲ NGUỒN NÀO (tay cầm hoặc Web UI)
         // effectiveArmed = true nếu: (a) đã nhấn nút ARM trên tay cầm, HOẶC (b) ESP32 xác nhận ARMED từ Web UI
@@ -642,10 +716,10 @@ class DashboardApplicationController {
 
         if (hasLink && (((thrChanged || attChanged) && (now - lastSendTime >= 30)) || heartbeatDue)) {
           lastSentThrottle = totalThr;
-          lastSentRoll     = inputs.rollDeg;
-          lastSentPitch    = inputs.pitchDeg;
-          lastSentYaw      = inputs.yawDeg;
-          lastSendTime     = now;
+          lastSentRoll = inputs.rollDeg;
+          lastSentPitch = inputs.pitchDeg;
+          lastSentYaw = inputs.yawDeg;
+          lastSendTime = now;
 
           if (activeMotor === 0) {
             // Gửi gói tin RC chuẩn: RC,<throttle>,<roll>,<pitch>,<yaw>,1
@@ -682,6 +756,20 @@ class DashboardApplicationController {
       this.csvReplayer.startPlayback();
     };
     reader.readAsText(selectedFile);
+  }
+
+  updatePidButtonUi(enabled) {
+    const btn = document.getElementById("btnPidView");
+    if (!btn) return;
+    if (enabled) {
+      btn.classList.add("active");
+      btn.textContent = "✅ PID: Ổn Định (0°)";
+      btn.title = "PID đang giữ ổn định ở 3 góc (0,0,0). Nhấn để chuyển sang ACRO (Tắt PID)";
+    } else {
+      btn.classList.remove("active");
+      btn.textContent = "Bật PID (0°)";
+      btn.title = "Nhấn để kéo Drone từ mất ổn định về thăng bằng 3 góc = 0°";
+    }
   }
 }
 

@@ -17,7 +17,11 @@ class PidAutoTunerController {
   }
 
   getTelemetryStore() {
-    return window.dashboardController?.telemetryStore || window.dashboardApp?.telemetryStore;
+    const store = window.dashboardController?.telemetryStore || window.dashboardApp?.telemetryStore;
+    if (store && !store.onLogMessage) {
+      store.onLogMessage = (msg) => this.log(msg);
+    }
+    return store;
   }
 
   log(msg) {

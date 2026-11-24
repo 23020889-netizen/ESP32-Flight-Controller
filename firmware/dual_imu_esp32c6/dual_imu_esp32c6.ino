@@ -542,9 +542,11 @@ void executeCommand(String cmd, const char* sourceTag) {
             setpointState.pitch_sp = 0.0f;
             setpointState.yaw_sp = attitudeState.yaw;
             px4Controller.resetIntegrators();
-            autoTuner.configure(amp, 8, 35.0f, 0.04f); // 35° an toàn thay vì 25° để không abort sớm
+            autoTuner.configure(amp, 8, 90.0f, 0.04f); // Đã bỏ giới hạn góc khi test theo yêu cầu
             autoTuner.start(TUNE_ROLL_RATE);
-            Serial.printf("[%s] [TUNE] Bat dau tune Roll Rate PID | amp=%.2f (%.0f%%) | abort_ang=35°\n", sourceTag, amp, amp * 100.0f);
+            snprintf(logBuf, sizeof(logBuf), "[%s] [TUNE] Bat dau tune Roll Rate PID (amp=%.0f%%) - Da bo gioi han goc", sourceTag, amp * 100.0f);
+            Serial.println(logBuf);
+            telemetry_wifi_broadcast_msg(logBuf);
         } else if (sub.startsWith("pitch")) {
             float amp = 0.10f; // Mặc định 10% cho kiểm thử bàn an toàn
             int spaceIdx = sub.indexOf(' ');
@@ -559,9 +561,11 @@ void executeCommand(String cmd, const char* sourceTag) {
             setpointState.pitch_sp = 0.0f;
             setpointState.yaw_sp = attitudeState.yaw;
             px4Controller.resetIntegrators();
-            autoTuner.configure(amp, 8, 35.0f, 0.04f); // 35° an toàn thay vì 25°
+            autoTuner.configure(amp, 8, 90.0f, 0.04f); // Đã bỏ giới hạn góc khi test theo yêu cầu
             autoTuner.start(TUNE_PITCH_RATE);
-            Serial.printf("[%s] [TUNE] Bat dau tune Pitch Rate PID | amp=%.2f (%.0f%%) | abort_ang=35°\n", sourceTag, amp, amp * 100.0f);
+            snprintf(logBuf, sizeof(logBuf), "[%s] [TUNE] Bat dau tune Pitch Rate PID (amp=%.0f%%) - Da bo gioi han goc", sourceTag, amp * 100.0f);
+            Serial.println(logBuf);
+            telemetry_wifi_broadcast_msg(logBuf);
         } else if (sub.startsWith("yaw")) {
             float amp = 0.10f;
             int spaceIdx = sub.indexOf(' ');
@@ -576,15 +580,21 @@ void executeCommand(String cmd, const char* sourceTag) {
             setpointState.pitch_sp = 0.0f;
             setpointState.yaw_sp = attitudeState.yaw;
             px4Controller.resetIntegrators();
-            autoTuner.configure(amp, 8, 35.0f, 0.04f);
+            autoTuner.configure(amp, 8, 90.0f, 0.04f);
             autoTuner.start(TUNE_YAW_RATE);
-            Serial.printf("[%s] [TUNE] Bat dau tune Yaw Rate PID | amp=%.2f (%.0f%%)\n", sourceTag, amp, amp * 100.0f);
+            snprintf(logBuf, sizeof(logBuf), "[%s] [TUNE] Bat dau tune Yaw Rate PID (amp=%.0f%%) - Da bo gioi han goc", sourceTag, amp * 100.0f);
+            Serial.println(logBuf);
+            telemetry_wifi_broadcast_msg(logBuf);
         } else if (sub.startsWith("angle")) {
             autoTuner.start(TUNE_ANGLE_P);
-            Serial.printf("[%s] [TUNE] Bat dau danh gia Angle P\n", sourceTag);
+            snprintf(logBuf, sizeof(logBuf), "[%s] [TUNE] Bat dau danh gia Angle P", sourceTag);
+            Serial.println(logBuf);
+            telemetry_wifi_broadcast_msg(logBuf);
         } else if (sub.startsWith("stop")) {
             autoTuner.stop();
-            Serial.printf("[%s] [TUNE] Da dung tune\n", sourceTag);
+            snprintf(logBuf, sizeof(logBuf), "[%s] [TUNE] Da dung tune", sourceTag);
+            Serial.println(logBuf);
+            telemetry_wifi_broadcast_msg(logBuf);
         } else if (sub.startsWith("apply")) {
             bool smooth = (sub.indexOf("50") >= 0 || sub.indexOf("smooth") >= 0 || sub.indexOf("half") >= 0);
             if (autoTuner.isDone()) {

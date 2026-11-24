@@ -76,7 +76,12 @@ class TelemetryDataStore {
       xs_y: rawSample.xs_y !== undefined ? Number(rawSample.xs_y) : (this.currentXsY || 0),
       z: Number(rawSample.z) || 0,
       vz: Number(rawSample.vz) || 0,
+      gx: rawSample.gx !== undefined ? Number(rawSample.gx) : 0,
+      gy: rawSample.gy !== undefined ? Number(rawSample.gy) : 0,
+      gz: rawSample.gz !== undefined ? Number(rawSample.gz) : 0,
       pid_en: rawSample.pid_en !== undefined ? Number(rawSample.pid_en) : (this.lastPidEnabled ? 1 : 0),
+      sp_t: rawSample.sp_t !== undefined ? Number(rawSample.sp_t) : (this.lastTargetThrottle || 0),
+      tune: rawSample.tune !== undefined ? rawSample.tune : (this.lastTuneStatus || null),
       m: (rawSample.m || [0, 0, 0, 0]).map(Number)
     };
     this.sampleBuffer.push(sample);
@@ -273,6 +278,10 @@ class TelemetryDataStore {
             if (parsed.sp_t !== undefined) this.lastTargetThrottle = Number(parsed.sp_t);
             if (parsed.pid_en !== undefined) this.lastPidEnabled = (parsed.pid_en === 1);
             if (parsed.pid_enabled !== undefined) this.lastPidEnabled = !!parsed.pid_enabled;
+            if (parsed.tune !== undefined) this.lastTuneStatus = parsed.tune;
+            if (parsed.log && typeof this.onLogMessage === "function") {
+              this.onLogMessage(parsed.log);
+            }
           }
           if (linkState && parsed && parsed.state !== undefined) {
             const network = parsed.sta_connected ? `VNU ${parsed.sta_ip || ""}` : "SoftAP/STA offline";

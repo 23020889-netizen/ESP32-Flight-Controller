@@ -1,6 +1,8 @@
 #include "pid_autotuner.h"
 #include <math.h>
 
+extern void telemetry_wifi_broadcast_msg(const char* msg);
+
 PID_AutoTuner autoTuner;
 
 PID_AutoTuner::PID_AutoTuner() {
@@ -56,16 +58,13 @@ void PID_AutoTuner::stop(TuneAbortReason reason) {
 float PID_AutoTuner::update(float rate_meas, float angle_abs, float dt) {
     if (_state != TUNE_STATE_RELAY) return 0.0f;
 
-    // 1. WATCHDOG 1: Kiểm tra góc an toàn tuyệt đối
-    if (angle_abs > _abort_angle_deg) {
-        stop(ABORT_TILT_LIMIT);
-        return 0.0f;
-    }
+    // 1. WATCHDOG 1: Đã bỏ giới hạn góc khi test trên giá thử theo yêu cầu
+    (void)angle_abs;
 
     _time_elapsed += dt;
 
-    // 2. WATCHDOG 2: Kiểm tra timeout không có đảo chiều (3.5 giây)
-    if ((_time_elapsed - _last_transition_time) > 3.5f) {
+    // 2. WATCHDOG 2: Kiểm tra timeout không có đảo chiều (8.0 giây)
+    if ((_time_elapsed - _last_transition_time) > 8.0f) {
         stop(ABORT_TIMEOUT);
         return 0.0f;
     }
@@ -111,6 +110,10 @@ float PID_AutoTuner::update(float rate_meas, float angle_abs, float dt) {
 
                 Serial.printf("[TUNE] Chu ky %d/%d: Tu=%.3fs | A=%.3f rad/s (%.1f deg/s) | Ku=%.4f\n",
                               _cycle_count, _min_cycles, tu_curr, a_curr, a_curr * 57.2958f, ku_curr);
+                char cycMsg[128];
+                snprintf(cycMsg, sizeof(cycMsg), "[TUNE] Chu ky %d/%d: Tu=%.3fs | A=%.1f deg/s | Ku=%.4f",
+                         _cycle_count, _min_cycles, tu_curr, a_curr * 57.2958f, ku_curr);
+                telemetry_wifi_broadcast_msg(cycMsg);
             }
         }
 
@@ -188,6 +191,11 @@ void PID_AutoTuner::_analyze() {
     Serial.println("------------------------------------------------------------------");
     Serial.printf("[TUNE] Lenh ap dung nhanh: 'tune apply' hoac 'tune apply 50'\n");
     Serial.println("==================================================================\n");
+
+    char donMsg[160];
+    snprintf(donMsg, sizeof(donMsg), "[TUNE] HOAN THANH %s: Kp=%.4f Ki=%.4f Kd=%.5f | Angle_P=%.2f",
+             _result.axis_name, _result.kp_smooth, _result.ki_smooth, _result.kd_smooth, _result.angle_p);
+    telemetry_wifi_broadcast_msg(donMsg);
 }
 
 void PID_AutoTuner::reset() {

@@ -19,6 +19,7 @@ class TelemetryDataStore {
     this.lastEspState = "DISARMED";
     this.lastRcSequence = 0;
     this.lastTargetThrottle = 0;
+    this.lastPidEnabled = false;
 
     // Cache giá trị trạng thái tức thời
     this.currentRoll = 0;
@@ -75,6 +76,7 @@ class TelemetryDataStore {
       xs_y: rawSample.xs_y !== undefined ? Number(rawSample.xs_y) : (this.currentXsY || 0),
       z: Number(rawSample.z) || 0,
       vz: Number(rawSample.vz) || 0,
+      pid_en: rawSample.pid_en !== undefined ? Number(rawSample.pid_en) : (this.lastPidEnabled ? 1 : 0),
       m: (rawSample.m || [0, 0, 0, 0]).map(Number)
     };
     this.sampleBuffer.push(sample);
@@ -269,6 +271,8 @@ class TelemetryDataStore {
             if (parsed.state !== undefined) this.lastEspState = parsed.state;
             if (parsed.rc_seq !== undefined) this.lastRcSequence = parsed.rc_seq;
             if (parsed.sp_t !== undefined) this.lastTargetThrottle = Number(parsed.sp_t);
+            if (parsed.pid_en !== undefined) this.lastPidEnabled = (parsed.pid_en === 1);
+            if (parsed.pid_enabled !== undefined) this.lastPidEnabled = !!parsed.pid_enabled;
           }
           if (linkState && parsed && parsed.state !== undefined) {
             const network = parsed.sta_connected ? `VNU ${parsed.sta_ip || ""}` : "SoftAP/STA offline";

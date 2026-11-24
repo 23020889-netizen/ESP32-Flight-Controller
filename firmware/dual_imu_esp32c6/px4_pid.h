@@ -72,6 +72,7 @@ public:
     PX4_AttitudeControl();
 
     void setAngleGains(float roll_p, float pitch_p, float yaw_p);
+    void getAngleGains(float& roll_p, float& pitch_p, float& yaw_p) const { roll_p = _roll_p; pitch_p = _pitch_p; yaw_p = _yaw_p; }
     void setMaxRates(float max_roll_rate_rad, float max_pitch_rate_rad, float max_yaw_rate_rad);
     float getMaxYawRateRad() const { return _max_yaw_rate_rad; }
 
@@ -154,6 +155,16 @@ public:
     void setTargetThrottle(float throttle_pct);     // 0.0 .. 100.0%
     void setThrottleSlewRate(float slew_per_sec);   // vd 2.0f = từ 0% lên 100% trong 0.5s
 
+    // Bật / Tắt chế độ cân bằng PID (Stabilize vs Acro/Open-loop)
+    void setPidEnabled(bool en) {
+        if (!en) {
+            _rate_pid_roll.reset();
+            _rate_pid_pitch.reset();
+        }
+        _pid_enabled = en;
+    }
+    bool isPidEnabled() const { return _pid_enabled; }
+
     // Chế độ test thủ công được quản lý trực tiếp qua quadMotors (QuadEscController)
 
     // Cài đặt hệ số PID thời gian thực
@@ -161,6 +172,7 @@ public:
     void setRatePidPitch(float kp, float ki, float kd);
     void setRatePidYaw(float kp, float ki, float kd);
     void setAngleGains(float roll_p, float pitch_p, float yaw_p);
+    void getAngleGains(float& roll_p, float& pitch_p, float& yaw_p) const { _att_control.getAngleGains(roll_p, pitch_p, yaw_p); }
 
     /**
      * @brief Chạy chu trình điều khiển bay thời gian thực
@@ -179,6 +191,7 @@ public:
                 float dt, bool is_armed, bool yaw_valid = true);
 
     void reset();
+    void resetIntegrators(); // Reset riêng PID rate + att control + filters (giữ nguyên throttle khi khôi phục ổn định)
 
     // Getters cho giám sát và Telemetry
     float getFilteredGx() const { return _filtered_gx; }
@@ -249,6 +262,7 @@ private:
     bool     _invert_yaw;
     bool     _yaw_torque_enabled;
     float    _yaw_rate_ff;
+    bool     _pid_enabled;
 };
 
 /**

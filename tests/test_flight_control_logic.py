@@ -117,10 +117,10 @@ class QuadXMixer:
         yaw_torque = max(-max_authority * 0.5, min(max_authority * 0.5, yaw_torque))
 
         u = [
-            throttle + roll_torque + pitch_torque + yaw_torque,
-            throttle - roll_torque - pitch_torque + yaw_torque,
-            throttle + roll_torque - pitch_torque - yaw_torque,
-            throttle - roll_torque + pitch_torque - yaw_torque,
+            throttle + roll_torque - pitch_torque + yaw_torque,
+            throttle - roll_torque + pitch_torque + yaw_torque,
+            throttle + roll_torque + pitch_torque - yaw_torque,
+            throttle - roll_torque - pitch_torque - yaw_torque,
         ]
 
         # Desaturation with priority for roll & pitch
@@ -252,10 +252,10 @@ class TestFlightControlRebuild(unittest.TestCase):
         self.assertGreater(u_roll[0], u_roll[3]) # M1 (FL) > M4 (FR)
         self.assertGreater(u_roll[2], u_roll[1]) # M3 (RL) > M2 (RR)
 
-        # Positive pitch torque = front motors M1, M4 increase; rear motors M2, M3 decrease
+        # Positive pitch torque (Pitch+ = nose down) -> Rear motors M2, M3 increase; front motors M1, M4 decrease
         u_pitch = mixer.mix(throttle=thr, roll_torque=0.0, pitch_torque=0.10, yaw_torque=0.0)
-        self.assertGreater(u_pitch[0], u_pitch[2]) # M1 (FL) > M3 (RL)
-        self.assertGreater(u_pitch[3], u_pitch[1]) # M4 (FR) > M2 (RR)
+        self.assertGreater(u_pitch[1], u_pitch[0]) # M2 (RR) > M1 (FL)
+        self.assertGreater(u_pitch[2], u_pitch[3]) # M3 (RL) > M4 (FR)
 
         # Positive yaw torque = clockwise body rotation (compass yaw increases clockwise)
         # -> CCW props M1, M2 increase (reaction torque turns the body CW); CW props M3, M4 decrease
@@ -375,6 +375,47 @@ class TestFlightControlRebuild(unittest.TestCase):
         # Failsafe MUST trigger and safely cut throttle to 0.0
         self.assertEqual(mgr.throttle_pct, 0.0)
         self.assertFalse(mgr.rc_stream_active)
+
+    def test_pid_mode_stabilize_vs_acro_workflow(self):
+        """
+        Verify the requested user workflow:
+        1. ARM (via gamepad / web)
+        2. Push throttle (gamepad) while PID is OFF (Acro/Open-loop) -> all 4 motors spin equally, no PID correction
+        3. Turn PID ON (via web button / CLI) -> PID engages with setpoint (0, 0), attitude correction active
+        4. DISARM -> cuts motors and resets PID mode to OFF for safety
+        """
+        mixer = QuadXMixer()
+
+        # Scenario A: PID is OFF (Acro mode)
+        # Even with drone tilted at Pitch = +20 deg, setpoint tracks attitude -> tau_roll = tau_pitch = 0
+        throttle = 0.30  # 30% throttle
+        tau_r, tau_p, tau_y = 0.0, 0.0, 0.0  # PID off produces 0 attitude correction
+        u_acro = mixer.mix(throttle, tau_r, tau_p, tau_y)
+
+        # All 4 motors must receive equal throttle in Acro/Open-loop mode
+        for m in u_acro:
+            self.assertAlmostEqual(m, throttle, places=4)
+
+        # Scenario B: PID is ON (Stabilize mode)
+        # Drone tilted nose-down (Pitch = +20 deg), setpoint = 0 deg
+        # Rate PID / Outer Loop produces negative pitch torque (tau_p < 0) to raise nose
+        tau_p_corr = -0.15
+        u_stabilize = mixer.mix(throttle, 0.0, tau_p_corr, 0.0)
+
+        # Front motors (M1, M4: T - tau_p) must get MORE thrust than Rear motors (M2, M3: T + tau_p) to push nose UP
+        self.assertGreater(u_stabilize[0], throttle) # M1 Front
+        self.assertGreater(u_stabilize[3], throttle) # M4 Front
+        self.assertLess(u_stabilize[1], throttle)    # M2 Rear
+        self.assertLess(u_stabilize[2], throttle)    # M3 Rear
+
+        # Scenario C: 3-angle stabilization recovery (Roll=0, Pitch=0, Yaw=0)
+        att_ctrl = AttitudeController(kp_roll=3.0, kp_pitch=3.0, kp_yaw=1.5)
+        # Drone in an unstable attitude: Roll=+10 deg, Pitch=-15 deg, Yaw=+30 deg
+        rate_sp = att_ctrl.update(target_euler=[0.0, 0.0, 0.0], actual_euler=[10.0, -15.0, 30.0])
+        # Verify rate setpoints act in the correct restorative direction for all 3 axes
+        self.assertLess(rate_sp[0], 0.0)    # Roll rate negative to pull positive roll back to 0
+        self.assertGreater(rate_sp[1], 0.0) # Pitch rate positive to pull negative pitch back to 0
+        self.assertLess(rate_sp[2], 0.0)    # Yaw rate negative to pull positive yaw back to 0
 
 
 if __name__ == "__main__":

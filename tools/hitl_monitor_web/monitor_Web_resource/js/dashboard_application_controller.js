@@ -105,6 +105,8 @@ class DashboardApplicationController {
     if (btnDisarm) {
       btnDisarm.onclick = () => {
         this.telemetryStore.sendCommand("disarm");
+        this.telemetryStore.lastPidEnabled = false;
+        this.updatePidButtonUi(false);
         const rng = getElement("rngThrottle");
         const lbl = getElement("lblThrottle");
         if (rng) rng.value = 0;
@@ -139,6 +141,8 @@ class DashboardApplicationController {
     if (btnLevel) {
       btnLevel.onclick = () => {
         this.telemetryStore.sendCommand("level");
+        this.telemetryStore.lastPidEnabled = true;
+        this.updatePidButtonUi(true);
       };
     }
 
@@ -152,7 +156,10 @@ class DashboardApplicationController {
     const btnPidView = getElement("btnPidView");
     if (btnPidView) {
       btnPidView.onclick = () => {
-        this.telemetryStore.sendCommand("pid");
+        const nextState = !this.telemetryStore.lastPidEnabled;
+        this.telemetryStore.sendCommand(nextState ? "pid on" : "pid off");
+        this.telemetryStore.lastPidEnabled = nextState;
+        this.updatePidButtonUi(nextState);
       };
     }
 
@@ -240,6 +247,9 @@ class DashboardApplicationController {
           if (lbl) lbl.textContent = "0%";
         });
         this.telemetryStore.sendCommand("manual off");
+        this.telemetryStore.sendCommand("pid on");
+        this.telemetryStore.lastPidEnabled = true;
+        this.updatePidButtonUi(true);
       };
     }
 
@@ -370,13 +380,13 @@ class DashboardApplicationController {
         }
         selDroneModel.value = savedModel;
         this.sceneManager.setDroneModel(savedModel);
-      } catch (_) {}
+      } catch (_) { }
       selDroneModel.onchange = () => {
         const chosen = selDroneModel.value || "sci_fi_bubble";
         this.sceneManager.setDroneModel(chosen);
         try {
           localStorage.setItem("uav_3d_model", chosen);
-        } catch (_) {}
+        } catch (_) { }
       };
     }
 
@@ -393,7 +403,7 @@ class DashboardApplicationController {
       if (btnThemeToggle) btnThemeToggle.textContent = found.label;
       try {
         localStorage.setItem("uav_ui_theme", found.id);
-      } catch (_) {}
+      } catch (_) { }
     };
     try {
       const savedTheme = localStorage.getItem("uav_ui_theme");
@@ -457,7 +467,7 @@ class DashboardApplicationController {
     if (!DashboardApplicationController._dbgFrame) DashboardApplicationController._dbgFrame = 0;
     if (++DashboardApplicationController._dbgFrame % 60 === 0) {
       const activeBtns = (gp.buttons || []).map((b, i) => b.pressed ? i : null).filter(x => x !== null).join(",");
-      console.log(`[GP Debug] id="${id}" isRC=${isRcTransmitter} axes=[${[...gp.axes].map(v=>v.toFixed(3)).join(",")}] btns=[${activeBtns}]`);
+      console.log(`[GP Debug] id="${id}" isRC=${isRcTransmitter} axes=[${[...gp.axes].map(v => v.toFixed(3)).join(",")}] btns=[${activeBtns}]`);
     }
     const deviceName = gp.id ? (isRcTransmitter ? "🎮 RadioMaster (HID)" : (id.length > 16 ? id.substring(0, 16) : id)) : "Đã nhận";
 
@@ -554,10 +564,10 @@ class DashboardApplicationController {
       }
 
       const lblGamepadStatus = document.getElementById("lblGamepadStatus");
-      const lblGamepadArm    = document.getElementById("lblGamepadArm");
-      const lblStickL        = document.getElementById("lblStickL");
-      const lblStickR        = document.getElementById("lblStickR");
-      const lblEspConfirmed  = document.getElementById("lblEspConfirmed");
+      const lblGamepadArm = document.getElementById("lblGamepadArm");
+      const lblStickL = document.getElementById("lblStickL");
+      const lblStickR = document.getElementById("lblStickR");
+      const lblEspConfirmed = document.getElementById("lblEspConfirmed");
 
       // Cổng an toàn kiểm tra kết nối Transport thật (WebSocket hoặc Serial)
       const hasLink = this.telemetryStore.isTransportOpen();
@@ -629,6 +639,8 @@ class DashboardApplicationController {
           lastSentThrottle = 0;
           lastSendTime = performance.now();
           this.telemetryStore.sendCommand("disarm");
+          this.telemetryStore.lastPidEnabled = false;
+          this.updatePidButtonUi(false);
           setThrottle(0);
         }
         else if (isArmRequested) {
@@ -657,7 +669,7 @@ class DashboardApplicationController {
         if (justPressed(15)) { activeMotor = 2; baseThrottle = 0; this.telemetryStore.sendCommand("m2"); }
         if (justPressed(13)) { activeMotor = 3; baseThrottle = 0; this.telemetryStore.sendCommand("m3"); }
         if (justPressed(14)) { activeMotor = 4; baseThrottle = 0; this.telemetryStore.sendCommand("m4"); }
-        if (justPressed(3))  { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
+        if (justPressed(3)) { activeMotor = 0; baseThrottle = 0; this.telemetryStore.sendCommand("all"); }
 
         // 5. KIỂM TRA ARMED TỪ BẤT KỲ NGUỒN NÀO (tay cầm hoặc Web UI)
         // effectiveArmed = true nếu: (a) đã nhấn nút ARM trên tay cầm, HOẶC (b) ESP32 xác nhận ARMED từ Web UI
@@ -703,10 +715,10 @@ class DashboardApplicationController {
 
         if (hasLink && (((thrChanged || attChanged) && (now - lastSendTime >= 30)) || heartbeatDue)) {
           lastSentThrottle = totalThr;
-          lastSentRoll     = inputs.rollDeg;
-          lastSentPitch    = inputs.pitchDeg;
-          lastSentYaw      = inputs.yawDeg;
-          lastSendTime     = now;
+          lastSentRoll = inputs.rollDeg;
+          lastSentPitch = inputs.pitchDeg;
+          lastSentYaw = inputs.yawDeg;
+          lastSendTime = now;
 
           if (activeMotor === 0) {
             // Gửi gói tin RC chuẩn: RC,<throttle>,<roll>,<pitch>,<yaw>,1
@@ -743,6 +755,20 @@ class DashboardApplicationController {
       this.csvReplayer.startPlayback();
     };
     reader.readAsText(selectedFile);
+  }
+
+  updatePidButtonUi(enabled) {
+    const btn = document.getElementById("btnPidView");
+    if (!btn) return;
+    if (enabled) {
+      btn.classList.add("active");
+      btn.textContent = "✅ PID: Ổn Định (0°)";
+      btn.title = "PID đang giữ ổn định ở 3 góc (0,0,0). Nhấn để chuyển sang ACRO (Tắt PID)";
+    } else {
+      btn.classList.remove("active");
+      btn.textContent = "Bật PID (0°)";
+      btn.title = "Nhấn để kéo Drone từ mất ổn định về thăng bằng 3 góc = 0°";
+    }
   }
 }
 

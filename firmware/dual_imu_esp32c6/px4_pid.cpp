@@ -168,15 +168,15 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
     // Bản cũ đặt +P cho motor TRƯỚC => vòng Pitch HỒI TIẾP DƯƠNG (tự lật tới ngưỡng failsafe 60°).
     // Cột Yaw phải đổi dấu CÙNG LÚC với dấu Yaw của cảm biến, nếu không vòng Yaw thành hồi tiếp dương.
     //
-    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R + P + Y   // Front nhận +P
-    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R - P + Y   // Rear  nhận -P
-    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R - P - Y   // Rear  nhận -P
-    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R + P - Y   // Front nhận +P
+    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R - P + Y   // Front nhận -P
+    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R + P + Y   // Rear  nhận +P
+    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R + P - Y   // Rear  nhận +P
+    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R - P - Y   // Front nhận -P
     float m[4];
-    m[0] = throttle + roll_torque + pitch_torque + yaw_torque;
-    m[1] = throttle - roll_torque - pitch_torque + yaw_torque;
-    m[2] = throttle + roll_torque - pitch_torque - yaw_torque;
-    m[3] = throttle - roll_torque + pitch_torque - yaw_torque;
+    m[0] = throttle + roll_torque - pitch_torque + yaw_torque;
+    m[1] = throttle - roll_torque + pitch_torque + yaw_torque;
+    m[2] = throttle + roll_torque + pitch_torque - yaw_torque;
+    m[3] = throttle - roll_torque - pitch_torque - yaw_torque;
 
     // Thuật toán Desaturation chuẩn PX4: Co giãn bảo toàn hình học mô-men (Dynamic Scale & Shift)
     float max_val = m[0];
@@ -231,7 +231,7 @@ PX4_FlightController::PX4_FlightController()
     : _target_roll(0.0f), _target_pitch(0.0f), _target_yaw(0.0f), _target_throttle(0.0f),
       _target_throttle_raw(0.0f), _throttle_slew_per_sec(2.0f),
       _filtered_gx(0.0f), _filtered_gy(0.0f), _filtered_gz(0.0f),
-      _invert_pitch(false), _invert_yaw(false), _yaw_torque_enabled(true), _yaw_rate_ff(0.0f) {
+      _invert_pitch(false), _invert_yaw(false), _yaw_torque_enabled(true), _yaw_rate_ff(0.0f), _pid_enabled(true) {
     _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
     _tau[0] = 0.0f; _tau[1] = 0.0f; _tau[2] = 0.0f;
     for (int i = 0; i < 4; i++) {
@@ -326,6 +326,21 @@ void PX4_FlightController::reset() {
     }
 }
 
+void PX4_FlightController::resetIntegrators() {
+    _gyro_filter_x.reset(0.0f);
+    _gyro_filter_y.reset(0.0f);
+    _gyro_filter_z.reset(0.0f);
+    _rate_pid_roll.reset();
+    _rate_pid_pitch.reset();
+    _rate_pid_yaw.reset();
+    _att_control.reset();
+
+    _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
+    _tau[0] = 0.0f; _tau[1] = 0.0f; _tau[2] = 0.0f;
+    _yaw_rate_ff = 0.0f;
+    // GIỮ NGUYÊN _target_throttle và _target_throttle_raw để duy trì lực nâng khi khôi phục ổn định
+}
+
 void PX4_FlightController::update(float actual_roll, float actual_pitch, float actual_yaw,
                                   float raw_gx, float raw_gy, float raw_gz,
                                   float dt, bool is_armed, bool yaw_valid) {
@@ -393,9 +408,16 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
 
     // 3. VÒNG TRONG (Inner Angular Rate PID-Loop): Tính mô-men điều khiển
     bool allow_integral = (_target_throttle >= 0.25f); // Chỉ cho phép tích phân khi ga >= 25% (gần ngưỡng hover)
-    _tau[0] = _rate_pid_roll.update(_rate_sp_rad[0], actual_gx_rad, dt, allow_integral);
-    _tau[1] = _rate_pid_pitch.update(_rate_sp_rad[1], actual_gy_rad, dt, allow_integral);
-    if (_invert_pitch) _tau[1] = -_tau[1];
+    if (_pid_enabled) {
+        _tau[0] = _rate_pid_roll.update(_rate_sp_rad[0], actual_gx_rad, dt, allow_integral);
+        _tau[1] = _rate_pid_pitch.update(_rate_sp_rad[1], actual_gy_rad, dt, allow_integral);
+        if (_invert_pitch) _tau[1] = -_tau[1];
+    } else {
+        _rate_pid_roll.reset();
+        _rate_pid_pitch.reset();
+        _tau[0] = 0.0f;
+        _tau[1] = 0.0f;
+    }
     if (_yaw_torque_enabled) {
         _tau[2] = _rate_pid_yaw.update(_rate_sp_rad[2],  actual_gz_rad, dt, allow_integral);
         if (_invert_yaw) _tau[2] = -_tau[2];

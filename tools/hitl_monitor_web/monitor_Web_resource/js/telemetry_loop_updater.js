@@ -91,6 +91,15 @@ class TelemetryLoopUpdater {
       recDuration.textContent = `${mins}:${secs}`;
     }
 
+    // 6. Đồng bộ trạng thái nút Bật/Tắt PID từ telemetry phần cứng
+    if (latestSample.pid_en !== undefined && controller && typeof controller.updatePidButtonUi === "function") {
+      const isEn = (latestSample.pid_en === 1);
+      if (controller.telemetryStore.lastPidEnabled !== isEn) {
+        controller.telemetryStore.lastPidEnabled = isEn;
+        controller.updatePidButtonUi(isEn);
+      }
+    }
+
     latestSample.m.forEach((speed, index) => {
       const pct = Math.max(0, Math.min(100, speed / 10));
       const mb = getElement("mb" + index);

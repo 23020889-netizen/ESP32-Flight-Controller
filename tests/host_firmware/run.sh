@@ -3,6 +3,7 @@
 #  - frame_sim: dấu vòng kín 3 trục theo vật lý đã xác minh trên khung thật
 #  - yaw_sim:   điều khiển Yaw (cần gạt = tốc độ, ESC 50 Hz, ma sát giá thử)
 #  - xsens_sign_test: driver Xsens thật, dấu Yaw/gz theo chiều la bàn
+#  - stand_sim: hệ số PID mặc định trên lưới khung/trễ thực tế + auto-tune end-to-end
 set -euo pipefail
 cd "$(dirname "$0")"
 FW=../../firmware/dual_imu_esp32c6
@@ -13,7 +14,10 @@ for t in frame_sim yaw_sim; do
         "$t.cpp" "$FW/px4_pid.cpp" "$FW/px4_filters.cpp" -o "$OUT/fc_$t"
     "$OUT/fc_$t" || status=1
 done
-g++ -std=c++17 -O1 -Wall -Wextra -Wno-unused-parameter -I. -include Arduino.h \
+g++ -std=c++17 -O1 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-unused-but-set-variable -I. -include Arduino.h \
     xsens_sign_test.cpp "$FW/xsens_mti.cpp" -o "$OUT/fc_xsens_sign_test"
 "$OUT/fc_xsens_sign_test" || status=1
+g++ -std=c++17 -O2 -Wall -Wextra -Wno-unused-parameter -I. -include Arduino.h \
+    stand_sim.cpp "$FW/px4_pid.cpp" "$FW/px4_filters.cpp" "$FW/pid_autotuner.cpp" -o "$OUT/fc_stand_sim"
+"$OUT/fc_stand_sim" || status=1
 exit $status

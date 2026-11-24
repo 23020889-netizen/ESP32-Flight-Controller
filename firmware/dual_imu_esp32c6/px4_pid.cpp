@@ -9,15 +9,15 @@ PX4_FlightController px4Controller;
 // ============================================================================
 PX4_RatePID::PX4_RatePID()
     : _integral(0.0f), _last_rate_meas(0.0f),
-      _p_out(0.0f), _d_out(0.0f), _first_run(true) {
-    // Hệ số chuẩn thận trọng cho đơn vị rad/s (phù hợp ESC 50Hz, không dùng D-term để chống khuếch đại nhiễu)
-    _gains = { 0.06f, 0.03f, 0.0f, 0.10f };
+      _p_out(0.0f), _d_out(0.0f), _d_cutoff_hz(30.0f), _first_run(true) {
+    // Mặc định Roll/Pitch (đơn vị rad/s), xem PX4_FlightController::init()
+    _gains = { 0.040f, 0.080f, 0.0010f, 0.20f };
 }
 
 void PX4_RatePID::init(float kp, float ki, float kd, float i_max, float d_cutoff_hz, float loop_rate_hz) {
     setGains(kp, ki, kd, i_max);
+    if (d_cutoff_hz > 0.0f) _d_cutoff_hz = d_cutoff_hz;
     setLoopRate(loop_rate_hz);
-    _d_lpf.setCutoffFrequency(loop_rate_hz, d_cutoff_hz);
     reset();
 }
 
@@ -31,10 +31,11 @@ void PX4_RatePID::setGains(float kp, float ki, float kd, float i_max) {
 }
 
 void PX4_RatePID::setLoopRate(float loop_rate_hz) {
-    _d_lpf.setCutoffFrequency(loop_rate_hz, 20.0f); // 20Hz D-term smoothing
+    // Giữ tần số cắt D đã cấu hình (bản cũ luôn ép 20 Hz)
+    _d_lpf.setCutoffFrequency(loop_rate_hz, _d_cutoff_hz);
 }
 
-float PX4_RatePID::update(float rate_sp, float rate_meas, float dt, bool allow_integral) {
+float PX4_RatePID::update(float rate_sp, float rate_meas, float dt, bool allow_integral, float out_limit) {
     if (isnan(rate_meas) || isinf(rate_meas) || isnan(rate_sp)) return 0.0f;
     if (dt <= 0.0f || dt > 0.1f) {
         dt = 0.005f; // Dự phòng 200Hz
@@ -48,30 +49,38 @@ float PX4_RatePID::update(float rate_sp, float rate_meas, float dt, bool allow_i
     // 1. Proportional term
     _p_out = _gains.kp * err;
 
-    // 2. Integral term (kèm Anti-Windup và ngắt khi throttle thấp)
-    if (allow_integral) {
-        _integral += _gains.ki * err * dt;
-        if (_integral > _gains.i_max)  _integral = _gains.i_max;
-        if (_integral < -_gains.i_max) _integral = -_gains.i_max;
-    } else {
-        _integral = 0.0f;
-    }
+    if (!(out_limit > 0.0f) || out_limit > 1.0f) out_limit = 1.0f;
 
-    // 3. Derivative on Measurement (Tránh spike giật khi đổi Setpoint)
+    // 2. Derivative on Measurement (Tránh spike giật khi đổi Setpoint)
     if (_first_run) {
         _last_rate_meas = rate_meas;
         _first_run = false;
         _d_out = 0.0f;
+        _d_lpf.reset(0.0f);
     } else {
         float d_raw = -_gains.kd * ((rate_meas - _last_rate_meas) / dt);
         _last_rate_meas = rate_meas;
         _d_out = _d_lpf.apply(d_raw);
     }
 
-    // Tổng hợp mô-men và bão hòa trong [-1.0, 1.0]
+    // 3. Integral term: ngắt khi ga thấp + anti-windup theo giới hạn mô-men thực của Mixer
+    if (allow_integral) {
+        const float unsat = _p_out + _integral + _d_out;
+        const bool push_high = (unsat >=  out_limit) && (err > 0.0f);
+        const bool push_low  = (unsat <= -out_limit) && (err < 0.0f);
+        if (!push_high && !push_low) {
+            _integral += _gains.ki * err * dt;
+        }
+        if (_integral > _gains.i_max)  _integral = _gains.i_max;
+        if (_integral < -_gains.i_max) _integral = -_gains.i_max;
+    } else {
+        _integral = 0.0f;
+    }
+
+    // Tổng hợp mô-men và bão hòa theo quyền điều khiển của Mixer
     float torque_out = _p_out + _integral + _d_out;
-    if (torque_out > 1.0f)  torque_out = 1.0f;
-    if (torque_out < -1.0f) torque_out = -1.0f;
+    if (torque_out > out_limit)  torque_out = out_limit;
+    if (torque_out < -out_limit) torque_out = -out_limit;
 
     return torque_out;
 }
@@ -147,9 +156,7 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
     }
 
     // Giới hạn mô-men Roll/Pitch/Yaw theo tỷ lệ mức ga để chống dập tắt động cơ khi ở mức ga thấp
-    float max_authority = throttle * 0.70f;
-    if (max_authority < 0.08f) max_authority = 0.08f;
-    if (max_authority > 0.35f) max_authority = 0.35f;
+    const float max_authority = torqueAuthority(throttle);
 
     roll_torque  = constrain(roll_torque,  -max_authority, max_authority);
     pitch_torque = constrain(pitch_torque, -max_authority, max_authority);
@@ -230,6 +237,7 @@ void PX4_QuadMixer::mix(float throttle, float roll_torque, float pitch_torque, f
 PX4_FlightController::PX4_FlightController()
     : _target_roll(0.0f), _target_pitch(0.0f), _target_yaw(0.0f), _target_throttle(0.0f),
       _target_throttle_raw(0.0f), _throttle_slew_per_sec(2.0f),
+      _integral_min_throttle(PidDefaults::INTEGRAL_MIN_THROTTLE),
       _filtered_gx(0.0f), _filtered_gy(0.0f), _filtered_gz(0.0f),
       _invert_pitch(false), _invert_yaw(false), _yaw_torque_enabled(true), _yaw_rate_ff(0.0f), _pid_enabled(true) {
     _rate_sp_rad[0] = 0.0f; _rate_sp_rad[1] = 0.0f; _rate_sp_rad[2] = 0.0f;
@@ -246,18 +254,21 @@ void PX4_FlightController::init(float loop_freq_hz) {
     _gyro_filter_y.setCutoffFrequency(loop_freq_hz, 30.0f);
     _gyro_filter_z.setCutoffFrequency(loop_freq_hz, 30.0f);
 
-    // Cài đặt Inner Rate PID loops (Đơn vị rad/s) - Tối ưu cho cơ cấu chấp hành ESC 50Hz:
-    // Roll & Pitch: Kp, Ki, Kd, i_max, d_cutoff, loop_freq
-    _rate_pid_roll.init (0.06f, 0.03f, 0.0f, 0.10f, 10.0f, loop_freq_hz);
-    _rate_pid_pitch.init(0.06f, 0.03f, 0.0f, 0.10f, 10.0f, loop_freq_hz);
+    // Inner Rate PID Roll & Pitch (rad/s): Kp, Ki, Kd, i_max, d_cutoff, loop_freq — xem PidDefaults
+    // - Kp thấp hơn bản cũ (0.06 -> 0.040): trễ tổng ~35 ms (ESC 50 Hz + motor + Xsens 100 Hz) giới hạn
+    //   băng thông vòng trong ~10 rad/s; Kp 0.06 mất ổn định trên khung nhẹ.
+    // - Kd 0.0010 với lọc 30 Hz (bản cũ lọc 10 Hz làm mất pha dẫn của D) bù pha cho trễ.
+    // - Ki/i_max lớn hơn để thắng mô-men trọng lực khi trọng tâm lệch trục xoay của giá thử.
+    _rate_pid_roll.init (PidDefaults::RP_KP, PidDefaults::RP_KI, PidDefaults::RP_KD, PidDefaults::RP_IMAX, PidDefaults::RP_DCUT, loop_freq_hz);
+    _rate_pid_pitch.init(PidDefaults::RP_KP, PidDefaults::RP_KI, PidDefaults::RP_KD, PidDefaults::RP_IMAX, PidDefaults::RP_DCUT, loop_freq_hz);
 
     // Yaw: mô-men Yaw do chênh lệch lực cản cánh quạt yếu hơn Roll/Pitch nhiều lần, nên cần hệ số
     // lớn hơn (bản cũ Kp=0.10, Ki=0.02, i_max=0.08 => mô-men tối đa ~0.08, không thắng nổi ma sát
     // ổ trục giá thử => drone không xoay). Băng thông Yaw thấp (< 2 Hz) nên ESC 50 Hz không gây mất ổn định.
-    _rate_pid_yaw.init  (0.20f, 0.10f, 0.0f, 0.15f, 10.0f, loop_freq_hz);
+    _rate_pid_yaw.init  (PidDefaults::Y_KP, PidDefaults::Y_KI, PidDefaults::Y_KD, PidDefaults::Y_IMAX, PidDefaults::Y_DCUT, loop_freq_hz);
 
-    // Vòng ngoài (angle)
-    _att_control.setAngleGains(3.0f, 3.0f, 1.5f);
+    // Vòng ngoài (angle): 4.0 (bản cũ 3.0) — đủ cứng để chống con lắc trọng lực trên giá thử
+    _att_control.setAngleGains(PidDefaults::ANG_RP, PidDefaults::ANG_RP, PidDefaults::ANG_Y);
 
     // Đặt giới hạn tốc độ góc thấp phù hợp ESC 50Hz (gọi sau init)
     _att_control.setMaxRates(60.0f * DEG_TO_RAD, 60.0f * DEG_TO_RAD, 45.0f * DEG_TO_RAD);
@@ -327,9 +338,8 @@ void PX4_FlightController::reset() {
 }
 
 void PX4_FlightController::resetIntegrators() {
-    _gyro_filter_x.reset(0.0f);
-    _gyro_filter_y.reset(0.0f);
-    _gyro_filter_z.reset(0.0f);
+    // KHÔNG reset bộ lọc Gyro về 0 ở đây: lệnh này được gọi lúc đang bay; ép bộ lọc về 0 tạo bước nhảy
+    // giả trên tốc độ góc đã lọc => xung P/D đúng lúc vừa bật PID.
     _rate_pid_roll.reset();
     _rate_pid_pitch.reset();
     _rate_pid_yaw.reset();
@@ -407,10 +417,15 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
     }
 
     // 3. VÒNG TRONG (Inner Angular Rate PID-Loop): Tính mô-men điều khiển
-    bool allow_integral = (_target_throttle >= 0.25f); // Chỉ cho phép tích phân khi ga >= 25% (gần ngưỡng hover)
+    // Tích phân bật từ 15% ga (bản cũ 25%): trên giá thử thường chạy dưới 25% ga, khi đó tích phân bị
+    // tắt nên không bù được mô-men trọng lực do lệch trọng tâm => drone ngả dần rồi lật.
+    // Đầu ra mỗi vòng giới hạn đúng quyền điều khiển của Mixer => anti-windup chính xác.
+    bool allow_integral = (_target_throttle >= _integral_min_throttle);
+    const float auth_rp = PX4_QuadMixer::torqueAuthority(_target_throttle);
+    const float auth_y  = auth_rp * 0.5f;
     if (_pid_enabled) {
-        _tau[0] = _rate_pid_roll.update(_rate_sp_rad[0], actual_gx_rad, dt, allow_integral);
-        _tau[1] = _rate_pid_pitch.update(_rate_sp_rad[1], actual_gy_rad, dt, allow_integral);
+        _tau[0] = _rate_pid_roll.update(_rate_sp_rad[0], actual_gx_rad, dt, allow_integral, auth_rp);
+        _tau[1] = _rate_pid_pitch.update(_rate_sp_rad[1], actual_gy_rad, dt, allow_integral, auth_rp);
         if (_invert_pitch) _tau[1] = -_tau[1];
     } else {
         _rate_pid_roll.reset();
@@ -419,7 +434,7 @@ void PX4_FlightController::update(float actual_roll, float actual_pitch, float a
         _tau[1] = 0.0f;
     }
     if (_yaw_torque_enabled) {
-        _tau[2] = _rate_pid_yaw.update(_rate_sp_rad[2],  actual_gz_rad, dt, allow_integral);
+        _tau[2] = _rate_pid_yaw.update(_rate_sp_rad[2],  actual_gz_rad, dt, allow_integral, auth_y);
         if (_invert_yaw) _tau[2] = -_tau[2];
     } else {
         _rate_pid_yaw.reset();

@@ -53,7 +53,7 @@ class AttitudeController:
 
 
 class RatePID:
-    def __init__(self, kp=0.06, ki=0.03, kd=0.0, i_max=0.10):
+    def __init__(self, kp=0.040, ki=0.080, kd=0.0010, i_max=0.20):  # PidDefaults (Roll/Pitch) in px4_pid.h
         self.kp = kp
         self.ki = ki
         self.kd = kd
@@ -228,7 +228,7 @@ class TestFlightControlRebuild(unittest.TestCase):
         self.assertEqual(rates_noyaw[2], 0.0)
 
     def test_rate_pid(self):
-        pid = RatePID(kp=0.06, ki=0.03, kd=0.0, i_max=0.10)
+        pid = RatePID(kp=0.040, ki=0.080, kd=0.0010, i_max=0.20)
         # Error = 1.0 rad/s
         out = pid.update(rate_sp=1.0, rate_meas=0.0, dt=0.005, allow_integral=True)
         self.assertGreater(out, 0.0)
@@ -236,8 +236,8 @@ class TestFlightControlRebuild(unittest.TestCase):
         # Anti-windup check
         for _ in range(500):
             pid.update(rate_sp=10.0, rate_meas=0.0, dt=0.005, allow_integral=True)
-        self.assertLessEqual(pid.integral, 0.10)
-        self.assertGreaterEqual(pid.integral, -0.10)
+        self.assertLessEqual(pid.integral, 0.20)
+        self.assertGreaterEqual(pid.integral, -0.20)
 
     def test_quad_x_mixer_geometry(self):
         mixer = QuadXMixer()

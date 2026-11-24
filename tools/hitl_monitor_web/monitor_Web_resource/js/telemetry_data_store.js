@@ -19,7 +19,7 @@ class TelemetryDataStore {
     this.lastEspState = "DISARMED";
     this.lastRcSequence = 0;
     this.lastTargetThrottle = 0;
-    this.lastPidEnabled = false;
+    this.lastPidEnabled = true;   // Firmware mặc định PID BẬT (STABILIZE); đồng bộ lại từ telemetry pid_en
 
     // Cache giá trị trạng thái tức thời
     this.currentRoll = 0;

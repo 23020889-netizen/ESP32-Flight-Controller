@@ -14,6 +14,30 @@
 #endif
 
 /**
+ * @brief Hệ số PID mặc định (dùng chung cho init() và lệnh "pid reset").
+ *
+ * Roll/Pitch được chọn bằng mô phỏng vòng kín trên chính mã này (tests/host_firmware/stand_sim.cpp) với
+ * mô hình thực tế: Xsens 100 Hz + trễ, PID 200 Hz, ESC 50 Hz (giữ lệnh 20 ms), motor A2212 bậc 1,
+ * độ cứng khung k = 200..1300 rad/s^2 (giá thử nặng .. drone tự do), con lắc trọng lực trên giá thử
+ * và lệch trọng tâm. Bộ cũ (Kp 0.06, Ki 0.03, Kd 0, Angle 3.0) dao động và lật ở k >= 700.
+ */
+namespace PidDefaults {
+    constexpr float RP_KP   = 0.040f;   // Rate Roll/Pitch
+    constexpr float RP_KI   = 0.080f;
+    constexpr float RP_KD   = 0.0010f;
+    constexpr float RP_IMAX = 0.20f;
+    constexpr float RP_DCUT = 30.0f;    // Hz, lọc thông thấp D-term
+    constexpr float Y_KP    = 0.20f;    // Rate Yaw
+    constexpr float Y_KI    = 0.10f;
+    constexpr float Y_KD    = 0.0f;
+    constexpr float Y_IMAX  = 0.15f;
+    constexpr float Y_DCUT  = 10.0f;
+    constexpr float ANG_RP  = 4.0f;     // Angle P Roll/Pitch (rad/s trên rad)
+    constexpr float ANG_Y   = 1.5f;     // Angle P Yaw
+    constexpr float INTEGRAL_MIN_THROTTLE = 0.15f; // Cho phép tích phân khi ga >= 15%
+}
+
+/**
  * @brief Cấu trúc lưu trữ hệ số PID cho 1 trục (Chuẩn đơn vị Radian/giây)
  */
 struct PidGains {
@@ -42,14 +66,21 @@ public:
      * @param rate_meas Tốc độ góc đo được từ IMU (rad/s)
      * @param dt Khoảng thời gian chu kỳ (giây)
      * @param allow_integral Cho phép tích phân hay không
+     * @param out_limit Giới hạn mô-men THỰC TẾ mà Mixer chấp nhận ở mức ga hiện tại (anti-windup)
+     *
+     * Anti-windup kiểu "conditional integration": khi đầu ra đã chạm out_limit và sai số còn đẩy
+     * tiếp cùng chiều thì ĐÓNG BĂNG tích phân. Bản cũ chỉ kẹp tích phân ở ±i_max, trong khi Mixer
+     * cắt mô-men ở ±(0.08..0.35) => tích phân vẫn tràn khi bão hòa, gây vọt lố khi hồi phục.
      */
-    float update(float rate_sp, float rate_meas, float dt, bool allow_integral);
+    float update(float rate_sp, float rate_meas, float dt, bool allow_integral, float out_limit = 1.0f);
 
     void reset();
 
     // Getters
     float getP() const { return _p_out; }
     float getI() const { return _integral; }
+    // Nạp tích phân (bàn giao mô-men bù trọng lực/lệch trọng tâm từ auto-tune về PID)
+    void setIntegral(float v) { if (!(isnan(v) || isinf(v))) _integral = constrain(v, -_gains.i_max, _gains.i_max); }
     float getD() const { return _d_out; }
     const PidGains& getGains() const { return _gains; }
 
@@ -60,6 +91,7 @@ private:
     float _p_out;
     float _d_out;
     LowPassFilter1p _d_lpf;
+    float _d_cutoff_hz;
     bool  _first_run;
 };
 
@@ -121,6 +153,15 @@ public:
      * @brief Phối trộn ra xung PWM trực tiếp (tương thích ngược)
      */
     void mix(float throttle, float roll_torque, float pitch_torque, float yaw_torque, uint16_t motor_out_us[4]);
+
+    /// Giới hạn mô-men Roll/Pitch mà Mixer chấp nhận ở mức ga [0..1] (Yaw = một nửa).
+    /// Dùng chung cho Mixer và anti-windup của vòng trong để hai nơi luôn khớp nhau.
+    static float torqueAuthority(float throttle) {
+        float a = throttle * 0.70f;
+        if (a < 0.08f) a = 0.08f;
+        if (a > 0.35f) a = 0.35f;
+        return a;
+    }
 };
 
 /**
@@ -154,6 +195,8 @@ public:
     bool isYawTorqueEnabled() const { return _yaw_torque_enabled; }
     void setTargetThrottle(float throttle_pct);     // 0.0 .. 100.0%
     void setThrottleSlewRate(float slew_per_sec);   // vd 2.0f = từ 0% lên 100% trong 0.5s
+    // Ngưỡng ga tối thiểu để bật tích phân vòng trong (dưới ngưỡng: xả tích phân về 0)
+    void setIntegralMinThrottle(float thr) { if (thr >= 0.0f && thr <= 1.0f) _integral_min_throttle = thr; }
 
     // Bật / Tắt chế độ cân bằng PID (Stabilize vs Acro/Open-loop)
     void setPidEnabled(bool en) {
@@ -233,6 +276,7 @@ private:
     float _target_throttle; // 0.0 .. 1.0
     float _target_throttle_raw;     // Giá trị thô người dùng vừa ra lệnh (chưa làm mượt)
     float _throttle_slew_per_sec;   // Tốc độ tăng/giảm ga tối đa (đơn vị 0..1 mỗi giây)
+    float _integral_min_throttle;   // Ngưỡng ga bật tích phân
 
     // Bộ lọc thông thấp bậc 2 Butterworth cho con quay hồi chuyển Gyro
     LowPassFilter2p _gyro_filter_x;

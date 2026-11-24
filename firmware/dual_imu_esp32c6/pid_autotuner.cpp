@@ -9,7 +9,10 @@ PID_AutoTuner::PID_AutoTuner() {
     _state              = TUNE_STATE_IDLE;
     _axis               = TUNE_NONE;
     _abort_reason       = ABORT_NONE;
-    _relay_amplitude    = 0.15f;
+    _relay_amplitude    = AMP_START;
+    _relay_amp_max      = 0.15f;
+    _amp_settle_halves  = 0;
+    _bias               = 0.0f;
     _min_cycles         = 8;
     _abort_angle_deg    = 25.0f;
     _hysteresis_rad     = 0.04f;
@@ -17,16 +20,20 @@ PID_AutoTuner::PID_AutoTuner() {
 }
 
 void PID_AutoTuner::configure(float relay_amplitude, int min_cycles, float abort_angle_deg, float hysteresis_rad) {
-    _relay_amplitude = constrain(relay_amplitude, 0.05f, 0.30f);
+    // relay_amplitude = biên độ TỐI ĐA; relay bắt đầu nhỏ và tự tăng/giảm để dao động vừa phải
+    _relay_amp_max   = constrain(relay_amplitude, AMP_MIN, 0.30f);
     _min_cycles      = constrain(min_cycles, 4, 20);
     _abort_angle_deg = constrain(abort_angle_deg, 10.0f, 45.0f);
     _hysteresis_rad  = constrain(hysteresis_rad, 0.01f, 0.15f);
 }
 
-void PID_AutoTuner::start(TuneAxis axis) {
+void PID_AutoTuner::start(TuneAxis axis, float initial_bias) {
     if (axis == TUNE_NONE) return;
 
     reset();
+    _relay_amplitude   = (AMP_START < _relay_amp_max) ? AMP_START : _relay_amp_max;
+    _amp_settle_halves = 0;
+    _bias              = (isnan(initial_bias) || isinf(initial_bias)) ? 0.0f : constrain(initial_bias, -BIAS_MAX, BIAS_MAX);
     _axis        = axis;
     _relay_sign  = -1.0f; // Bắt đầu bằng âm để ép kéo về cân bằng
     _state       = TUNE_STATE_RELAY;
@@ -58,8 +65,12 @@ void PID_AutoTuner::stop(TuneAbortReason reason) {
 float PID_AutoTuner::update(float rate_meas, float angle_abs, float dt) {
     if (_state != TUNE_STATE_RELAY) return 0.0f;
 
-    // 1. WATCHDOG 1: Đã bỏ giới hạn góc khi test trên giá thử theo yêu cầu
-    (void)angle_abs;
+    // 1. WATCHDOG 1: góc an toàn. Khi vượt ngưỡng, firmware TRẢ QUYỀN cho PID giữ thăng bằng (không
+    //    DISARM), nên luôn tốt hơn để trục trôi tới ngưỡng failsafe 60° rồi bị ngắt motor.
+    if (angle_abs > _abort_angle_deg) {
+        stop(ABORT_TILT_LIMIT);
+        return 0.0f;
+    }
 
     _time_elapsed += dt;
 
@@ -81,6 +92,11 @@ float PID_AutoTuner::update(float rate_meas, float angle_abs, float dt) {
 
     // Theo dõi giá trị đỉnh tuyệt đối trong nửa chu kỳ hiện tại
     float abs_rate = fabsf(rate_meas);
+    // WATCHDOG 3: dao động phân kỳ (tốc độ góc quá lớn) => ngắt ngay, trả quyền cho PID
+    if (abs_rate > RATE_ABORT) {
+        stop(ABORT_TILT_LIMIT);
+        return 0.0f;
+    }
     if (abs_rate > _current_half_peak) {
         _current_half_peak = abs_rate;
     }
@@ -89,8 +105,14 @@ float PID_AutoTuner::update(float rate_meas, float angle_abs, float dt) {
     if (new_sign != _relay_sign) {
         float half_period = _time_elapsed - _last_transition_time;
 
-        // Chỉ chấp nhận nửa chu kỳ thực tế (20ms đến 2000ms)
-        if (half_period >= 0.025f && half_period <= 2.0f && _last_transition_time > 0.0f) {
+        // Thích nghi biên độ relay theo đỉnh vừa đo; nếu vừa đổi biên độ thì đo lại từ đầu
+        // (Ku = 4d/(pi*A) chỉ đúng khi d không đổi trong suốt các chu kỳ được lấy trung bình).
+        bool amp_changed = false;
+        if (_last_transition_time > 0.0f) amp_changed = _adaptAmplitude(_current_half_peak);
+
+        // Chỉ chấp nhận nửa chu kỳ thực tế (20ms đến 2000ms) khi biên độ đã ổn định
+        if (!amp_changed && _amp_settle_halves >= 2 &&
+            half_period >= 0.025f && half_period <= 2.0f && _last_transition_time > 0.0f) {
             _half_period_sum += half_period;
             _half_period_count++;
 
@@ -160,19 +182,27 @@ void PID_AutoTuner::_analyze() {
     _result.ku = ku;
     _result.tu = tu;
 
-    // 1. ZIEGLER-NICHOLS STANDARD (Chuẩn cổ điển)
-    _result.kp = 0.60f * ku;
-    _result.ki = 1.20f * ku / tu;
-    _result.kd = 0.075f * ku * tu;
+    // Luật chỉnh định được chọn bằng mô phỏng (tests/host_firmware/stand_sim.cpp): chạy chính auto-tune này trên
+    // khung độ cứng 200..1300 rad/s^2 (ESC 50 Hz, Xsens 100 Hz, có/không con lắc trọng lực), áp từng luật lên
+    // Ku/Tu đo được rồi kiểm tra vòng kín ở cả mô hình danh nghĩa lẫn khung cứng hơn 30% + trễ thêm 10 ms.
+    // - ZN cổ điển (0.6Ku) mất ổn định ở 3/10 khung khi lệch mô hình => KHÔNG dùng.
+    // - Tyreus-Luyben (tích phân yếu) không thắng nổi con lắc trọng lực ở khung cứng => KHÔNG dùng.
+    // - "ZN không vọt lố" 0.40Ku và bản mềm 0.7x: ổn định 10/10 khung, cả khi lệch mô hình.
+    auto clampf = [](float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); };
 
-    // 2. ZIEGLER-NICHOLS SMOOTH (Khuyên dùng cho Quadcopter để chống rung dải cao)
-    _result.kp_smooth = 0.40f * ku;
-    _result.ki_smooth = 0.60f * ku / tu;
-    _result.kd_smooth = 0.050f * ku * tu;
+    // 1. CHUẨN (lệnh "tune apply"): Kp = 0.40 Ku, Ti = Tu/1.5, Td = Tu/8
+    _result.kp = clampf(0.40f * ku,              0.008f, 0.15f);
+    _result.ki = clampf(0.60f * ku / tu,         0.0f,   1.0f);
+    _result.kd = clampf(0.050f * ku * tu,        0.0f,   0.006f);
 
-    // 3. GỢI Ý OUTER ANGLE P (Dựa trên băng thông vòng trong: P_angle ≈ 1.05 / Tu)
-    // Giới hạn trong khoảng hợp lý [3.5 .. 9.0]
-    _result.angle_p = constrain(1.05f / tu, 3.5f, 9.0f);
+    // 2. MỀM (lệnh "tune apply 50"): 0.7 x bộ chuẩn, thêm biên độ an toàn
+    _result.kp_smooth = clampf(0.28f * ku,       0.008f, 0.15f);
+    _result.ki_smooth = clampf(0.42f * ku / tu,  0.0f,   1.0f);
+    _result.kd_smooth = clampf(0.035f * ku * tu, 0.0f,   0.006f);
+
+    // 3. GỢI Ý OUTER ANGLE P theo băng thông vòng trong: 1.05 / Tu, giới hạn [3.0 .. 6.0]
+    //    (bản cũ cho tới 9.0 — quá cứng với trễ của ESC 50 Hz)
+    _result.angle_p = clampf(1.05f / tu, 3.0f, 6.0f);
 
     _result.valid = true;
 
@@ -181,10 +211,10 @@ void PID_AutoTuner::_analyze() {
     Serial.printf("[TUNE] Thong so vat ly: Tu = %.3f s | Ku = %.4f | Peak_A = %.3f rad/s\n",
                   tu, ku, avg_peak);
     Serial.println("------------------------------------------------------------------");
-    Serial.printf("[TUNE] [1] Bo so ZN CHUAN (Fast / Dynamic):\n");
+    Serial.printf("[TUNE] [1] Bo so CHUAN (0.40 Ku, 'tune apply'):\n");
     Serial.printf("           Kp = %.4f | Ki = %.4f | Kd = %.5f\n",
                   _result.kp, _result.ki, _result.kd);
-    Serial.printf("[TUNE] [2] Bo so ZN MUOT MA (Smooth / Recommended):\n");
+    Serial.printf("[TUNE] [2] Bo so MEM (0.7x, 'tune apply 50'):\n");
     Serial.printf("           Kp = %.4f | Ki = %.4f | Kd = %.5f\n",
                   _result.kp_smooth, _result.ki_smooth, _result.kd_smooth);
     Serial.printf("[TUNE] [3] Outer Angle P khuyen nghi: %.2f\n", _result.angle_p);
@@ -196,6 +226,46 @@ void PID_AutoTuner::_analyze() {
     snprintf(donMsg, sizeof(donMsg), "[TUNE] HOAN THANH %s: Kp=%.4f Ki=%.4f Kd=%.5f | Angle_P=%.2f",
              _result.axis_name, _result.kp_smooth, _result.ki_smooth, _result.kd_smooth, _result.angle_p);
     telemetry_wifi_broadcast_msg(donMsg);
+}
+
+void PID_AutoTuner::_resetMeasurement() {
+    _half_period_sum   = 0.0f;
+    _half_period_count = 0;
+    _cycle_count       = 0;
+    _peak_sum          = 0.0f;
+    _peak_count        = 0;
+    _result.cycles_completed = 0;
+}
+
+bool PID_AutoTuner::_adaptAmplitude(float half_peak) {
+    float new_amp = _relay_amplitude;
+    if (half_peak > AMP_TARGET_HI)                    new_amp = _relay_amplitude * 0.75f;
+    else if (half_peak < AMP_TARGET_LO)               new_amp = _relay_amplitude * 1.25f;
+    if (new_amp > _relay_amp_max) new_amp = _relay_amp_max;
+    if (new_amp < AMP_MIN)        new_amp = AMP_MIN;
+    if (fabsf(new_amp - _relay_amplitude) > 1e-5f) {
+        _relay_amplitude = new_amp;
+        _amp_settle_halves = 0;
+        _resetMeasurement();
+        return true;
+    }
+    if (_amp_settle_halves < 1000) _amp_settle_halves++;
+    return false;
+}
+
+float PID_AutoTuner::updateWithAngleHold(float rate_meas_rad, float axis_angle_deg, float tilt_abs_deg, float dt) {
+    const float ang_rad = axis_angle_deg * 0.017453292519943295f;
+    float hold = -HOLD_P * ang_rad;
+    if (hold >  HOLD_MAX_RAD) hold =  HOLD_MAX_RAD;
+    if (hold < -HOLD_MAX_RAD) hold = -HOLD_MAX_RAD;
+    const float relay = update(rate_meas_rad - hold, tilt_abs_deg, dt);
+    if (_state != TUNE_STATE_RELAY) return 0.0f;      // kết thúc/ngắt: không xuất mô-men tune
+    if (dt > 0.0f && dt < 0.1f) {
+        _bias -= BIAS_KI * ang_rad * dt;
+        if (_bias >  BIAS_MAX) _bias =  BIAS_MAX;
+        if (_bias < -BIAS_MAX) _bias = -BIAS_MAX;
+    }
+    return _bias + relay;
 }
 
 void PID_AutoTuner::reset() {

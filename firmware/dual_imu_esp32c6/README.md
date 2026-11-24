@@ -107,8 +107,21 @@ flowchart TD
 
 ## 📌 3. Bảng Tham Số Mặc Định (Tuning Parameters)
 
+Giá trị trong `PidDefaults` (`px4_pid.h`), chọn bằng mô phỏng `tests/host_firmware/stand_sim.cpp` cho ESC 50 Hz.
+Chi tiết và quy trình chỉnh trên giá thử: [`docs/PID_TUNING_50HZ_ESC.md`](../../docs/PID_TUNING_50HZ_ESC.md).
+
 | Vòng Điều Khiển | Trục | $K_p$ | $K_i$ | $K_d$ | Giới hạn |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Outer Angle P** | Roll | `4.0` | - | - | Max $\pm 60^\circ/\text{s}$ |
+| **Outer Angle P** | Pitch | `4.0` | - | - | Max $\pm 60^\circ/\text{s}$ |
+| **Outer Angle P** | Yaw | `1.5` | - | - | Max $\pm 45^\circ/\text{s}$ |
+| **Inner Rate PID**| Roll | `0.040` | `0.080` | `0.0010` (lọc D 30 Hz) | I-Max $\pm 0.20$ |
+| **Inner Rate PID**| Pitch | `0.040` | `0.080` | `0.0010` (lọc D 30 Hz) | I-Max $\pm 0.20$ |
+| **Inner Rate PID**| Yaw | `0.20` | `0.10` | `0.0` | I-Max $\pm 0.15$ |
+| **Tích phân** | Roll/Pitch/Yaw | bật khi ga $\ge 15\%$ | anti-windup theo giới hạn Mixer | - | - |
+| **Gyro Filter**   | X, Y, Z | Cutoff = $30.0\,\text{Hz}$ | Butterworth Bậc 2 | - | $f_s = 200\,\text{Hz}$ |
+
+--- | :--- | :--- | :--- | :--- | :--- |
 | **Outer Angle P** | Roll | `6.50` | - | - | Max $\pm 220^\circ/\text{s}$ |
 | **Outer Angle P** | Pitch | `6.50` | - | - | Max $\pm 220^\circ/\text{s}$ |
 | **Outer Angle P** | Yaw | `2.80` | - | - | Max $\pm 150^\circ/\text{s}$ |

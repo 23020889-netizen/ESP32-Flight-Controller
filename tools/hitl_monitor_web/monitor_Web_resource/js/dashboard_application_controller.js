@@ -105,8 +105,9 @@ class DashboardApplicationController {
     if (btnDisarm) {
       btnDisarm.onclick = () => {
         this.telemetryStore.sendCommand("disarm");
-        this.telemetryStore.lastPidEnabled = false;
-        this.updatePidButtonUi(false);
+        // Firmware trở về chế độ ổn định (PID BẬT) sau DISARM; nút đồng bộ lại từ telemetry pid_en
+        this.telemetryStore.lastPidEnabled = true;
+        this.updatePidButtonUi(true);
         const rng = getElement("rngThrottle");
         const lbl = getElement("lblThrottle");
         if (rng) rng.value = 0;
@@ -639,8 +640,8 @@ class DashboardApplicationController {
           lastSentThrottle = 0;
           lastSendTime = performance.now();
           this.telemetryStore.sendCommand("disarm");
-          this.telemetryStore.lastPidEnabled = false;
-          this.updatePidButtonUi(false);
+          this.telemetryStore.lastPidEnabled = true;   // Firmware: PID BẬT mặc định sau DISARM
+          this.updatePidButtonUi(true);
           setThrottle(0);
         }
         else if (isArmRequested) {

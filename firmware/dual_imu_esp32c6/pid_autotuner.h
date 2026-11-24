@@ -70,8 +70,10 @@ public:
                    float abort_angle_deg  = 25.0f,
                    float hysteresis_rad   = 0.04f);
 
-    // Bắt đầu tune trục chỉ định
-    void start(TuneAxis axis);
+    // Bắt đầu tune trục chỉ định.
+    // initial_bias: mô-men tích phân PID đang giữ trục đó (bù trọng lực / lệch trọng tâm đã học được).
+    // Relay bắt đầu từ mô-men này thay vì 0 => không bị trọng lực kéo lật ngay khi chuyển sang tune.
+    void start(TuneAxis axis, float initial_bias = 0.0f);
 
     // Dừng chủ động
     void stop(TuneAbortReason reason = ABORT_USER_STOP);
@@ -82,6 +84,25 @@ public:
     // dt: chu kỳ (giây)
     // Trả về: mô-men relay [-1..1]
     float update(float rate_meas, float angle_abs, float dt);
+
+    /**
+     * @brief Relay quanh MỐC GIỮ GÓC (dùng cái này trong vòng bay):
+     * relay đảo chiều theo (rate_meas - rate_hold), với rate_hold = -HOLD_P * axis_angle (kẹp ±HOLD_MAX).
+     * Relay thuần theo tốc độ góc không có thông tin góc => mô-men trọng lực / lệch trọng tâm / trễ làm
+     * trục đang tune trôi dần rồi lật. Mốc giữ góc (4 rad/s/rad) kéo trục về quanh 0° mà gần như
+     * không ảnh hưởng chu kỳ dao động nhanh của relay dùng để đo Ku, Tu.
+     * @param rate_meas_rad  tốc độ góc trục đang tune (rad/s)
+     * @param axis_angle_deg góc trục đang tune so với mốc (độ; Yaw: sai lệch so với hướng lúc bắt đầu)
+     * @param tilt_abs_deg   góc dùng cho ngắt an toàn (độ)
+     */
+    float updateWithAngleHold(float rate_meas_rad, float axis_angle_deg, float tilt_abs_deg, float dt);
+    static constexpr float HOLD_P       = 3.0f;   // rad/s trên rad
+    static constexpr float HOLD_MAX_RAD = 0.6f;   // ~34 deg/s
+    // Bù lệch (biased relay): mô-men hằng do trọng lực / lệch trọng tâm lớn hơn biên độ relay thì relay
+    // ±d quanh 0 không giữ nổi trục. _bias học mô-men đó bằng tích phân chậm của góc trục.
+    static constexpr float BIAS_KI      = 0.2f;   // mô-men chuẩn hóa / (rad * s): chậm, không đuổi theo dao động
+    static constexpr float BIAS_MAX     = 0.25f;
+    float getBias() const { return _bias; }
 
     // Getters trạng thái
     bool      isActive()   const { return _state == TUNE_STATE_RELAY || _state == TUNE_STATE_ANALYZING; }
@@ -105,7 +126,10 @@ private:
     TuneAxis        _axis;
     TuneAbortReason _abort_reason;
 
-    float _relay_amplitude;     // Biên độ relay (0.05 .. 0.30)
+    float _relay_amplitude;     // Biên độ relay đang dùng (tự thích nghi, xem _adaptAmplitude)
+    float _relay_amp_max;       // Biên độ tối đa người dùng cho phép (lệnh "tune roll <amp>")
+    float _bias;                // Mô-men bù lệch (biased relay)
+    int   _amp_settle_halves;   // Số nửa chu kỳ liên tiếp biên độ dao động nằm trong dải mục tiêu
     int   _min_cycles;          // Số chu kỳ cần đo (mặc định 8)
     float _abort_angle_deg;     // Góc ngắt an toàn (mặc định 25.0°)
     float _hysteresis_rad;      // Băng trễ chống nhiễu (rad/s)
@@ -124,6 +148,18 @@ private:
     TuneResult _result;
 
     void _analyze();
+    void _resetMeasurement();
+    bool _adaptAmplitude(float half_peak);   // true nếu vừa đổi biên độ
+
+public:
+    // Dải biên độ dao động tốc độ góc mục tiêu khi tune (rad/s). Relay cố định ±0.10 trên khung nhẹ
+    // (độ cứng k >= 700 rad/s^2) cho dao động > 200 deg/s và lật quá 40 deg trước khi đo xong.
+    static constexpr float AMP_TARGET_LO = 0.35f;   // ~20 deg/s
+    static constexpr float AMP_TARGET_HI = 1.57f;   // ~90 deg/s
+    static constexpr float AMP_MIN       = 0.03f;   // dưới mức này relay không đủ quyền giữ trục
+    static constexpr float RATE_ABORT    = 4.36f;   // ~250 deg/s: dao động phân kỳ => ngắt sớm
+    static constexpr float AMP_START     = 0.03f;
+private:
     void _setAxisName();
 };
 

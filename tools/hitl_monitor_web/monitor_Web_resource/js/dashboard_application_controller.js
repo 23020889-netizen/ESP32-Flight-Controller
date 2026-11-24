@@ -300,18 +300,21 @@ class DashboardApplicationController {
       };
     }
 
-    // Chuyển đổi Mẫu 3D Quadcopter (4 mẫu đều khắc chữ ISILAB trên thân)
+    // Chuyển đổi Mẫu 3D Quadcopter (mặc định Sci-Fi Bubble Quad-X)
     const selDroneModel = getElement("selDroneModel");
     if (selDroneModel) {
       try {
-        const savedModel = localStorage.getItem("uav_3d_model");
-        if (savedModel) {
-          selDroneModel.value = savedModel;
-          this.sceneManager.setDroneModel(savedModel);
+        let savedModel = localStorage.getItem("uav_3d_model");
+        // Nâng cấp tự động nếu trình duyệt lưu cache mẫu con ruồi cũ (glb_cesium)
+        if (!savedModel || savedModel === "glb_cesium" || savedModel === "glb_aero") {
+          savedModel = "sci_fi_bubble";
+          localStorage.setItem("uav_3d_model", "sci_fi_bubble");
         }
+        selDroneModel.value = savedModel;
+        this.sceneManager.setDroneModel(savedModel);
       } catch (_) {}
       selDroneModel.onchange = () => {
-        const chosen = selDroneModel.value || "glb_cesium";
+        const chosen = selDroneModel.value || "sci_fi_bubble";
         this.sceneManager.setDroneModel(chosen);
         try {
           localStorage.setItem("uav_3d_model", chosen);

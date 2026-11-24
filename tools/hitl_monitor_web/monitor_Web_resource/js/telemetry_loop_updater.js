@@ -78,6 +78,19 @@ class TelemetryLoopUpdater {
       window.pidAutoTuner.updateFromTelemetry(latestSample);
     }
 
+    // 5. Cập nhật bảng Ghi Nhật Ký Telemetry (CSV Recorder)
+    const recSamples = getElement("recSamples");
+    if (recSamples) {
+      recSamples.textContent = String(controller.telemetryStore.getCsvRecordCount());
+    }
+    const recDuration = getElement("recDuration");
+    if (recDuration) {
+      const durSec = Math.floor(controller.telemetryStore.getCsvRecordingDurationSeconds());
+      const mins = String(Math.floor(durSec / 60)).padStart(2, "0");
+      const secs = String(durSec % 60).padStart(2, "0");
+      recDuration.textContent = `${mins}:${secs}`;
+    }
+
     latestSample.m.forEach((speed, index) => {
       const pct = Math.max(0, Math.min(100, speed / 10));
       const mb = getElement("mb" + index);

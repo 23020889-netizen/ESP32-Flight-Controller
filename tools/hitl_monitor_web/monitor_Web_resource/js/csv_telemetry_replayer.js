@@ -40,21 +40,50 @@ class CsvTelemetryReplayer {
       const gyrX = parseFloat(cells[indexMap.Gyr_X_dps]) || 0;
       const gyrY = parseFloat(cells[indexMap.Gyr_Y_dps]) || 0;
       const gyrZ = parseFloat(cells[indexMap.Gyr_Z_dps]) || 0;
-      const baseSpeed = 760;
-      const rollMix = roll * 1.4 + gyrX * 0.25;
-      const pitchMix = pitch * 1.4 + gyrY * 0.25;
-      const yawMix = gyrZ * 0.2;
-      const clampSpeed = (value) => Math.max(0, Math.min(1000, value));
-      this.parsedRecords.push({
-        elapsedSeconds, roll, pitch, yaw,
-        z: Math.max(0, 1.5 + (accZ - 9.81) * 0.08),
-        vz: (accZ - 9.81) * 0.15,
-        m: [
+
+      const mpuR = indexMap.MPU_Roll_deg !== undefined ? parseFloat(cells[indexMap.MPU_Roll_deg]) : roll;
+      const mpuP = indexMap.MPU_Pitch_deg !== undefined ? parseFloat(cells[indexMap.MPU_Pitch_deg]) : pitch;
+      const mpuY = indexMap.MPU_Yaw_deg !== undefined ? parseFloat(cells[indexMap.MPU_Yaw_deg]) : yaw;
+      const xsR = indexMap.Xsens_Roll_deg !== undefined ? parseFloat(cells[indexMap.Xsens_Roll_deg]) : roll;
+      const xsP = indexMap.Xsens_Pitch_deg !== undefined ? parseFloat(cells[indexMap.Xsens_Pitch_deg]) : pitch;
+      const xsY = indexMap.Xsens_Yaw_deg !== undefined ? parseFloat(cells[indexMap.Xsens_Yaw_deg]) : yaw;
+
+      let mOutputs;
+      if (indexMap.M1_rads !== undefined || indexMap.M1 !== undefined) {
+        const m1Idx = indexMap.M1_rads !== undefined ? indexMap.M1_rads : indexMap.M1;
+        const m2Idx = indexMap.M2_rads !== undefined ? indexMap.M2_rads : indexMap.M2;
+        const m3Idx = indexMap.M3_rads !== undefined ? indexMap.M3_rads : indexMap.M3;
+        const m4Idx = indexMap.M4_rads !== undefined ? indexMap.M4_rads : indexMap.M4;
+        mOutputs = [
+          parseFloat(cells[m1Idx]) || 0,
+          parseFloat(cells[m2Idx]) || 0,
+          parseFloat(cells[m3Idx]) || 0,
+          parseFloat(cells[m4Idx]) || 0
+        ];
+      } else {
+        const baseSpeed = 760;
+        const rollMix = roll * 1.4 + gyrX * 0.25;
+        const pitchMix = pitch * 1.4 + gyrY * 0.25;
+        const yawMix = gyrZ * 0.2;
+        const clampSpeed = (value) => Math.max(0, Math.min(1000, value));
+        mOutputs = [
           clampSpeed(baseSpeed - rollMix + pitchMix - yawMix),
           clampSpeed(baseSpeed + rollMix - pitchMix - yawMix),
           clampSpeed(baseSpeed + rollMix + pitchMix + yawMix),
           clampSpeed(baseSpeed - rollMix - pitchMix + yawMix)
-        ]
+        ];
+      }
+
+      const zVal = indexMap.Altitude_m !== undefined ? (parseFloat(cells[indexMap.Altitude_m]) || 0) : Math.max(0, 1.5 + (accZ - 9.81) * 0.08);
+      const vzVal = indexMap.Velocity_Vz !== undefined ? (parseFloat(cells[indexMap.Velocity_Vz]) || 0) : (accZ - 9.81) * 0.15;
+
+      this.parsedRecords.push({
+        elapsedSeconds, roll, pitch, yaw,
+        mpu_r: mpuR, mpu_p: mpuP, mpu_y: mpuY,
+        xs_r: xsR, xs_p: xsP, xs_y: xsY,
+        z: zVal,
+        vz: vzVal,
+        m: mOutputs
       });
     }
   }

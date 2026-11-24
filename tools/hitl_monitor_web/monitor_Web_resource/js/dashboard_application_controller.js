@@ -284,6 +284,64 @@ class DashboardApplicationController {
       };
     }
 
+    // 5. ĐIỀU KHIỂN GHI NHẬT KÝ TELEMETRY (CSV RECORDER)
+    const btnRecToggle = getElement("btnRecToggle");
+    const btnRecExport = getElement("btnRecExport");
+    const btnRecClear = getElement("btnRecClear");
+    const recStatus = getElement("recStatus");
+    const recSamples = getElement("recSamples");
+    const recDuration = getElement("recDuration");
+
+    if (btnRecToggle) {
+      btnRecToggle.onclick = () => {
+        if (!this.telemetryStore.isRecordingCsv) {
+          this.telemetryStore.startCsvRecording();
+          btnRecToggle.innerHTML = "⏹️ Dừng Ghi";
+          btnRecToggle.style.background = "rgba(239, 68, 68, 0.28)";
+          btnRecToggle.style.borderColor = "#ef4444";
+          btnRecToggle.style.color = "#ffffff";
+          if (recStatus) recStatus.innerHTML = '<span style="color:#ef4444">● Đang ghi</span>';
+          if (btnRecExport) btnRecExport.disabled = false;
+        } else {
+          this.telemetryStore.stopCsvRecording();
+          btnRecToggle.innerHTML = "🔴 Tiếp Tục Ghi";
+          btnRecToggle.style.background = "rgba(239, 68, 68, 0.15)";
+          btnRecToggle.style.borderColor = "rgba(239, 68, 68, 0.4)";
+          btnRecToggle.style.color = "#ef4444";
+          if (recStatus) recStatus.innerHTML = '<span style="color:#10b981">Đã dừng (Có dữ liệu)</span>';
+          if (btnRecExport) btnRecExport.disabled = false;
+        }
+      };
+    }
+
+    if (btnRecExport) {
+      btnRecExport.onclick = () => {
+        this.telemetryStore.downloadCsvFile();
+      };
+    }
+
+    if (btnRecClear) {
+      btnRecClear.onclick = () => {
+        if (this.telemetryStore.recordedCsvRows.length > 0) {
+          if (confirm("Bạn có chắc chắn muốn xóa bộ đệm nhật ký CSV hiện tại?")) {
+            this.telemetryStore.clearCsvRecords();
+            if (!this.telemetryStore.isRecordingCsv) {
+              if (btnRecToggle) {
+                btnRecToggle.innerHTML = "🔴 Bắt Đầu Ghi";
+                btnRecToggle.style.background = "rgba(239, 68, 68, 0.15)";
+                btnRecToggle.style.borderColor = "rgba(239, 68, 68, 0.4)";
+                btnRecToggle.style.color = "#ef4444";
+              }
+              if (recStatus) recStatus.innerHTML = '<span style="color:var(--mu)">Sẵn sàng</span>';
+              if (btnRecExport) btnRecExport.disabled = true;
+            }
+            if (recSamples) recSamples.textContent = "0";
+            if (recDuration) recDuration.textContent = "00:00";
+          }
+        }
+      };
+    }
+
     const kAx = getElement("kAx");
     if (kAx) kAx.onchange = (event) => { this.sceneManager.axesGroup.visible = event.target.checked; };
     const kBox = getElement("kBox");

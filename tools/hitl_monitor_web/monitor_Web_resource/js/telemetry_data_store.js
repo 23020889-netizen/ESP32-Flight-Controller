@@ -28,6 +28,11 @@ class TelemetryDataStore {
     this.currentVz = 0;
     this.currentMotors = [0, 0, 0, 0];
 
+    // Bộ ghi nhật ký Telemetry (CSV Recorder)
+    this.isRecordingCsv = false;
+    this.csvRecordingStartTime = 0;
+    this.recordedCsvRows = [];
+
     this.startPeriodicTimers();
   }
 
@@ -57,7 +62,7 @@ class TelemetryDataStore {
 
   pushSample(rawSample) {
     const timestampSeconds = performance.now() / 1000;
-    this.sampleBuffer.push({
+    const sample = {
       t: timestampSeconds,
       roll: Number(rawSample.roll) || 0,
       pitch: Number(rawSample.pitch) || 0,
@@ -71,7 +76,36 @@ class TelemetryDataStore {
       z: Number(rawSample.z) || 0,
       vz: Number(rawSample.vz) || 0,
       m: (rawSample.m || [0, 0, 0, 0]).map(Number)
-    });
+    };
+    this.sampleBuffer.push(sample);
+
+    // Ghi nhận dữ liệu vào bộ đệm CSV nếu đang bật chế độ ghi
+    if (this.isRecordingCsv) {
+      const elapsed = Math.max(0, timestampSeconds - this.csvRecordingStartTime).toFixed(3);
+      const iso = new Date().toISOString();
+      const m = sample.m;
+      this.recordedCsvRows.push({
+        iso: iso,
+        elapsed: elapsed,
+        roll: sample.roll.toFixed(2),
+        pitch: sample.pitch.toFixed(2),
+        yaw: sample.yaw.toFixed(2),
+        mpu_r: sample.mpu_r.toFixed(2),
+        mpu_p: sample.mpu_p.toFixed(2),
+        mpu_y: sample.mpu_y.toFixed(2),
+        xs_r: sample.xs_r.toFixed(2),
+        xs_p: sample.xs_p.toFixed(2),
+        xs_y: sample.xs_y.toFixed(2),
+        m1: (m[0] || 0).toFixed(1),
+        m2: (m[1] || 0).toFixed(1),
+        m3: (m[2] || 0).toFixed(1),
+        m4: (m[3] || 0).toFixed(1),
+        z: sample.z.toFixed(2),
+        vz: sample.vz.toFixed(2),
+        accZ: (9.81 + sample.vz * 0.1).toFixed(3),
+        state: this.lastEspState || "DISARMED"
+      });
+    }
 
     while (this.sampleBuffer.length > 0 && timestampSeconds - this.sampleBuffer[0].t > 10) {
       this.sampleBuffer.shift();
@@ -304,6 +338,113 @@ class TelemetryDataStore {
       }
     }
     return false;
+  }
+
+  /**
+   * BẮT ĐẦU GHI NHẬT KÝ TELEMETRY RA BỘ ĐỆM CSV
+   */
+  startCsvRecording() {
+    this.isRecordingCsv = true;
+    if (this.recordedCsvRows.length === 0) {
+      this.csvRecordingStartTime = performance.now() / 1000;
+    }
+  }
+
+  /**
+   * TẠM DỪNG HOẶC DỪNG GHI NHẬT KÝ CSV
+   */
+  stopCsvRecording() {
+    this.isRecordingCsv = false;
+  }
+
+  /**
+   * XÓA TOÀN BỘ BỘ ĐỆM NHẬT KÝ CSV ĐÃ GHI
+   */
+  clearCsvRecords() {
+    this.recordedCsvRows = [];
+    this.csvRecordingStartTime = performance.now() / 1000;
+  }
+
+  /**
+   * LẤY SỐ LƯỢNG MẪU ĐÃ GHI
+   */
+  getCsvRecordCount() {
+    return this.recordedCsvRows.length;
+  }
+
+  /**
+   * LẤY THỜI LƯỢNG GHI (TÍNH BẰNG GIÂY)
+   */
+  getCsvRecordingDurationSeconds() {
+    if (!this.isRecordingCsv && this.recordedCsvRows.length === 0) return 0;
+    if (this.isRecordingCsv) {
+      return Math.max(0, (performance.now() / 1000) - this.csvRecordingStartTime);
+    }
+    if (this.recordedCsvRows.length > 0) {
+      return parseFloat(this.recordedCsvRows[this.recordedCsvRows.length - 1].elapsed) || 0;
+    }
+    return 0;
+  }
+
+  /**
+   * XUẤT NỘI DUNG CHUỖI CSV TỪ BỘ ĐỆM
+   */
+  exportCsvString() {
+    const headers = [
+      "Timestamp_ISO",
+      "Time_Elapsed_s",
+      "Roll_deg",
+      "Pitch_deg",
+      "Yaw_deg",
+      "MPU_Roll_deg",
+      "MPU_Pitch_deg",
+      "MPU_Yaw_deg",
+      "Xsens_Roll_deg",
+      "Xsens_Pitch_deg",
+      "Xsens_Yaw_deg",
+      "M1_rads",
+      "M2_rads",
+      "M3_rads",
+      "M4_rads",
+      "Altitude_m",
+      "Velocity_Vz",
+      "Acc_Z_ms2",
+      "State"
+    ];
+    const lines = [headers.join(",")];
+    for (let i = 0; i < this.recordedCsvRows.length; i++) {
+      const r = this.recordedCsvRows[i];
+      lines.push(`${r.iso},${r.elapsed},${r.roll},${r.pitch},${r.yaw},${r.mpu_r},${r.mpu_p},${r.mpu_y},${r.xs_r},${r.xs_p},${r.xs_y},${r.m1},${r.m2},${r.m3},${r.m4},${r.z},${r.vz},${r.accZ},${r.state}`);
+    }
+    return lines.join("\r\n");
+  }
+
+  /**
+   * TẢI FILE CSV XUỐNG MÁY TÍNH CỦA NGƯỜI DÙNG
+   */
+  downloadCsvFile(filename) {
+    if (this.recordedCsvRows.length === 0) {
+      alert("Không có dữ liệu log để tải về.");
+      return false;
+    }
+    const csvContent = this.exportCsvString();
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const downloadAnchor = document.createElement("a");
+    const now = new Date();
+    const timestampStr = now.getFullYear().toString() +
+      String(now.getMonth() + 1).padStart(2, "0") +
+      String(now.getDate()).padStart(2, "0") + "_" +
+      String(now.getHours()).padStart(2, "0") +
+      String(now.getMinutes()).padStart(2, "0") +
+      String(now.getSeconds()).padStart(2, "0");
+    downloadAnchor.href = url;
+    downloadAnchor.download = filename || `UAV_Telemetry_Log_${timestampStr}.csv`;
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    document.body.removeChild(downloadAnchor);
+    URL.revokeObjectURL(url);
+    return true;
   }
 
   enableDemoMode() {

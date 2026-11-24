@@ -168,15 +168,15 @@ void PX4_QuadMixer::mixNormalized(float throttle, float roll_torque, float pitch
     // Bản cũ đặt +P cho motor TRƯỚC => vòng Pitch HỒI TIẾP DƯƠNG (tự lật tới ngưỡng failsafe 60°).
     // Cột Yaw phải đổi dấu CÙNG LÚC với dấu Yaw của cảm biến, nếu không vòng Yaw thành hồi tiếp dương.
     //
-    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R + P + Y
-    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R - P + Y
-    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R - P - Y
-    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R + P - Y
+    // Motor 1: GPIO 7 (Front-Left,  CCW) = T + R - P + Y   // Front nhận -P
+    // Motor 2: GPIO 6 (Rear-Right,  CCW) = T - R + P + Y   // Rear  nhận +P
+    // Motor 3: GPIO 5 (Rear-Left,   CW)  = T + R + P - Y   // Rear  nhận +P
+    // Motor 4: GPIO 4 (Front-Right, CW)  = T - R - P - Y   // Front nhận -P
     float m[4];
-    m[0] = throttle + roll_torque + pitch_torque + yaw_torque;
-    m[1] = throttle - roll_torque - pitch_torque + yaw_torque;
-    m[2] = throttle + roll_torque - pitch_torque - yaw_torque;
-    m[3] = throttle - roll_torque + pitch_torque - yaw_torque;
+    m[0] = throttle + roll_torque - pitch_torque + yaw_torque;
+    m[1] = throttle - roll_torque + pitch_torque + yaw_torque;
+    m[2] = throttle + roll_torque + pitch_torque - yaw_torque;
+    m[3] = throttle - roll_torque - pitch_torque - yaw_torque;
 
     // Thuật toán Desaturation chuẩn PX4: Co giãn bảo toàn hình học mô-men (Dynamic Scale & Shift)
     float max_val = m[0];

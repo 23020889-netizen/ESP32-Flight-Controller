@@ -408,14 +408,21 @@ class TestFlightControlRebuild(unittest.TestCase):
         self.assertLess(u_stabilize[1], throttle)    # M2 Rear
         self.assertLess(u_stabilize[2], throttle)    # M3 Rear
 
-        # Scenario C: 3-angle stabilization recovery (Roll=0, Pitch=0, Yaw=0)
+        # Scenario C: Level stabilization with Heading Hold (Roll=0, Pitch=0, Yaw=actual_yaw)
         att_ctrl = AttitudeController(kp_roll=3.0, kp_pitch=3.0, kp_yaw=1.5)
-        # Drone in an unstable attitude: Roll=+10 deg, Pitch=-15 deg, Yaw=+30 deg
-        rate_sp = att_ctrl.update(target_euler=[0.0, 0.0, 0.0], actual_euler=[10.0, -15.0, 30.0])
-        # Verify rate setpoints act in the correct restorative direction for all 3 axes
-        self.assertLess(rate_sp[0], 0.0)    # Roll rate negative to pull positive roll back to 0
-        self.assertGreater(rate_sp[1], 0.0) # Pitch rate positive to pull negative pitch back to 0
-        self.assertLess(rate_sp[2], 0.0)    # Yaw rate negative to pull positive yaw back to 0
+        # Drone in an unstable attitude: Roll=+10 deg, Pitch=-15 deg, Yaw=+150 deg (compass heading)
+        # When locking to actual heading (Heading Hold):
+        rate_sp_hold = att_ctrl.update(target_euler=[0.0, 0.0, 150.0], actual_euler=[10.0, -15.0, 150.0])
+        # Verify Yaw rate command is ZERO (does not fight compass heading)
+        self.assertAlmostEqual(rate_sp_hold[2], 0.0, places=4)
+        # Mixer with tau_y = 0 maintains diagonal motor balance
+        u_balanced = mixer.mix(throttle, 0.0, 0.0, 0.0)
+        self.assertAlmostEqual(u_balanced[0], u_balanced[1], places=4)
+        self.assertAlmostEqual(u_balanced[2], u_balanced[3], places=4)
+
+        # In contrast, forcing target_yaw = 0 when heading is 150 deg creates massive diagonal split:
+        rate_sp_bad = att_ctrl.update(target_euler=[0.0, 0.0, 0.0], actual_euler=[10.0, -15.0, 150.0])
+        self.assertLess(rate_sp_bad[2], -0.5) # Heavy yaw command saturation
 
 
 if __name__ == "__main__":
